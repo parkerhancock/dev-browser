@@ -172,13 +172,6 @@ const value = await page.inputValue("input#search");
 const items = await page.$$eval(".item", (els) => els.map((e) => e.textContent));
 ```
 
-### Screenshots
-
-```typescript
-await page.screenshot({ path: "tmp/screenshot.png" });
-await page.screenshot({ path: "tmp/full.png", fullPage: true });
-```
-
 ### Evaluating JavaScript
 
 ```typescript
@@ -198,12 +191,139 @@ console.log(pages); // ["main", "auth", "checkout"]
 await client.close("checkout");
 ```
 
+## Inspecting Page State
+
+### Screenshots
+
+Take screenshots when you need to visually inspect the page:
+
+```typescript
+await page.screenshot({ path: "tmp/screenshot.png" });
+await page.screenshot({ path: "tmp/full.png", fullPage: true });
+```
+
+### LLM Tree (Structured DOM Inspection)
+
+For a more structured, text-based view of the page, use `getLLMTree()`. This returns a human-readable representation of interactive elements on the page, making it easier to understand page structure without parsing raw HTML.
+
+```typescript
+import { connect } from "dev-browser/client";
+
+const client = await connect("http://localhost:9222");
+const page = await client.page("main");
+
+await page.goto("https://news.ycombinator.com");
+
+// Get the LLM-friendly DOM tree
+const tree = await client.getLLMTree("main");
+console.log(tree);
+
+await client.disconnect();
+```
+
+#### Example Output
+
+The tree output shows interactive elements with numbered indices:
+
+```
+[1]<a href="https://news.ycombinator.com" />
+[2]<a href="news">Hacker News</a>
+[3]<a href="newest">new</a>
+[4]<a href="front">past</a>
+[5]<a href="newcomments">comments</a>
+[6]<a href="ask">ask</a>
+[7]<a href="submit">submit</a>
+[8]<a href="login?goto=news">login</a>
+1.
+[9]<a id="up_46134443" href="vote?id=46134443&how=up&goto=news" />
+[10]<div class="votearrow" title="upvote" />
+[11]<a href="https://www.example.com/article">Article Title Here</a>
+528 points
+by
+[12]<a class="hnuser" href="user?id=username">username</a>
+[13]<a href="item?id=46134443">3 hours ago</a>
+[14]<a href="item?id=46134443">328 comments</a>
+...
+[256]<input type="text" name="q" autocomplete="off" />
+```
+
+#### Interpreting the Tree
+
+- **`[N]`** - Interactive elements are numbered. Use these indices with `getSelectorForID()` to get CSS selectors
+- **`<tag attr="value">text</tag>`** - Element tag, key attributes, and text content
+- **Plain text** - Static text content between elements (e.g., "528 points", "by")
+- **`|SCROLL|`** - Marks scrollable containers with scroll position info
+- **`|IFRAME|`** - Marks iframe boundaries
+- **`|SHADOW(open)|`** - Marks shadow DOM roots
+
+### Getting Selectors for Interaction
+
+Once you identify an element by its index in the tree, use `getSelectorForID()` to get a CSS selector you can use with Playwright:
+
+```typescript
+import { connect } from "dev-browser/client";
+
+const client = await connect("http://localhost:9222");
+const page = await client.page("main");
+
+// First, get the tree to see what's on the page
+const tree = await client.getLLMTree("main");
+console.log(tree);
+// Output shows: [11]<a href="...">Article Title Here</a>
+
+// Get the selector for element 11
+const selector = await client.getSelectorForID("main", 11);
+console.log(selector); // e.g., "a:nth-of-type(3)" or "#article-link"
+
+// Now use that selector with Playwright
+await page.click(selector);
+
+await client.disconnect();
+```
+
+### When to Use Each Approach
+
+| Method          | Best For                                                                        |
+| --------------- | ------------------------------------------------------------------------------- |
+| **Screenshots** | Visual debugging, seeing layout/styling issues, sharing with humans             |
+| **LLM Tree**    | Understanding page structure, finding interactive elements, text-based analysis |
+| **Selectors**   | Programmatically interacting with elements found in the tree                    |
+
+### Example: Finding and Clicking a Link
+
+```typescript
+import { connect } from "dev-browser/client";
+
+const client = await connect("http://localhost:9222");
+const page = await client.page("main");
+
+await page.goto("https://example.com");
+
+// Step 1: Inspect the page structure
+const tree = await client.getLLMTree("main");
+console.log("Page structure:");
+console.log(tree);
+
+// Step 2: Find the element you want (say it's index 5)
+// The tree showed: [5]<a href="/products">Products</a>
+const selector = await client.getSelectorForID("main", 5);
+
+// Step 3: Click using the selector
+await page.click(selector);
+await page.waitForLoadState("networkidle");
+
+console.log("Navigated to:", page.url());
+
+await client.disconnect();
+```
+
 ## Debugging Tips
 
-1. **Take screenshots** when unsure of page state
-2. **Log selectors** before clicking to verify they exist
-3. **Use waitForSelector** before interacting with dynamic content
-4. **Check page.url()** to confirm navigation worked
+1. **Use getLLMTree** for a structured view of interactive elements
+2. **Take screenshots** when you need visual context
+3. **Log selectors** before clicking to verify they exist
+4. **Use waitForSelector** before interacting with dynamic content
+5. **Check page.url()** to confirm navigation worked
 
 ## Error Recovery
 
