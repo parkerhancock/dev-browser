@@ -224,7 +224,7 @@ export interface DevBrowserClient {
   selectSnapshotRef: (name: string, ref: string) => Promise<ElementHandle | null>;
 }
 
-export async function connect(serverUrl: string): Promise<DevBrowserClient> {
+export async function connect(serverUrl = "http://localhost:9222"): Promise<DevBrowserClient> {
   let browser: Browser | null = null;
   let wsEndpoint: string | null = null;
   let connectingPromise: Promise<Browser> | null = null;

@@ -58,7 +58,7 @@ Execute scripts inline using heredocs—no need to write files for one-off autom
 ```bash
 cd skills/dev-browser && bun x tsx <<'EOF'
 import { connect } from "@/client.js";
-const client = await connect("http://localhost:9222");
+const client = await connect();
 const page = await client.page("main");
 // Your automation code here
 await client.disconnect();
@@ -79,7 +79,7 @@ Use the `@/client.js` import path for all scripts.
 cd skills/dev-browser && bun x tsx <<'EOF'
 import { connect, waitForPageLoad } from "@/client.js";
 
-const client = await connect("http://localhost:9222");
+const client = await connect();
 const page = await client.page("main"); // get or create a named page
 
 // Your automation code here
@@ -135,7 +135,7 @@ Follow this pattern for complex tasks:
 ## Client API
 
 ```typescript
-const client = await connect("http://localhost:9222");
+const client = await connect();
 const page = await client.page("name"); // Get or create named page
 const pages = await client.list(); // List all page names
 await client.close("name"); // Close a page
@@ -189,7 +189,7 @@ Use `getAISnapshot()` when you don't know the page layout and need to discover w
 cd skills/dev-browser && bun x tsx <<'EOF'
 import { connect, waitForPageLoad } from "@/client.js";
 
-const client = await connect("http://localhost:9222");
+const client = await connect();
 const page = await client.page("main");
 
 await page.goto("https://news.ycombinator.com");
@@ -248,7 +248,7 @@ Use `selectSnapshotRef()` to get a Playwright ElementHandle for any ref:
 cd skills/dev-browser && bun x tsx <<'EOF'
 import { connect, waitForPageLoad } from "@/client.js";
 
-const client = await connect("http://localhost:9222");
+const client = await connect();
 const page = await client.page("main");
 
 await page.goto("https://news.ycombinator.com");
@@ -289,7 +289,7 @@ If a script fails, the page state is preserved. You can:
 cd skills/dev-browser && bun x tsx <<'EOF'
 import { connect } from "@/client.js";
 
-const client = await connect("http://localhost:9222");
+const client = await connect();
 const page = await client.page("main");
 
 await page.screenshot({ path: "tmp/debug.png" });

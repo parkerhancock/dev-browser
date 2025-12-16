@@ -72,24 +72,30 @@ try {
   console.log("You may need to run: npx playwright install chromium");
 }
 
-// Kill any existing process on port 9222 (HTTP API) and 9223 (CDP)
+// Check if server is already running
 console.log("Checking for existing servers...");
 try {
-  // Find and kill processes on our ports
-  const ports = [9222, 9223];
-  for (const port of ports) {
-    try {
-      const pid = execSync(`lsof -ti:${port}`, { encoding: "utf-8" }).trim();
-      if (pid) {
-        console.log(`Killing existing process on port ${port} (PID: ${pid})`);
-        execSync(`kill -9 ${pid}`);
-      }
-    } catch {
-      // No process on this port, which is fine
-    }
+  const res = await fetch("http://localhost:9222", {
+    signal: AbortSignal.timeout(1000),
+  });
+  if (res.ok) {
+    console.log("Server already running on port 9222");
+    process.exit(0);
   }
 } catch {
-  // lsof not available or no processes found
+  // Server not running, continue to start
+}
+
+// Clean up stale CDP port if HTTP server isn't running (crash recovery)
+// This handles the case where Node crashed but Chrome is still running on 9223
+try {
+  const pid = execSync("lsof -ti:9223", { encoding: "utf-8" }).trim();
+  if (pid) {
+    console.log(`Cleaning up stale Chrome process on CDP port 9223 (PID: ${pid})`);
+    execSync(`kill -9 ${pid}`);
+  }
+} catch {
+  // No process on CDP port, which is expected
 }
 
 console.log("Starting dev browser server...");
