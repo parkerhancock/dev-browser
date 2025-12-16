@@ -1,4 +1,6 @@
-# Dev Browser - Claude Code Plugin
+<p align="center">
+  <img src="assets/header.png" alt="Dev Browser - Browser automation for Claude Code" width="100%">
+</p>
 
 A browser automation plugin for [Claude Code](https://docs.anthropic.com/en/docs/claude-code) that lets Claude control your web browser to close the loop on your development workflows.
 
