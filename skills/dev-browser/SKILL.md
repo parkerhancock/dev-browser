@@ -67,7 +67,7 @@ Execute scripts inline using heredocs—no need to write files for one-off autom
 cd skills/dev-browser && npx tsx <<'EOF'
 import { connect } from "@/client.js";
 const client = await connect();
-const page = await client.page("main");
+const page = await client.page("homepage");
 // Your automation code here
 await client.disconnect();
 EOF
@@ -88,7 +88,7 @@ cd skills/dev-browser && npx tsx <<'EOF'
 import { connect, waitForPageLoad } from "@/client.js";
 
 const client = await connect();
-const page = await client.page("main"); // get or create a named page
+const page = await client.page("homepage"); // get or create a named page
 await page.setViewportSize({ width: 1280, height: 800 }); // Required for screenshots
 
 // Your automation code here
@@ -130,6 +130,11 @@ const text = await page.evaluate(() => {
   return el.innerText;
 });
 ```
+
+- Names that you give to pages should be descriptive and unique
+
+❌ client.page("main")
+✅ client.page("cnn-homepage")
 
 ## Workflow Loop
 
@@ -199,13 +204,13 @@ cd skills/dev-browser && npx tsx <<'EOF'
 import { connect, waitForPageLoad } from "@/client.js";
 
 const client = await connect();
-const page = await client.page("main");
+const page = await client.page("hackernews");
 
 await page.goto("https://news.ycombinator.com");
 await waitForPageLoad(page);
 
 // Get the ARIA accessibility snapshot
-const snapshot = await client.getAISnapshot("main");
+const snapshot = await client.getAISnapshot("hackernews");
 console.log(snapshot);
 
 await client.disconnect();
@@ -258,18 +263,18 @@ cd skills/dev-browser && npx tsx <<'EOF'
 import { connect, waitForPageLoad } from "@/client.js";
 
 const client = await connect();
-const page = await client.page("main");
+const page = await client.page("hackernews");
 
 await page.goto("https://news.ycombinator.com");
 await waitForPageLoad(page);
 
 // Get the snapshot to see available refs
-const snapshot = await client.getAISnapshot("main");
+const snapshot = await client.getAISnapshot("hackernews");
 console.log(snapshot);
 // Output shows: - link "new" [ref=e2]
 
 // Get the element by ref and click it
-const element = await client.selectSnapshotRef("main", "e2");
+const element = await client.selectSnapshotRef("hackernews", "e2");
 await element.click();
 
 await waitForPageLoad(page);
@@ -299,7 +304,7 @@ cd skills/dev-browser && npx tsx <<'EOF'
 import { connect } from "@/client.js";
 
 const client = await connect();
-const page = await client.page("main");
+const page = await client.page("hackernews");
 
 await page.screenshot({ path: "tmp/debug.png" });
 console.log({
