@@ -137,6 +137,15 @@ export class CDPRouter {
         await chrome.tabs.remove(targetTabId);
         return { success: true };
       }
+
+      case "Target.activateTarget": {
+        if (!targetTabId) {
+          this.logger.log(`Target not found for activation: ${msg.params.params?.targetId}`);
+          return {};
+        }
+        await chrome.tabs.update(targetTabId, { active: true });
+        return {};
+      }
     }
 
     if (!debuggee || !targetTab) {

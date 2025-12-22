@@ -361,6 +361,14 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
     if (existingSessionId) {
       const target = connectedTargets.get(existingSessionId);
       if (target) {
+        // Activate the tab so it becomes the active tab
+        await sendToExtension({
+          method: "forwardCDPCommand",
+          params: {
+            method: "Target.activateTarget",
+            params: { targetId: target.targetId },
+          },
+        });
         return c.json({
           wsEndpoint: `ws://${host}:${port}/cdp`,
           name,
@@ -390,6 +398,14 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
       for (const [sessionId, target] of connectedTargets) {
         if (target.targetId === result.targetId) {
           namedPages.set(name, sessionId);
+          // Activate the tab so it becomes the active tab
+          await sendToExtension({
+            method: "forwardCDPCommand",
+            params: {
+              method: "Target.activateTarget",
+              params: { targetId: target.targetId },
+            },
+          });
           return c.json({
             wsEndpoint: `ws://${host}:${port}/cdp`,
             name,
