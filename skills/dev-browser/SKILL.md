@@ -17,7 +17,7 @@ Browser automation that maintains page state across script executions. Write sma
 
 ## Setup
 
-There are two modes for running dev-browser:
+There are two modes for running dev-browser. If the user specifies which mode to use. If it is unclear what to do ask the user.
 
 ### Mode 1: Launch Mode (Default)
 
@@ -47,46 +47,17 @@ Connects to the user's existing Chrome browser via a Chrome extension. Use this 
 - The user is already logged into sites and wants to automate their current session
 - The user wants to work alongside the automation (can see and help with captchas, etc.)
 - You need to automate tabs the user has already opened
+- The user asks you to use the extension
 
 #### Starting Extension Mode
 
-1. **Start the relay server:**
+**Start the relay server:**
 
-   ```bash
-   cd skills/dev-browser && npm run start-extension &
-   ```
-
-   Wait for `Waiting for extension to connect...`
-
-2. **Build and load the extension** (first time only):
-
-   ```bash
-   cd skills/dev-browser/extension && npm install && npm run build
-   ```
-
-   Then in Chrome: Extensions > Enable Developer Mode > Load Unpacked > Select `.output/chrome-mv3`
-
-3. **Attach to tabs:** Click the extension icon on any tab you want to automate. The icon turns green when connected.
-
-4. **Assign names to tabs:** When you call `client.page("name")`, it assigns that name to the first unnamed attached tab.
-
-#### Extension Mode Client API
-
-```typescript
-const client = await connect();
-
-// Check server mode
-const info = await client.getServerInfo();
-console.log(info.mode); // "extension" or "launch"
-console.log(info.extensionConnected); // true if extension is connected
-
-// List unnamed tabs (tabs attached via extension but not yet named)
-const unnamed = await client.listUnnamed();
-// Returns: [{ sessionId, targetId, title, url }]
-
-// Assign a name to the first unnamed tab
-const page = await client.page("my-tab");
+```bash
+cd skills/dev-browser && npm i && npm run start-extension &
 ```
+
+Wait for `Waiting for extension to connect...`
 
 #### Extension Mode Workflow
 
@@ -98,6 +69,8 @@ const page = await client.page("my-tab");
 **Important:** Scripts must be run with `npx tsx` (not `npm run`) due to Playwright WebSocket compatibility.
 
 The server starts with a REST API for page management (default: `http://localhost:9222`).
+
+**Important**: If the relay server is started and the extension has not connected yet. Tell the user to launch the extension and activate it and provide the download link (https://github.com/SawyerHood/dev-browser/releases)
 
 ## How It Works
 
