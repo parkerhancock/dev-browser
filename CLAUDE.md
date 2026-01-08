@@ -46,10 +46,12 @@ This is a browser automation tool designed for developers and AI agents. It solv
 All source code lives in `skills/dev-browser/`:
 
 - `src/index.ts` - Server: launches persistent Chromium context, exposes HTTP API for page management
+- `src/relay.ts` - Relay server for extension mode: bridges Chrome extension to Playwright clients
 - `src/client.ts` - Client: connects to server, retrieves pages by name via CDP
 - `src/types.ts` - Shared TypeScript types for API requests/responses
-- `src/dom/` - DOM tree extraction utilities for LLM-friendly page inspection
-- `scripts/start-server.ts` - Entry point to start the server
+- `src/snapshot/` - ARIA snapshot utilities for LLM-friendly page inspection
+- `scripts/start-server.ts` - Entry point to start standalone server
+- `scripts/start-relay.ts` - Entry point to start relay server (extension mode)
 - `tmp/` - Directory for temporary automation scripts
 
 ### Path Aliases

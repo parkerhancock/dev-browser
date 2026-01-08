@@ -5,7 +5,7 @@
 import type { Logger } from "../utils/logger";
 import type { ExtensionCommandMessage, ExtensionResponseMessage } from "../utils/types";
 
-const RELAY_URL = "ws://localhost:9222/extension";
+const RELAY_URL = "ws://localhost:9224/extension";
 const RECONNECT_INTERVAL = 3000;
 
 export interface ConnectionManagerDeps {
@@ -18,6 +18,7 @@ export class ConnectionManager {
   private ws: WebSocket | null = null;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private shouldMaintain = false;
+  private connecting = false;
   private logger: Logger;
   private onMessage: (message: ExtensionCommandMessage) => Promise<unknown>;
   private onDisconnect: () => void;
@@ -46,7 +47,7 @@ export class ConnectionManager {
 
     // Verify server is actually reachable
     try {
-      const response = await fetch("http://localhost:9222", {
+      const response = await fetch("http://localhost:9224", {
         method: "HEAD",
         signal: AbortSignal.timeout(1000),
       });
@@ -134,42 +135,47 @@ export class ConnectionManager {
    * Try to connect to relay server once.
    */
   private async tryConnect(): Promise<void> {
-    if (this.isConnected()) return;
+    if (this.isConnected() || this.connecting) return;
 
     // Check if server is available
     try {
-      await fetch("http://localhost:9222", { method: "HEAD" });
+      await fetch("http://localhost:9224", { method: "HEAD" });
     } catch {
       return;
     }
 
+    this.connecting = true;
     this.logger.debug("Connecting to relay server...");
     const socket = new WebSocket(RELAY_URL);
 
-    await new Promise<void>((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        reject(new Error("Connection timeout"));
-      }, 5000);
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const timeout = setTimeout(() => {
+          reject(new Error("Connection timeout"));
+        }, 5000);
 
-      socket.onopen = () => {
-        clearTimeout(timeout);
-        resolve();
-      };
+        socket.onopen = () => {
+          clearTimeout(timeout);
+          resolve();
+        };
 
-      socket.onerror = () => {
-        clearTimeout(timeout);
-        reject(new Error("WebSocket connection failed"));
-      };
+        socket.onerror = () => {
+          clearTimeout(timeout);
+          reject(new Error("WebSocket connection failed"));
+        };
 
-      socket.onclose = (event) => {
-        clearTimeout(timeout);
-        reject(new Error(`WebSocket closed: ${event.reason || event.code}`));
-      };
-    });
+        socket.onclose = (event) => {
+          clearTimeout(timeout);
+          reject(new Error(`WebSocket closed: ${event.reason || event.code}`));
+        };
+      });
 
-    this.ws = socket;
-    this.setupSocketHandlers(socket);
-    this.logger.log("Connected to relay server");
+      this.ws = socket;
+      this.setupSocketHandlers(socket);
+      this.logger.log("Connected to relay server");
+    } finally {
+      this.connecting = false;
+    }
   }
 
   /**

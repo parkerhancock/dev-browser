@@ -222,14 +222,30 @@ export interface PageOptions {
   viewport?: ViewportSize;
 }
 
+/** Default ports for each server mode */
+const DEFAULT_PORTS = {
+  standalone: 9222,
+  extension: 9224,
+} as const;
+
 /**
  * Options for connecting to the dev-browser server
  */
 export interface ConnectOptions {
   /**
+   * Server mode. Determines which port to connect to if serverUrl is not specified.
+   * - "standalone": Fresh Chromium browser (port 9222)
+   * - "extension": User's Chrome via extension (port 9224)
+   * @default "standalone"
+   */
+  mode?: "standalone" | "extension";
+  /**
    * Session ID for multi-agent isolation.
    * Each session has its own namespace for page names.
-   * Auto-generated if not provided.
+   *
+   * Priority if not provided:
+   * 1. CLAUDE_SESSION_ID env var (set by SessionStart hook for automatic per-agent persistence)
+   * 2. Auto-generated unique session ID
    */
   session?: string;
 }
@@ -261,12 +277,42 @@ export interface DevBrowserClient {
 }
 
 export async function connect(
-  serverUrl = "http://localhost:9222",
+  serverUrlOrOptions?: string | ConnectOptions,
   options: ConnectOptions = {}
 ): Promise<DevBrowserClient> {
-  // Generate session ID if not provided
+  // Handle overloaded signatures: connect() or connect(url) or connect(options) or connect(url, options)
+  let serverUrl: string;
+  let opts: ConnectOptions;
+
+  if (typeof serverUrlOrOptions === "string") {
+    serverUrl = serverUrlOrOptions;
+    opts = options;
+  } else if (serverUrlOrOptions) {
+    opts = serverUrlOrOptions;
+    const port = DEFAULT_PORTS[opts.mode ?? "standalone"];
+    serverUrl = `http://localhost:${port}`;
+  } else {
+    opts = options;
+    const port = DEFAULT_PORTS[opts.mode ?? "standalone"];
+    serverUrl = `http://localhost:${port}`;
+  }
+  // Determine session ID with priority:
+  // 1. Explicit opts.session (user override)
+  // 2. CLAUDE_SESSION_ID env var (from SessionStart hook - provides per-agent persistence)
+  // 3. Fall back to generated session ID
   const session =
-    options.session ?? `session-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    opts.session ??
+    process.env.CLAUDE_SESSION_ID ??
+    `session-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+
+  // Log session source for debugging
+  if (opts.session) {
+    console.log(`[dev-browser] Session: ${session} (explicit)`);
+  } else if (process.env.CLAUDE_SESSION_ID) {
+    console.log(`[dev-browser] Session: ${session} (from CLAUDE_SESSION_ID)`);
+  } else {
+    console.log(`[dev-browser] Session: ${session} (generated - pages won't persist across scripts)`);
+  }
 
   // Headers to include session in all requests
   const sessionHeaders = { "X-DevBrowser-Session": session };

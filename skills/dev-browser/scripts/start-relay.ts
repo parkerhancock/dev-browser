@@ -6,7 +6,7 @@
 
 import { serveRelay } from "@/relay.js";
 
-const PORT = parseInt(process.env.PORT || "9222", 10);
+const PORT = parseInt(process.env.PORT || "9224", 10);
 const HOST = process.env.HOST || "127.0.0.1";
 
 async function main() {

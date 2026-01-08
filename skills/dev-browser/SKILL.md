@@ -15,7 +15,12 @@ Browser automation that maintains page state across script executions. Write sma
 
 ## Setup
 
-Two modes available. Ask the user if unclear which to use.
+Two modes available on different ports. **Both can run simultaneously** - useful when some agents debug a UI (standalone) while others automate logged-in sessions (extension).
+
+| Mode | Port | Use Case |
+|------|------|----------|
+| Standalone | 9222 | Fresh browser, debugging, CI/CD |
+| Extension | 9224 | User's Chrome, logged-in sessions |
 
 ### Standalone Mode (Default)
 
@@ -34,7 +39,7 @@ Connects to user's existing Chrome browser. Use this when:
 - The user is already logged into sites and wants you to do things behind an authed experience that isn't local dev.
 - The user asks you to use the extension
 
-**Important**: The core flow is still the same. You create named pages inside of their browser.
+**Important**: The core flow is still the same. You create named pages inside of their browser. Use `connect({ mode: "extension" })` to connect.
 
 **Start the relay server:**
 
@@ -55,16 +60,22 @@ Wait for `Relay ready` before running scripts. If the extension hasn't connected
 **Verify extension is connected** before running scripts:
 
 ```typescript
+const client = await connect({ mode: "extension" });
 const info = await client.getServerInfo();
 if (!info.extensionConnected) {
   console.log("Extension not connected - tell user to activate it");
 }
 ```
 
-**Multi-agent support:** Multiple Claude Code instances can safely share the same relay. Each `connect()` auto-generates a unique session ID, isolating page names between agents. To share pages between agents, use an explicit session:
+**Automatic session persistence:** The skill includes a SessionStart hook that exposes `CLAUDE_SESSION_ID` as an environment variable. When running in Claude Code:
+- Pages automatically persist across script executions within the same session
+- Each Claude Code session gets its own isolated page namespace
+- No explicit session ID needed - just call `connect()` and pages will persist
+
+**Multi-agent support:** Multiple Claude Code instances can safely share the same server. Each session is automatically isolated via `CLAUDE_SESSION_ID`. To share pages between agents, use an explicit session:
 
 ```typescript
-const client = await connect("http://localhost:9222", { session: "shared-workspace" });
+const client = await connect({ mode: "extension", session: "shared-workspace" });
 ```
 
 ## Writing Scripts
@@ -133,7 +144,11 @@ For scraping large datasets, intercept and replay network requests rather than s
 ## Client API
 
 ```typescript
+// Connect to standalone server (port 9222) - default
 const client = await connect();
+
+// Connect to extension/relay server (port 9224)
+const client = await connect({ mode: "extension" });
 
 // Get or create named page (viewport only applies to new pages)
 const page = await client.page("name");

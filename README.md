@@ -70,6 +70,12 @@ When active, Claude can control your existing Chrome tabs with all your logged-i
 
 Multiple Claude Code instances can share the same relay server without conflicts. Each instance automatically gets an isolated session with its own page namespace.
 
+> **Note:** This plugin includes a SessionStart hook that enables automatic session persistence. Due to a [Claude Code limitation](https://github.com/anthropics/claude-code/issues/12634), plugin hooks aren't discovered on updates—only on fresh installs. If you're updating from a previous version and pages aren't persisting across scripts, uninstall and reinstall the plugin:
+> ```
+> /plugin uninstall dev-browser@dev-browser
+> /plugin install dev-browser@dev-browser
+> ```
+
 **Start the shared relay:**
 
 ```bash

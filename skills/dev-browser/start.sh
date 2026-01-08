@@ -5,7 +5,7 @@ cd "$SCRIPT_DIR"
 
 PIDFILE="$HOME/.dev-browser/relay.pid"
 LOGFILE="$HOME/.dev-browser/relay.log"
-PORT="${PORT:-9222}"
+PORT="${PORT:-9224}"
 HOST="${HOST:-127.0.0.1}"
 
 mkdir -p "$HOME/.dev-browser"
