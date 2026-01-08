@@ -294,7 +294,10 @@ export async function connect(
           throw new Error(`Server returned ${res.status}: ${await res.text()}`);
         }
         const info = (await res.json()) as ServerInfoResponse;
-        wsEndpoint = info.wsEndpoint;
+
+        // Include session in CDP URL for multi-agent isolation
+        // (Playwright's connectOverCDP can't send custom headers)
+        wsEndpoint = `${info.wsEndpoint}/${encodeURIComponent(session)}`;
 
         // Connect to the browser via CDP
         browser = await chromium.connectOverCDP(wsEndpoint);

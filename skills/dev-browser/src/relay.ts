@@ -527,12 +527,14 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
   // ============================================================================
 
   app.get(
-    "/cdp/:clientId?",
+    "/cdp/:session?/:clientId?",
     upgradeWebSocket((c) => {
       const clientId =
         c.req.param("clientId") || `client-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-      // Get agent session from header for multi-agent isolation
-      const agentSession = c.req.header("X-DevBrowser-Session") ?? "default";
+      // Get agent session from URL path (preferred) or header for multi-agent isolation
+      // URL path is needed because Playwright's connectOverCDP can't send custom headers
+      const agentSession =
+        c.req.param("session") || c.req.header("X-DevBrowser-Session") || "default";
 
       return {
         onOpen(_event, ws) {
