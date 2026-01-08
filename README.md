@@ -136,6 +136,10 @@ _See [dev-browser-eval](https://github.com/SawyerHood/dev-browser-eval) for meth
 | [Playwright Skill](https://github.com/lackeyjb/playwright-skill) | Full scripts that run end-to-end                  | Fast but fragile; scripts start fresh every time       |
 | **Dev Browser**                                                  | Stateful server + agentic script execution        | Best of both: persistent state with flexible execution |
 
+## Related Projects
+
+- [dev-terminal](https://github.com/parkerhancock/dev-terminal) - Terminal/PTY automation with persistent sessions. The terminal equivalent of dev-browser for TUI apps, CLI workflows, and interactive shell sessions.
+
 ## License
 
 MIT
