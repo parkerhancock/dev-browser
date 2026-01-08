@@ -52,16 +52,18 @@ Wait for `Relay ready` before running scripts. If the extension hasn't connected
 ./skills/dev-browser/stop.sh
 ```
 
-## Multi-Agent Support
-
-Multiple Claude Code instances can safely share the same relay server. Each instance automatically gets an isolated session - page names won't conflict between agents.
+**Verify extension is connected** before running scripts:
 
 ```typescript
-// Each connect() auto-generates a unique session
-const client = await connect();
-const page = await client.page("github"); // Isolated to this session
+const info = await client.getServerInfo();
+if (!info.extensionConnected) {
+  console.log("Extension not connected - tell user to activate it");
+}
+```
 
-// To explicitly share pages between sessions, use the same session ID:
+**Multi-agent support:** Multiple Claude Code instances can safely share the same relay. Each `connect()` auto-generates a unique session ID, isolating page names between agents. To share pages between agents, use an explicit session:
+
+```typescript
 const client = await connect("http://localhost:9222", { session: "shared-workspace" });
 ```
 
@@ -140,6 +142,10 @@ const pageWithSize = await client.page("name", { viewport: { width: 1920, height
 const pages = await client.list(); // List all page names
 await client.close("name"); // Close a page
 await client.disconnect(); // Disconnect (pages persist)
+
+// Server info (extension mode)
+const info = await client.getServerInfo(); // { mode, extensionConnected, wsEndpoint }
+const sessionId = client.getSession(); // Current session ID
 
 // ARIA Snapshot methods
 const snapshot = await client.getAISnapshot("name"); // Get accessibility tree
