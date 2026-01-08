@@ -44,6 +44,15 @@ interface PlaywrightClient {
   id: string;
   ws: WSContext;
   knownTargets: Set<string>; // targetIds this client has received attachedToTarget for
+  session: string; // agent session for multi-agent isolation
+}
+
+// Session state for multi-agent isolation
+interface SessionState {
+  id: string;
+  clientIds: Set<string>; // WebSocket client IDs in this session
+  pageNames: Set<string>; // Page names owned by this session
+  targetSessions: Set<string>; // CDP sessionIds owned by this session
 }
 
 // Message types for extension communication
@@ -108,9 +117,13 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
 
   // State
   const connectedTargets = new Map<string, ConnectedTarget>();
-  const namedPages = new Map<string, string>(); // name -> sessionId
+  const namedPages = new Map<string, string>(); // "session:name" -> CDP sessionId
   const playwrightClients = new Map<string, PlaywrightClient>();
   let extensionWs: WSContext | null = null;
+
+  // Multi-agent session state
+  const sessions = new Map<string, SessionState>();
+  const targetToAgentSession = new Map<string, string>(); // CDP sessionId -> agent session
 
   // Pending requests to extension
   const extensionPendingRequests = new Map<
@@ -130,13 +143,41 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
     console.log("[relay]", ...args);
   }
 
-  function sendToPlaywright(message: CDPResponse | CDPEvent, clientId?: string) {
+  // Helper to get or create a session
+  function getOrCreateSession(sessionId: string): SessionState {
+    let session = sessions.get(sessionId);
+    if (!session) {
+      session = {
+        id: sessionId,
+        clientIds: new Set(),
+        pageNames: new Set(),
+        targetSessions: new Set(),
+      };
+      sessions.set(sessionId, session);
+    }
+    return session;
+  }
+
+  function sendToPlaywright(
+    message: CDPResponse | CDPEvent,
+    options?: { clientId?: string; session?: string }
+  ) {
     const messageStr = JSON.stringify(message);
 
-    if (clientId) {
-      const client = playwrightClients.get(clientId);
+    if (options?.clientId) {
+      // Send to specific client
+      const client = playwrightClients.get(options.clientId);
       if (client) {
         client.ws.send(messageStr);
+      }
+    } else if (options?.session) {
+      // Send to all clients in this agent session
+      const sessionState = sessions.get(options.session);
+      if (sessionState) {
+        for (const clientId of sessionState.clientIds) {
+          const client = playwrightClients.get(clientId);
+          client?.ws.send(messageStr);
+        }
       }
     } else {
       // Broadcast to all clients
@@ -152,7 +193,7 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
    */
   function sendAttachedToTarget(
     target: ConnectedTarget,
-    clientId?: string,
+    options?: { clientId?: string; session?: string },
     waitingForDebugger = false
   ) {
     const event: CDPEvent = {
@@ -163,19 +204,32 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
         waitingForDebugger,
       },
     };
+    const eventStr = JSON.stringify(event);
 
-    if (clientId) {
-      const client = playwrightClients.get(clientId);
+    if (options?.clientId) {
+      const client = playwrightClients.get(options.clientId);
       if (client && !client.knownTargets.has(target.targetId)) {
         client.knownTargets.add(target.targetId);
-        client.ws.send(JSON.stringify(event));
+        client.ws.send(eventStr);
+      }
+    } else if (options?.session) {
+      // Send to all clients in this agent session that don't know about this target
+      const sessionState = sessions.get(options.session);
+      if (sessionState) {
+        for (const clientId of sessionState.clientIds) {
+          const client = playwrightClients.get(clientId);
+          if (client && !client.knownTargets.has(target.targetId)) {
+            client.knownTargets.add(target.targetId);
+            client.ws.send(eventStr);
+          }
+        }
       }
     } else {
       // Broadcast to all clients that don't know about this target yet
       for (const client of playwrightClients.values()) {
         if (!client.knownTargets.has(target.targetId)) {
           client.knownTargets.add(target.targetId);
-          client.ws.send(JSON.stringify(event));
+          client.ws.send(eventStr);
         }
       }
     }
@@ -340,15 +394,24 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
     });
   });
 
-  // List named pages
+  // List named pages (filtered by session)
   app.get("/pages", (c) => {
+    const agentSession = c.req.header("X-DevBrowser-Session") ?? "default";
+    const sessionState = sessions.get(agentSession);
+
+    if (!sessionState) {
+      return c.json({ pages: [] });
+    }
+
+    // Return only this session's page names (without session prefix)
     return c.json({
-      pages: Array.from(namedPages.keys()),
+      pages: Array.from(sessionState.pageNames),
     });
   });
 
-  // Get or create a named page
+  // Get or create a named page (namespaced by session)
   app.post("/pages", async (c) => {
+    const agentSession = c.req.header("X-DevBrowser-Session") ?? "default";
     const body = await c.req.json();
     const name = body.name as string;
 
@@ -356,10 +419,16 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
       return c.json({ error: "name is required" }, 400);
     }
 
-    // Check if page already exists by name
-    const existingSessionId = namedPages.get(name);
-    if (existingSessionId) {
-      const target = connectedTargets.get(existingSessionId);
+    // Internal key includes session prefix for isolation
+    const pageKey = `${agentSession}:${name}`;
+
+    // Ensure session exists
+    const sessionState = getOrCreateSession(agentSession);
+
+    // Check if page already exists for THIS session
+    const existingCdpSessionId = namedPages.get(pageKey);
+    if (existingCdpSessionId) {
+      const target = connectedTargets.get(existingCdpSessionId);
       if (target) {
         // Activate the tab so it becomes the active tab
         await sendToExtension({
@@ -371,13 +440,14 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
         });
         return c.json({
           wsEndpoint: `ws://${host}:${port}/cdp`,
-          name,
+          name, // Return without session prefix
           targetId: target.targetId,
           url: target.targetInfo.url,
         });
       }
-      // Session no longer valid, remove it
-      namedPages.delete(name);
+      // CDP session no longer valid, clean up
+      namedPages.delete(pageKey);
+      sessionState.pageNames.delete(name);
     }
 
     // Create a new tab
@@ -395,9 +465,16 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
       await new Promise((resolve) => setTimeout(resolve, 200));
 
       // Find and name the new target
-      for (const [sessionId, target] of connectedTargets) {
+      for (const [cdpSessionId, target] of connectedTargets) {
         if (target.targetId === result.targetId) {
-          namedPages.set(name, sessionId);
+          // Register with namespaced key
+          namedPages.set(pageKey, cdpSessionId);
+          sessionState.pageNames.add(name);
+
+          // Track reverse mapping for event routing
+          targetToAgentSession.set(cdpSessionId, agentSession);
+          sessionState.targetSessions.add(cdpSessionId);
+
           // Activate the tab so it becomes the active tab
           await sendToExtension({
             method: "forwardCDPCommand",
@@ -408,7 +485,7 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
           });
           return c.json({
             wsEndpoint: `ws://${host}:${port}/cdp`,
-            name,
+            name, // Return without session prefix
             targetId: target.targetId,
             url: target.targetInfo.url,
           });
@@ -422,11 +499,27 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
     }
   });
 
-  // Delete a named page (removes the name, doesn't close the tab)
+  // Delete a named page (filtered by session)
   app.delete("/pages/:name", (c) => {
+    const agentSession = c.req.header("X-DevBrowser-Session") ?? "default";
     const name = c.req.param("name");
-    const deleted = namedPages.delete(name);
-    return c.json({ success: deleted });
+    const pageKey = `${agentSession}:${name}`;
+
+    const cdpSessionId = namedPages.get(pageKey);
+    if (!cdpSessionId) {
+      return c.json({ error: "Page not found" }, 404);
+    }
+
+    // Clean up mappings
+    namedPages.delete(pageKey);
+    const sessionState = sessions.get(agentSession);
+    if (sessionState) {
+      sessionState.pageNames.delete(name);
+      sessionState.targetSessions.delete(cdpSessionId);
+    }
+    targetToAgentSession.delete(cdpSessionId);
+
+    return c.json({ success: true });
   });
 
   // ============================================================================
@@ -438,6 +531,8 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
     upgradeWebSocket((c) => {
       const clientId =
         c.req.param("clientId") || `client-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      // Get agent session from header for multi-agent isolation
+      const agentSession = c.req.header("X-DevBrowser-Session") ?? "default";
 
       return {
         onOpen(_event, ws) {
@@ -447,8 +542,17 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
             return;
           }
 
-          playwrightClients.set(clientId, { id: clientId, ws, knownTargets: new Set() });
-          log(`Playwright client connected: ${clientId}`);
+          // Register client with session tracking
+          const sessionState = getOrCreateSession(agentSession);
+          sessionState.clientIds.add(clientId);
+
+          playwrightClients.set(clientId, {
+            id: clientId,
+            ws,
+            knownTargets: new Set(),
+            session: agentSession,
+          });
+          log(`Playwright client connected: ${clientId} (session: ${agentSession})`);
         },
 
         async onMessage(event, _ws) {
@@ -469,7 +573,7 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
                 sessionId,
                 error: { message: "Extension not connected" },
               },
-              clientId
+              { clientId }
             );
             return;
           }
@@ -481,7 +585,7 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
             // Uses deduplication to prevent "Duplicate target" errors
             if (method === "Target.setAutoAttach" && !sessionId) {
               for (const target of connectedTargets.values()) {
-                sendAttachedToTarget(target, clientId);
+                sendAttachedToTarget(target, { clientId });
               }
             }
 
@@ -498,7 +602,7 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
                       targetInfo: { ...target.targetInfo, attached: true },
                     },
                   },
-                  clientId
+                  { clientId }
                 );
               }
             }
@@ -513,11 +617,11 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
                 (t) => t.targetId === targetId
               );
               if (target) {
-                sendAttachedToTarget(target, clientId);
+                sendAttachedToTarget(target, { clientId });
               }
             }
 
-            sendToPlaywright({ id, sessionId, result }, clientId);
+            sendToPlaywright({ id, sessionId, result }, { clientId });
           } catch (e) {
             log("Error handling CDP command:", method, e);
             sendToPlaywright(
@@ -526,12 +630,18 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
                 sessionId,
                 error: { message: (e as Error).message },
               },
-              clientId
+              { clientId }
             );
           }
         },
 
         onClose() {
+          const client = playwrightClients.get(clientId);
+          if (client) {
+            // Remove client from session
+            const sessionState = sessions.get(client.session);
+            sessionState?.clientIds.delete(clientId);
+          }
           playwrightClients.delete(clientId);
           log(`Playwright client disconnected: ${clientId}`);
         },
@@ -625,46 +735,94 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
 
               log(`Target attached: ${targetParams.targetInfo.url} (${targetParams.sessionId})`);
 
-              // Use deduplication helper - only sends to clients that don't know about this target
-              sendAttachedToTarget(target);
+              // Route to session that owns this target, or broadcast if unknown
+              const agentSession = targetToAgentSession.get(targetParams.sessionId);
+              if (agentSession) {
+                sendAttachedToTarget(target, { session: agentSession });
+              } else {
+                // Target not yet claimed by any session - broadcast to all
+                sendAttachedToTarget(target);
+              }
             } else if (method === "Target.detachedFromTarget") {
               const detachParams = params as { sessionId: string };
-              connectedTargets.delete(detachParams.sessionId);
+              const cdpSessionId = detachParams.sessionId;
 
-              // Also remove any name mapping
-              for (const [name, sid] of namedPages) {
-                if (sid === detachParams.sessionId) {
-                  namedPages.delete(name);
+              // Find the owning agent session before cleanup
+              const agentSession = targetToAgentSession.get(cdpSessionId);
+
+              connectedTargets.delete(cdpSessionId);
+
+              // Clean up name mappings and session state
+              for (const [pageKey, sid] of namedPages) {
+                if (sid === cdpSessionId) {
+                  namedPages.delete(pageKey);
+                  // Extract session and name from pageKey
+                  const colonIdx = pageKey.indexOf(":");
+                  if (colonIdx > 0) {
+                    const owningSession = pageKey.slice(0, colonIdx);
+                    const pageName = pageKey.slice(colonIdx + 1);
+                    const sessionState = sessions.get(owningSession);
+                    if (sessionState) {
+                      sessionState.pageNames.delete(pageName);
+                      sessionState.targetSessions.delete(cdpSessionId);
+                    }
+                  }
                   break;
                 }
               }
+              targetToAgentSession.delete(cdpSessionId);
 
-              log(`Target detached: ${detachParams.sessionId}`);
+              log(`Target detached: ${cdpSessionId}`);
 
-              sendToPlaywright({
-                method: "Target.detachedFromTarget",
-                params: detachParams,
-              });
+              // Route to owning session, or broadcast if unknown
+              if (agentSession) {
+                sendToPlaywright(
+                  { method: "Target.detachedFromTarget", params: detachParams },
+                  { session: agentSession }
+                );
+              } else {
+                sendToPlaywright({
+                  method: "Target.detachedFromTarget",
+                  params: detachParams,
+                });
+              }
             } else if (method === "Target.targetInfoChanged") {
               const infoParams = params as { targetInfo: TargetInfo };
+              let agentSession: string | undefined;
+
               for (const target of connectedTargets.values()) {
                 if (target.targetId === infoParams.targetInfo.targetId) {
                   target.targetInfo = infoParams.targetInfo;
+                  agentSession = targetToAgentSession.get(target.sessionId);
                   break;
                 }
               }
 
-              sendToPlaywright({
-                method: "Target.targetInfoChanged",
-                params: infoParams,
-              });
+              // Route to owning session, or broadcast if unknown
+              if (agentSession) {
+                sendToPlaywright(
+                  { method: "Target.targetInfoChanged", params: infoParams },
+                  { session: agentSession }
+                );
+              } else {
+                sendToPlaywright({
+                  method: "Target.targetInfoChanged",
+                  params: infoParams,
+                });
+              }
             } else {
               // Forward other CDP events to Playwright
-              sendToPlaywright({
-                sessionId,
-                method,
-                params,
-              });
+              // Route to owning session based on CDP sessionId
+              const agentSession = sessionId
+                ? targetToAgentSession.get(sessionId)
+                : undefined;
+
+              if (agentSession) {
+                sendToPlaywright({ sessionId, method, params }, { session: agentSession });
+              } else {
+                // Unknown session - broadcast to all
+                sendToPlaywright({ sessionId, method, params });
+              }
             }
           }
         },
@@ -685,6 +843,8 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
           extensionWs = null;
           connectedTargets.clear();
           namedPages.clear();
+          sessions.clear();
+          targetToAgentSession.clear();
 
           // Close all Playwright clients
           for (const client of playwrightClients.values()) {

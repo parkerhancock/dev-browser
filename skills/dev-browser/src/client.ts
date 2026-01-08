@@ -222,6 +222,18 @@ export interface PageOptions {
   viewport?: ViewportSize;
 }
 
+/**
+ * Options for connecting to the dev-browser server
+ */
+export interface ConnectOptions {
+  /**
+   * Session ID for multi-agent isolation.
+   * Each session has its own namespace for page names.
+   * Auto-generated if not provided.
+   */
+  session?: string;
+}
+
 export interface DevBrowserClient {
   page: (name: string, options?: PageOptions) => Promise<Page>;
   list: () => Promise<string[]>;
@@ -242,9 +254,22 @@ export interface DevBrowserClient {
    * Get server information including mode and extension connection status.
    */
   getServerInfo: () => Promise<ServerInfo>;
+  /**
+   * Get the session ID for this client.
+   */
+  getSession: () => string;
 }
 
-export async function connect(serverUrl = "http://localhost:9222"): Promise<DevBrowserClient> {
+export async function connect(
+  serverUrl = "http://localhost:9222",
+  options: ConnectOptions = {}
+): Promise<DevBrowserClient> {
+  // Generate session ID if not provided
+  const session =
+    options.session ?? `session-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+
+  // Headers to include session in all requests
+  const sessionHeaders = { "X-DevBrowser-Session": session };
   let browser: Browser | null = null;
   let wsEndpoint: string | null = null;
   let connectingPromise: Promise<Browser> | null = null;
@@ -318,7 +343,7 @@ export async function connect(serverUrl = "http://localhost:9222"): Promise<DevB
     // Request the page from server (creates if doesn't exist)
     const res = await fetch(`${serverUrl}/pages`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...sessionHeaders },
       body: JSON.stringify({ name, viewport: options?.viewport } satisfies GetPageRequest),
     });
 
@@ -378,7 +403,9 @@ export async function connect(serverUrl = "http://localhost:9222"): Promise<DevB
     page: getPage,
 
     async list(): Promise<string[]> {
-      const res = await fetch(`${serverUrl}/pages`);
+      const res = await fetch(`${serverUrl}/pages`, {
+        headers: sessionHeaders,
+      });
       const data = (await res.json()) as ListPagesResponse;
       return data.pages;
     },
@@ -386,6 +413,7 @@ export async function connect(serverUrl = "http://localhost:9222"): Promise<DevB
     async close(name: string): Promise<void> {
       const res = await fetch(`${serverUrl}/pages/${encodeURIComponent(name)}`, {
         method: "DELETE",
+        headers: sessionHeaders,
       });
 
       if (!res.ok) {
@@ -469,6 +497,10 @@ export async function connect(serverUrl = "http://localhost:9222"): Promise<DevB
         mode: (info.mode as "launch" | "extension") ?? "launch",
         extensionConnected: info.extensionConnected,
       };
+    },
+
+    getSession(): string {
+      return session;
     },
   };
 }

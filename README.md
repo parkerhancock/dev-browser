@@ -66,6 +66,35 @@ The Chrome extension allows Dev Browser to control your existing Chrome browser 
 
 When active, Claude can control your existing Chrome tabs with all your logged-in sessions, cookies, and extensions intact.
 
+### Multi-Agent Support
+
+Multiple Claude Code instances can share the same relay server without conflicts. Each instance automatically gets an isolated session with its own page namespace.
+
+**Start the shared relay:**
+
+```bash
+./skills/dev-browser/start.sh
+```
+
+The script is idempotent - run it from any Claude Code instance and it will either start the relay or confirm it's already running.
+
+**Session isolation:**
+
+```typescript
+// Each connect() auto-generates a unique session ID
+const client = await connect();
+const page = await client.page("github"); // Isolated to this session
+
+// To share pages between sessions, use the same session ID:
+const client = await connect("http://localhost:9222", { session: "shared-workspace" });
+```
+
+**Stop the relay:**
+
+```bash
+./skills/dev-browser/stop.sh
+```
+
 ## Permissions
 
 To skip permission prompts, add to `~/.claude/settings.json`:

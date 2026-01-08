@@ -39,16 +39,31 @@ Connects to user's existing Chrome browser. Use this when:
 **Start the relay server:**
 
 ```bash
-cd skills/dev-browser && npm i && npm run start-extension &
+./skills/dev-browser/start.sh
 ```
 
-Wait for `Waiting for extension to connect...` followed by `Extension connected` in the console. To know that a client has connected and the browser is ready to be controlled.
-**Workflow:**
+The script is idempotent - safe to run multiple times. It starts the relay if not running, or confirms it's already running.
 
-1. Scripts call `client.page("name")` just like the normal mode to create new pages / connect to existing ones.
-2. Automation runs on the user's actual browser session
+Wait for `Relay ready` before running scripts. If the extension hasn't connected yet, tell the user to launch and activate it. Download link: https://github.com/SawyerHood/dev-browser/releases
 
-If the extension hasn't connected yet, tell the user to launch and activate it. Download link: https://github.com/SawyerHood/dev-browser/releases
+**Stop the relay (optional):**
+
+```bash
+./skills/dev-browser/stop.sh
+```
+
+## Multi-Agent Support
+
+Multiple Claude Code instances can safely share the same relay server. Each instance automatically gets an isolated session - page names won't conflict between agents.
+
+```typescript
+// Each connect() auto-generates a unique session
+const client = await connect();
+const page = await client.page("github"); // Isolated to this session
+
+// To explicitly share pages between sessions, use the same session ID:
+const client = await connect("http://localhost:9222", { session: "shared-workspace" });
+```
 
 ## Writing Scripts
 
