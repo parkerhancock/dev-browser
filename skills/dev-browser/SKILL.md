@@ -163,7 +163,8 @@ const info = await client.getServerInfo(); // { mode, extensionConnected, wsEndp
 const sessionId = client.getSession(); // Current session ID
 
 // ARIA Snapshot methods
-const snapshot = await client.getAISnapshot("name"); // Get accessibility tree
+const snapshot = await client.getAISnapshot("name"); // Get accessibility tree (10s timeout)
+const snapshot = await client.getAISnapshot("name", { timeout: 5000 }); // Custom timeout
 const element = await client.selectSnapshotRef("name", "e5"); // Get element by ref
 ```
 
@@ -223,6 +224,30 @@ console.log(snapshot); // Find the ref you need
 const element = await client.selectSnapshotRef("hackernews", "e2");
 await element.click();
 ```
+
+## Troubleshooting Heavy JavaScript Sites
+
+Some sites (travel, banking, sites with anti-bot measures) block CDP interactions after initial load. Symptoms:
+
+- `page.goto()` with `waitUntil: "load"` times out
+- `getAISnapshot()` hangs or times out
+- `page.evaluate()` never returns
+
+**Workaround**: Use `waitUntil: "commit"` and rely on screenshots:
+
+```typescript
+// Navigate without waiting for full load
+await page.goto(url, { waitUntil: "commit", timeout: 30000 });
+await page.waitForTimeout(3000); // Brief pause for rendering
+
+// Use screenshots instead of getAISnapshot()
+await page.screenshot({ path: "tmp/page.png" });
+
+// If you need to interact, try direct selectors or coordinates
+await page.click('button[type="submit"]');
+```
+
+The `getAISnapshot()` function has a 10-second default timeout and will fail with a helpful error message on unresponsive pages. You can adjust with `client.getAISnapshot("name", { timeout: 5000 })`.
 
 ## Error Recovery
 

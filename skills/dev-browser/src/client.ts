@@ -478,23 +478,58 @@ export async function connect(
       }
     },
 
-    async getAISnapshot(name: string): Promise<string> {
-      // Get the page
+    async getAISnapshot(name: string, options?: { timeout?: number }): Promise<string> {
+      const timeout = options?.timeout ?? 10000;
       const page = await getPage(name);
+
+      // Health check - fail fast if page is unresponsive
+      const healthCheckTimeout = Math.min(3000, timeout);
+      try {
+        await Promise.race([
+          page.evaluate(() => true),
+          new Promise<never>((_, reject) =>
+            setTimeout(
+              () => reject(new Error("health check timeout")),
+              healthCheckTimeout
+            )
+          ),
+        ]);
+      } catch {
+        throw new Error(
+          `Page "${name}" is unresponsive to JavaScript execution. ` +
+            `This often happens on sites with heavy anti-bot measures. ` +
+            `Try navigating with waitUntil: "commit" instead of waiting for full load.`
+        );
+      }
 
       // Inject the snapshot script and call getAISnapshot
       const snapshotScript = getSnapshotScript();
-      const snapshot = await page.evaluate((script: string) => {
-        // Inject script if not already present
-        // Note: page.evaluate runs in browser context where window exists
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const w = globalThis as any;
-        if (!w.__devBrowser_getAISnapshot) {
-          // eslint-disable-next-line no-eval
-          eval(script);
-        }
-        return w.__devBrowser_getAISnapshot();
-      }, snapshotScript);
+      const snapshot = await Promise.race([
+        page.evaluate((script: string) => {
+          // Inject script if not already present
+          // Note: page.evaluate runs in browser context where window exists
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const w = globalThis as any;
+          if (!w.__devBrowser_getAISnapshot) {
+            // eslint-disable-next-line no-eval
+            eval(script);
+          }
+          return w.__devBrowser_getAISnapshot();
+        }, snapshotScript),
+        new Promise<never>((_, reject) =>
+          setTimeout(
+            () =>
+              reject(
+                new Error(
+                  `Snapshot timed out after ${timeout}ms. ` +
+                    `The page may have heavy JavaScript blocking execution. ` +
+                    `Try using screenshots instead, or navigate with waitUntil: "commit".`
+                )
+              ),
+            timeout
+          )
+        ),
+      ]);
 
       return snapshot;
     },
