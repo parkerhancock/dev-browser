@@ -26,7 +26,7 @@ export interface ExtensionState {
 }
 
 // Messages from relay to extension
-export interface ExtensionCommandMessage {
+export interface ForwardCDPCommandMessage {
   id: number;
   method: "forwardCDPCommand";
   params: {
@@ -35,6 +35,25 @@ export interface ExtensionCommandMessage {
     sessionId?: string;
   };
 }
+
+export interface GetAvailableTargetsMessage {
+  id: number;
+  method: "getAvailableTargets";
+  params?: Record<string, unknown>;
+}
+
+export interface AttachToTabMessage {
+  id: number;
+  method: "attachToTab";
+  params: {
+    tabId: number;
+  };
+}
+
+export type ExtensionCommandMessage =
+  | ForwardCDPCommandMessage
+  | GetAvailableTargetsMessage
+  | AttachToTabMessage;
 
 // Messages from extension to relay (responses)
 export interface ExtensionResponseMessage {

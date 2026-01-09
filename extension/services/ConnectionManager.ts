@@ -19,6 +19,7 @@ export class ConnectionManager {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private shouldMaintain = false;
   private connecting = false;
+  private intentionalDisconnect = false;
   private logger: Logger;
   private onMessage: (message: ExtensionCommandMessage) => Promise<unknown>;
   private onDisconnect: () => void;
@@ -53,11 +54,11 @@ export class ConnectionManager {
       });
       return response.ok;
     } catch {
-      // Server unreachable - close stale socket
+      // Server unreachable - close stale socket but preserve tab state for recovery
       if (this.ws) {
         this.ws.close();
         this.ws = null;
-        this.onDisconnect();
+        // Don't call onDisconnect - preserve debugger attachments for recovery
       }
       return false;
     }
@@ -103,14 +104,17 @@ export class ConnectionManager {
 
   /**
    * Disconnect from relay and stop maintaining connection.
+   * This is an intentional disconnect that will trigger onDisconnect callback.
    */
   disconnect(): void {
+    this.intentionalDisconnect = true;
     this.stopMaintaining();
     if (this.ws) {
       this.ws.close();
       this.ws = null;
     }
     this.onDisconnect();
+    this.intentionalDisconnect = false;
   }
 
   /**
@@ -207,7 +211,11 @@ export class ConnectionManager {
     socket.onclose = (event: CloseEvent) => {
       this.logger.debug("Connection closed:", event.code, event.reason);
       this.ws = null;
-      this.onDisconnect();
+      // Only trigger onDisconnect for intentional disconnects
+      // For unexpected disconnects (network issues, server restart), preserve tab state
+      if (this.intentionalDisconnect) {
+        this.onDisconnect();
+      }
       if (this.shouldMaintain) {
         this.startMaintaining();
       }

@@ -52,6 +52,23 @@ export class CDPRouter {
    * Handle an incoming CDP command from the relay.
    */
   async handleCommand(msg: ExtensionCommandMessage): Promise<unknown> {
+    // Handle recovery commands (not CDP-forwarded)
+    switch (msg.method) {
+      case "getAvailableTargets":
+        return this.getAvailableTargets();
+
+      case "attachToTab":
+        return this.attachToTab(msg.params.tabId);
+
+      case "forwardCDPCommand":
+        // Continue to handle CDP command below
+        break;
+
+      default:
+        return;
+    }
+
+    // Type narrowed to ForwardCDPCommandMessage
     if (msg.method !== "forwardCDPCommand") return;
 
     let targetTabId: number | undefined;
@@ -207,5 +224,67 @@ export class CDPRouter {
         params,
       },
     });
+  }
+
+  /**
+   * Get all available tabs that can be attached to for recovery.
+   */
+  private async getAvailableTargets(): Promise<{
+    targets: Array<{ tabId: number; targetId: string; url: string }>;
+  }> {
+    const tabs = await chrome.tabs.query({});
+    const targets: Array<{ tabId: number; targetId: string; url: string }> = [];
+
+    for (const tab of tabs) {
+      if (!tab.id || !tab.url) continue;
+      // Skip chrome:// and extension pages
+      if (tab.url.startsWith("chrome://") || tab.url.startsWith("chrome-extension://")) continue;
+
+      targets.push({
+        tabId: tab.id,
+        targetId: `tab-${tab.id}`, // Placeholder, real targetId comes after attach
+        url: tab.url,
+      });
+    }
+
+    this.logger.debug(`getAvailableTargets: found ${targets.length} tabs`);
+    return { targets };
+  }
+
+  /**
+   * Attach debugger to a specific tab for recovery.
+   */
+  private async attachToTab(
+    tabId: number
+  ): Promise<{ sessionId: string; targetInfo: { targetId: string; type: string; title: string; url: string; attached: boolean } }> {
+    // Check if already attached
+    const existing = this.tabManager.get(tabId);
+    if (existing && existing.state === "connected" && existing.sessionId) {
+      // Get current target info
+      const debuggee = { tabId };
+      const result = (await chrome.debugger.sendCommand(debuggee, "Target.getTargetInfo")) as {
+        targetInfo: { targetId: string; type: string; title: string; url: string };
+      };
+
+      this.logger.debug(`attachToTab: already attached to tab ${tabId}`);
+      return {
+        sessionId: existing.sessionId,
+        targetInfo: { ...result.targetInfo, attached: true },
+      };
+    }
+
+    // Attach to tab
+    this.logger.debug(`attachToTab: attaching to tab ${tabId}`);
+    const targetInfo = await this.tabManager.attach(tabId);
+    const tab = this.tabManager.get(tabId);
+
+    if (!tab || !tab.sessionId) {
+      throw new Error(`Failed to attach to tab ${tabId}`);
+    }
+
+    return {
+      sessionId: tab.sessionId,
+      targetInfo: { ...targetInfo, attached: true },
+    };
   }
 }

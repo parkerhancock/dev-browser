@@ -10,6 +10,12 @@ import { Hono } from "hono";
 import { serve } from "@hono/node-server";
 import { createNodeWebSocket } from "@hono/node-ws";
 import type { WSContext } from "hono/ws";
+import {
+  loadPersistedPages,
+  savePersistedPages,
+  createDebouncedSave,
+  type PersistedPage,
+} from "./persistence.js";
 
 // ============================================================================
 // Types
@@ -125,6 +131,11 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
   const sessions = new Map<string, SessionState>();
   const targetToAgentSession = new Map<string, string>(); // CDP sessionId -> agent session
 
+  // Persistence for page mappings (survives extension disconnects)
+  let persistedPages: PersistedPage[] = loadPersistedPages();
+  log(`Loaded ${persistedPages.length} persisted page mappings`);
+  const debouncedSave = createDebouncedSave(() => persistedPages);
+
   // Pending requests to extension
   const extensionPendingRequests = new Map<
     number,
@@ -156,6 +167,105 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
       sessions.set(sessionId, session);
     }
     return session;
+  }
+
+  // Recover persisted pages by re-attaching to existing tabs
+  async function recoverPersistedPages(): Promise<void> {
+    if (persistedPages.length === 0) {
+      log("No persisted pages to recover");
+      return;
+    }
+
+    log(`Attempting to recover ${persistedPages.length} persisted pages...`);
+
+    // Ask extension for available targets (tabs we can attach to)
+    let availableTargets: Array<{
+      tabId: number;
+      targetId: string;
+      url: string;
+    }>;
+
+    try {
+      const result = (await sendToExtension({
+        method: "getAvailableTargets",
+        params: {},
+      })) as { targets: typeof availableTargets };
+      availableTargets = result.targets;
+    } catch (err) {
+      log("Failed to get available targets:", err);
+      return;
+    }
+
+    log(`Found ${availableTargets.length} available targets`);
+
+    // Build lookup by targetId and URL for matching
+    const targetsByUrl = new Map<string, (typeof availableTargets)[0]>();
+    for (const target of availableTargets) {
+      targetsByUrl.set(target.url, target);
+    }
+
+    const recovered: string[] = [];
+    const stale: string[] = [];
+
+    for (const persisted of persistedPages) {
+      // Try to find matching tab by URL
+      const matchingTarget = targetsByUrl.get(persisted.url);
+
+      if (matchingTarget) {
+        try {
+          // Ask extension to attach debugger to this tab
+          const attachResult = (await sendToExtension({
+            method: "attachToTab",
+            params: { tabId: matchingTarget.tabId },
+          })) as { sessionId: string; targetInfo: TargetInfo };
+
+          const cdpSessionId = attachResult.sessionId;
+
+          // Rebuild in-memory mappings
+          connectedTargets.set(cdpSessionId, {
+            sessionId: cdpSessionId,
+            targetId: attachResult.targetInfo.targetId,
+            targetInfo: attachResult.targetInfo,
+          });
+          namedPages.set(persisted.key, cdpSessionId);
+
+          // Parse session and page name from key
+          const colonIdx = persisted.key.indexOf(":");
+          const agentSession = persisted.key.slice(0, colonIdx);
+          const pageName = persisted.key.slice(colonIdx + 1);
+
+          const sessionState = getOrCreateSession(agentSession);
+          sessionState.pageNames.add(pageName);
+          sessionState.targetSessions.add(cdpSessionId);
+          targetToAgentSession.set(cdpSessionId, agentSession);
+
+          // Update persisted entry with new targetId
+          persisted.targetId = attachResult.targetInfo.targetId;
+          persisted.tabId = matchingTarget.tabId;
+          persisted.lastSeen = Date.now();
+
+          recovered.push(persisted.key);
+          log(`Recovered: ${persisted.key} -> ${persisted.url}`);
+        } catch (err) {
+          log(`Failed to reattach ${persisted.key}: ${err}`);
+          stale.push(persisted.key);
+        }
+      } else {
+        log(`Tab not found for ${persisted.key} (${persisted.url})`);
+        stale.push(persisted.key);
+      }
+    }
+
+    // Clean up stale entries
+    if (stale.length > 0) {
+      persistedPages = persistedPages.filter((p) => !stale.includes(p.key));
+      savePersistedPages(persistedPages);
+    } else if (recovered.length > 0) {
+      // Save updated entries
+      savePersistedPages(persistedPages);
+    }
+
+    log(`Recovery complete: ${recovered.length} recovered, ${stale.length} stale`);
   }
 
   function sendToPlaywright(
@@ -475,6 +585,17 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
           targetToAgentSession.set(cdpSessionId, agentSession);
           sessionState.targetSessions.add(cdpSessionId);
 
+          // Persist the page mapping
+          persistedPages = persistedPages.filter((p) => p.key !== pageKey);
+          persistedPages.push({
+            key: pageKey,
+            targetId: target.targetId,
+            tabId: 0, // Will be updated when we get tabId from extension
+            url: target.targetInfo.url,
+            lastSeen: Date.now(),
+          });
+          savePersistedPages(persistedPages);
+
           // Activate the tab so it becomes the active tab
           await sendToExtension({
             method: "forwardCDPCommand",
@@ -518,6 +639,10 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
       sessionState.targetSessions.delete(cdpSessionId);
     }
     targetToAgentSession.delete(cdpSessionId);
+
+    // Remove from persistence
+    persistedPages = persistedPages.filter((p) => p.key !== pageKey);
+    savePersistedPages(persistedPages);
 
     return c.json({ success: true });
   });
@@ -668,9 +793,11 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
             log("Closing existing extension connection");
             extensionWs.close(4001, "Extension Replaced");
 
-            // Clear state
+            // Clear in-memory state (but NOT persistedPages)
             connectedTargets.clear();
             namedPages.clear();
+            sessions.clear();
+            targetToAgentSession.clear();
             for (const pending of extensionPendingRequests.values()) {
               pending.reject(new Error("Extension connection replaced"));
             }
@@ -679,6 +806,13 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
 
           extensionWs = ws;
           log("Extension connected");
+
+          // Attempt recovery of persisted pages after connection stabilizes
+          setTimeout(() => {
+            recoverPersistedPages().catch((err) => {
+              log("Recovery failed:", err);
+            });
+          }, 500);
         },
 
         async onMessage(event, ws) {
@@ -800,6 +934,16 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
                 }
               }
 
+              // Update persisted URL (debounced to avoid excessive writes)
+              const persistedEntry = persistedPages.find(
+                (p) => p.targetId === infoParams.targetInfo.targetId
+              );
+              if (persistedEntry) {
+                persistedEntry.url = infoParams.targetInfo.url;
+                persistedEntry.lastSeen = Date.now();
+                debouncedSave();
+              }
+
               // Route to owning session, or broadcast if unknown
               if (agentSession) {
                 sendToPlaywright(
@@ -843,12 +987,14 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
           extensionPendingRequests.clear();
 
           extensionWs = null;
+
+          // Clear in-memory state but PRESERVE persistedPages for recovery
           connectedTargets.clear();
           namedPages.clear();
           sessions.clear();
           targetToAgentSession.clear();
 
-          // Close all Playwright clients
+          // Close all Playwright clients (they'll need to reconnect)
           for (const client of playwrightClients.values()) {
             client.ws.close(1000, "Extension disconnected");
           }
