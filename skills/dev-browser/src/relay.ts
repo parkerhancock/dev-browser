@@ -540,14 +540,7 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
     if (existingCdpSessionId) {
       const target = connectedTargets.get(existingCdpSessionId);
       if (target) {
-        // Activate the tab so it becomes the active tab
-        await sendToExtension({
-          method: "forwardCDPCommand",
-          params: {
-            method: "Target.activateTarget",
-            params: { targetId: target.targetId },
-          },
-        });
+        // Return existing page without activating (use page.bringToFront() if needed)
         return c.json({
           wsEndpoint: `ws://${host}:${port}/cdp`,
           name, // Return without session prefix
@@ -596,14 +589,7 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
           });
           savePersistedPages(persistedPages);
 
-          // Activate the tab so it becomes the active tab
-          await sendToExtension({
-            method: "forwardCDPCommand",
-            params: {
-              method: "Target.activateTarget",
-              params: { targetId: target.targetId },
-            },
-          });
+          // Return new page without activating (use page.bringToFront() if needed)
           return c.json({
             wsEndpoint: `ws://${host}:${port}/cdp`,
             name, // Return without session prefix
