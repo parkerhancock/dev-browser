@@ -126,6 +126,7 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
   const namedPages = new Map<string, string>(); // "session:name" -> CDP sessionId
   const playwrightClients = new Map<string, PlaywrightClient>();
   let extensionWs: WSContext | null = null;
+  let isRecovering = false; // True during extension reconnect recovery
 
   // Multi-agent session state
   const sessions = new Map<string, SessionState>();
@@ -266,6 +267,7 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
     }
 
     log(`Recovery complete: ${recovered.length} recovered, ${stale.length} stale`);
+    isRecovering = false;
   }
 
   function sendToPlaywright(
@@ -521,6 +523,11 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
 
   // Get or create a named page (namespaced by session)
   app.post("/pages", async (c) => {
+    // Block requests during extension reconnect recovery
+    if (isRecovering) {
+      return c.json({ error: "Extension reconnecting, please retry" }, 503);
+    }
+
     const agentSession = c.req.header("X-DevBrowser-Session") ?? "default";
     const body = await c.req.json();
     const name = body.name as string;
@@ -779,13 +786,12 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
             log("Closing existing extension connection");
             extensionWs.close(4001, "Extension Replaced");
 
-            // Clear in-memory state (but NOT persistedPages)
+            // Only clear connectedTargets - CDP sessions are invalid after reconnect
+            // Keep namedPages, sessions, targetToAgentSession - recovery will update them
             connectedTargets.clear();
-            namedPages.clear();
-            sessions.clear();
-            targetToAgentSession.clear();
+            isRecovering = true;
             for (const pending of extensionPendingRequests.values()) {
-              pending.reject(new Error("Extension connection replaced"));
+              pending.reject(new Error("Extension reconnecting, please retry"));
             }
             extensionPendingRequests.clear();
           }
