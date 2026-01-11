@@ -114,6 +114,19 @@ export class TabManager {
       state: "connected",
     });
 
+    // Enable essential CDP domains so events will fire
+    // These must be enabled before Playwright connects, otherwise
+    // navigation events that happen during connection setup are lost
+    try {
+      await chrome.debugger.sendCommand(debuggee, "Page.enable");
+      await chrome.debugger.sendCommand(debuggee, "Network.enable");
+      await chrome.debugger.sendCommand(debuggee, "Runtime.enable");
+      this.logger.debug("CDP domains enabled for tab:", tabId);
+    } catch (err) {
+      this.logger.debug("Error enabling CDP domains:", err);
+      // Continue anyway - Playwright will enable them
+    }
+
     // Notify relay of new target
     this.sendMessage({
       method: "forwardCDPEvent",
