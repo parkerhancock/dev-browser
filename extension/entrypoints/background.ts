@@ -3,6 +3,9 @@
  *
  * This extension connects to the dev-browser relay server and allows
  * Playwright automation of the user's existing browser tabs.
+ *
+ * Tab group-based isolation: each agent session gets its own tab group.
+ * Tabs spawned by an agent's actions automatically join that group.
  */
 
 import { createLogger } from "../utils/logger";
@@ -10,6 +13,7 @@ import { TabManager } from "../services/TabManager";
 import { ConnectionManager } from "../services/ConnectionManager";
 import { CDPRouter } from "../services/CDPRouter";
 import { StateManager } from "../services/StateManager";
+import { SessionManager } from "../services/SessionManager";
 import type { PopupMessage, StateResponse } from "../utils/types";
 
 export default defineBackground(() => {
@@ -22,16 +26,20 @@ export default defineBackground(() => {
   // Create state manager for persistence
   const stateManager = new StateManager();
 
+  // Create session manager for tab group-based isolation
+  const sessionManager = new SessionManager({ logger });
+
   // Create tab manager
   const tabManager = new TabManager({
     logger,
     sendMessage: (msg) => connectionManager.send(msg),
   });
 
-  // Create CDP router
+  // Create CDP router with session manager
   const cdpRouter = new CDPRouter({
     logger,
     tabManager,
+    sessionManager,
   });
 
   // Create connection manager
@@ -63,13 +71,20 @@ export default defineBackground(() => {
     updateBadge(isActive);
   }
 
-  // Handle debugger events
+  // Handle debugger events - routes to owning agent session
   function onDebuggerEvent(
     source: chrome.debugger.DebuggerSession,
     method: string,
     params: unknown
   ): void {
-    cdpRouter.handleDebuggerEvent(source, method, params, (msg) => connectionManager.send(msg));
+    cdpRouter.handleDebuggerEvent(source, method, params, (msg, agentSession) => {
+      // Send with agent session for routing on relay side
+      if (agentSession) {
+        connectionManager.send({ ...msg, _agentSession: agentSession });
+      } else {
+        connectionManager.send(msg);
+      }
+    });
   }
 
   function onDebuggerDetach(
@@ -81,6 +96,47 @@ export default defineBackground(() => {
 
     logger.debug(`Debugger detached for tab ${tabId}: ${reason}`);
     tabManager.handleDebuggerDetach(tabId);
+  }
+
+  // Handle spawned tabs: when a tab opens from an agent's tab, add it to the same group
+  async function onTabCreated(tab: chrome.tabs.Tab): Promise<void> {
+    if (!tab.id || !tab.openerTabId) return;
+
+    // Check if the opener tab is in a managed session group
+    const agentSession = await sessionManager.getSessionForTab(tab.openerTabId);
+    if (!agentSession) return;
+
+    logger.debug(`Spawned tab ${tab.id} from tab ${tab.openerTabId} (session: ${agentSession})`);
+
+    try {
+      // Add the new tab to the same session's group
+      await sessionManager.addTabToSession(tab.id, agentSession);
+
+      // Attach debugger to the new tab
+      await new Promise((resolve) => setTimeout(resolve, 100)); // Let tab initialize
+      const targetInfo = await tabManager.attach(tab.id);
+
+      // Notify relay about the new tab
+      const tabInfo = tabManager.get(tab.id);
+      if (tabInfo) {
+        connectionManager.send({
+          method: "forwardCDPEvent",
+          params: {
+            method: "Target.attachedToTarget",
+            params: {
+              sessionId: tabInfo.sessionId,
+              targetInfo: { ...targetInfo, attached: true },
+              waitingForDebugger: false,
+            },
+          },
+          _agentSession: agentSession,
+        });
+      }
+
+      logger.log(`Auto-attached spawned tab ${tab.id} to session ${agentSession}`);
+    } catch (err) {
+      logger.debug(`Failed to auto-attach spawned tab ${tab.id}:`, err);
+    }
   }
 
   // Handle messages from popup
@@ -120,12 +176,18 @@ export default defineBackground(() => {
   );
 
   // Set up event listeners
-
   chrome.tabs.onRemoved.addListener((tabId) => {
     if (tabManager.has(tabId)) {
       logger.debug("Tab closed:", tabId);
       tabManager.detach(tabId, false);
     }
+  });
+
+  // Listen for new tabs to detect spawned tabs
+  chrome.tabs.onCreated.addListener((tab) => {
+    onTabCreated(tab).catch((err) => {
+      logger.debug("Error handling tab creation:", err);
+    });
   });
 
   // Register debugger event listeners
@@ -143,20 +205,20 @@ export default defineBackground(() => {
     }
   });
 
-  logger.log("Extension initialized");
+  // Initialize session manager and extension state
+  (async () => {
+    await sessionManager.initialize();
+    logger.log("Extension initialized");
 
-  // Initialize from stored state
-  stateManager.getState().then((state) => {
+    const state = await stateManager.getState();
     updateBadge(state.isActive);
     if (state.isActive) {
-      // Create keep-alive alarm only when extension is active
       chrome.alarms.create(KEEPALIVE_ALARM, { periodInMinutes: 0.5 });
       connectionManager.startMaintaining();
     }
-  });
+  })();
 
   // Set up Chrome Alarms keep-alive listener
-  // This ensures the connection is maintained even after service worker unloads
   chrome.alarms.onAlarm.addListener(async (alarm) => {
     if (alarm.name === KEEPALIVE_ALARM) {
       const state = await stateManager.getState();

@@ -1,63 +1,151 @@
 /**
  * CDPRouter - Routes CDP commands to the correct tab.
+ *
+ * Integrates with SessionManager for tab group-based isolation.
  */
 
 import type { Logger } from "../utils/logger";
 import type { TabManager } from "./TabManager";
+import type { SessionManager } from "./SessionManager";
 import type { ExtensionCommandMessage, TabInfo } from "../utils/types";
 
 export interface CDPRouterDeps {
   logger: Logger;
   tabManager: TabManager;
+  sessionManager: SessionManager;
 }
 
 export class CDPRouter {
   private logger: Logger;
   private tabManager: TabManager;
-  private devBrowserGroupId: number | null = null;
+  private sessionManager: SessionManager;
 
   constructor(deps: CDPRouterDeps) {
     this.logger = deps.logger;
     this.tabManager = deps.tabManager;
+    this.sessionManager = deps.sessionManager;
   }
 
   /**
-   * Gets or creates the "Dev Browser" tab group, returning its ID.
-   */
-  private async getOrCreateDevBrowserGroup(tabId: number): Promise<number> {
-    // If we have a cached group ID, verify it still exists
-    if (this.devBrowserGroupId !== null) {
-      try {
-        await chrome.tabGroups.get(this.devBrowserGroupId);
-        // Group exists, add tab to it
-        await chrome.tabs.group({ tabIds: [tabId], groupId: this.devBrowserGroupId });
-        return this.devBrowserGroupId;
-      } catch {
-        // Group no longer exists, reset cache
-        this.devBrowserGroupId = null;
-      }
-    }
-
-    // Create a new group with this tab
-    const groupId = await chrome.tabs.group({ tabIds: [tabId] });
-    await chrome.tabGroups.update(groupId, {
-      title: "Dev Browser",
-      color: "blue",
-    });
-    this.devBrowserGroupId = groupId;
-    return groupId;
-  }
-
-  /**
-   * Handle an incoming CDP command from the relay.
+   * Handle an incoming command from the relay.
    */
   async handleCommand(msg: ExtensionCommandMessage): Promise<unknown> {
+    switch (msg.method) {
+      case "getOrCreateSession":
+        return this.handleGetOrCreateSession(msg.params.sessionId);
+
+      case "closeSession":
+        return this.handleCloseSession(msg.params.sessionId);
+
+      case "getSessionTabs":
+        return this.handleGetSessionTabs(msg.params.sessionId);
+
+      case "createTab":
+        return this.handleCreateTab(msg.params.sessionId, msg.params.url);
+
+      case "forwardCDPCommand":
+        return this.handleCDPCommand(msg);
+
+      default:
+        throw new Error(`Unknown method: ${(msg as { method: string }).method}`);
+    }
+  }
+
+  /**
+   * Get or create a session and its tab group.
+   */
+  private async handleGetOrCreateSession(
+    sessionId: string
+  ): Promise<{ groupId: number; groupName: string; tabs: Array<{ tabId: number; url: string }> }> {
+    const { groupId, groupName } = await this.sessionManager.getOrCreateGroup(sessionId);
+
+    // Get existing tabs in the group
+    const tabs = await this.sessionManager.getTabsForSession(sessionId);
+    const tabInfos = tabs
+      .filter((t) => t.id !== undefined)
+      .map((t) => ({ tabId: t.id!, url: t.url || "" }));
+
+    this.logger.log(`Session ${sessionId}: group "${groupName}" with ${tabInfos.length} tabs`);
+    return { groupId, groupName, tabs: tabInfos };
+  }
+
+  /**
+   * Close a session and all its tabs.
+   */
+  private async handleCloseSession(sessionId: string): Promise<{ success: boolean }> {
+    await this.sessionManager.closeSession(sessionId);
+    return { success: true };
+  }
+
+  /**
+   * Get all tabs in a session.
+   */
+  private async handleGetSessionTabs(
+    sessionId: string
+  ): Promise<{ tabs: Array<{ tabId: number; url: string; targetId?: string; cdpSessionId?: string }> }> {
+    const tabs = await this.sessionManager.getTabsForSession(sessionId);
+    const result = [];
+
+    for (const tab of tabs) {
+      if (!tab.id) continue;
+
+      const tabInfo = this.tabManager.get(tab.id);
+      result.push({
+        tabId: tab.id,
+        url: tab.url || "",
+        targetId: tabInfo?.targetId,
+        cdpSessionId: tabInfo?.sessionId,
+      });
+    }
+
+    return { tabs: result };
+  }
+
+  /**
+   * Create a new tab in a session's group.
+   */
+  private async handleCreateTab(
+    sessionId: string,
+    url?: string
+  ): Promise<{ tabId: number; targetId: string; cdpSessionId: string }> {
+    const targetUrl = url || "about:blank";
+    this.logger.debug(`Creating tab for session ${sessionId}: ${targetUrl}`);
+
+    // Create the tab
+    const tab = await chrome.tabs.create({ url: targetUrl, active: false });
+    if (!tab.id) throw new Error("Failed to create tab");
+
+    // Add to session's group
+    await this.sessionManager.addTabToSession(tab.id, sessionId);
+
+    // Small delay for tab to initialize
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    // Attach debugger
+    const targetInfo = await this.tabManager.attach(tab.id);
+
+    const tabInfo = this.tabManager.get(tab.id);
+    if (!tabInfo?.sessionId) {
+      throw new Error("Failed to get CDP session after attach");
+    }
+
+    return {
+      tabId: tab.id,
+      targetId: targetInfo.targetId,
+      cdpSessionId: tabInfo.sessionId,
+    };
+  }
+
+  /**
+   * Handle CDP command forwarding.
+   */
+  private async handleCDPCommand(msg: ExtensionCommandMessage): Promise<unknown> {
     if (msg.method !== "forwardCDPCommand") return;
 
     let targetTabId: number | undefined;
     let targetTab: TabInfo | undefined;
 
-    // Find target tab by sessionId
+    // Find target tab by CDP sessionId
     if (msg.params.sessionId) {
       const found = this.tabManager.getBySessionId(msg.params.sessionId);
       if (found) {
@@ -97,7 +185,7 @@ export class CDPRouter {
 
     const debuggee = targetTabId ? { tabId: targetTabId } : undefined;
 
-    // Handle special commands
+    // Handle special CDP commands
     switch (msg.params.method) {
       case "Runtime.enable": {
         if (!debuggee) {
@@ -113,20 +201,6 @@ export class CDPRouter {
           // Ignore errors
         }
         return await chrome.debugger.sendCommand(debuggee, "Runtime.enable", msg.params.params);
-      }
-
-      case "Target.createTarget": {
-        const url = (msg.params.params?.url as string) || "about:blank";
-        this.logger.debug("Creating new tab with URL:", url);
-        const tab = await chrome.tabs.create({ url, active: false });
-        if (!tab.id) throw new Error("Failed to create tab");
-
-        // Add tab to "Dev Browser" group
-        await this.getOrCreateDevBrowserGroup(tab.id);
-
-        await new Promise((resolve) => setTimeout(resolve, 100));
-        const targetInfo = await this.tabManager.attach(tab.id);
-        return { targetId: targetInfo.targetId };
       }
 
       case "Target.closeTarget": {
@@ -166,13 +240,14 @@ export class CDPRouter {
 
   /**
    * Handle debugger events from Chrome.
+   * Returns the agent session ID that should receive this event.
    */
-  handleDebuggerEvent(
+  async handleDebuggerEvent(
     source: chrome.debugger.DebuggerSession,
     method: string,
     params: unknown,
-    sendMessage: (msg: unknown) => void
-  ): void {
+    sendMessage: (msg: unknown, agentSession?: string) => void
+  ): Promise<void> {
     const tab = source.tabId ? this.tabManager.get(source.tabId) : undefined;
     if (!tab) return;
 
@@ -199,13 +274,21 @@ export class CDPRouter {
       this.tabManager.untrackChildSession(sessionId);
     }
 
-    sendMessage({
-      method: "forwardCDPEvent",
-      params: {
-        sessionId: source.sessionId || tab.sessionId,
-        method,
-        params,
+    // Get the agent session that owns this tab (via group membership)
+    const agentSession = source.tabId
+      ? await this.sessionManager.getSessionForTab(source.tabId)
+      : null;
+
+    sendMessage(
+      {
+        method: "forwardCDPEvent",
+        params: {
+          sessionId: source.sessionId || tab.sessionId,
+          method,
+          params,
+        },
       },
-    });
+      agentSession || undefined
+    );
   }
 }

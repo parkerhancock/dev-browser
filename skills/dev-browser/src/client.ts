@@ -244,7 +244,34 @@ export interface DevBrowserClient {
   getServerInfo: () => Promise<ServerInfo>;
 }
 
-export async function connect(serverUrl = "http://localhost:9222"): Promise<DevBrowserClient> {
+export interface ConnectOptions {
+  /** Agent session ID for multi-agent isolation. Defaults to CLAUDE_SESSION_ID env var or "default" */
+  sessionId?: string;
+  /** Server mode: "standalone" (port 9222) or "extension" (port 9224) */
+  mode?: "standalone" | "extension";
+}
+
+export async function connect(
+  serverUrlOrOptions?: string | ConnectOptions,
+  options?: ConnectOptions
+): Promise<DevBrowserClient> {
+  // Parse arguments - support both old and new signatures
+  let serverUrl: string;
+  let opts: ConnectOptions;
+
+  if (typeof serverUrlOrOptions === "string") {
+    serverUrl = serverUrlOrOptions;
+    opts = options || {};
+  } else {
+    opts = serverUrlOrOptions || {};
+    // Default URL based on mode
+    const port = opts.mode === "extension" ? 9224 : 9222;
+    serverUrl = `http://localhost:${port}`;
+  }
+
+  // Get session ID from options, env var, or default
+  const sessionId = opts.sessionId || process.env.CLAUDE_SESSION_ID || "default";
+
   let browser: Browser | null = null;
   let wsEndpoint: string | null = null;
   let connectingPromise: Promise<Browser> | null = null;
@@ -269,7 +296,12 @@ export async function connect(serverUrl = "http://localhost:9222"): Promise<DevB
           throw new Error(`Server returned ${res.status}: ${await res.text()}`);
         }
         const info = (await res.json()) as ServerInfoResponse;
-        wsEndpoint = info.wsEndpoint;
+
+        // Add session ID to WebSocket URL for routing
+        // Format: ws://host:port/cdp/sessionId/clientId
+        const baseWsEndpoint = info.wsEndpoint;
+        const clientId = `client-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+        wsEndpoint = `${baseWsEndpoint}/${encodeURIComponent(sessionId)}/${clientId}`;
 
         // Connect to the browser via CDP
         browser = await chromium.connectOverCDP(wsEndpoint);
@@ -318,7 +350,10 @@ export async function connect(serverUrl = "http://localhost:9222"): Promise<DevB
     // Request the page from server (creates if doesn't exist)
     const res = await fetch(`${serverUrl}/pages`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        "X-DevBrowser-Session": sessionId,
+      },
       body: JSON.stringify({ name, viewport: options?.viewport } satisfies GetPageRequest),
     });
 
@@ -378,7 +413,9 @@ export async function connect(serverUrl = "http://localhost:9222"): Promise<DevB
     page: getPage,
 
     async list(): Promise<string[]> {
-      const res = await fetch(`${serverUrl}/pages`);
+      const res = await fetch(`${serverUrl}/pages`, {
+        headers: { "X-DevBrowser-Session": sessionId },
+      });
       const data = (await res.json()) as ListPagesResponse;
       return data.pages;
     },
@@ -386,6 +423,7 @@ export async function connect(serverUrl = "http://localhost:9222"): Promise<DevB
     async close(name: string): Promise<void> {
       const res = await fetch(`${serverUrl}/pages/${encodeURIComponent(name)}`, {
         method: "DELETE",
+        headers: { "X-DevBrowser-Session": sessionId },
       });
 
       if (!res.ok) {
