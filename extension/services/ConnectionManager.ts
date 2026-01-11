@@ -18,6 +18,8 @@ export class ConnectionManager {
   private ws: WebSocket | null = null;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private shouldMaintain = false;
+  private connecting = false;
+  private replacedUntil = 0; // Timestamp until which we should not reconnect (after 4001)
   private logger: Logger;
   private onMessage: (message: ExtensionCommandMessage) => Promise<unknown>;
   private onDisconnect: () => void;
@@ -85,6 +87,14 @@ export class ConnectionManager {
       this.reconnectTimer = null;
     }
 
+    // Skip reconnect if we were recently replaced (backoff period)
+    if (Date.now() < this.replacedUntil) {
+      this.logger.debug("Skipping reconnect - in replacement backoff period");
+      const remaining = this.replacedUntil - Date.now();
+      this.reconnectTimer = setTimeout(() => this.startMaintaining(), remaining + 100);
+      return;
+    }
+
     this.tryConnect().catch(() => {});
     this.reconnectTimer = setTimeout(() => this.startMaintaining(), RECONNECT_INTERVAL);
   }
@@ -135,6 +145,7 @@ export class ConnectionManager {
    */
   private async tryConnect(): Promise<void> {
     if (this.isConnected()) return;
+    if (this.connecting) return;
 
     // Check if server is available
     try {
@@ -143,33 +154,38 @@ export class ConnectionManager {
       return;
     }
 
+    this.connecting = true;
     this.logger.debug("Connecting to relay server...");
     const socket = new WebSocket(RELAY_URL);
 
-    await new Promise<void>((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        reject(new Error("Connection timeout"));
-      }, 5000);
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const timeout = setTimeout(() => {
+          reject(new Error("Connection timeout"));
+        }, 5000);
 
-      socket.onopen = () => {
-        clearTimeout(timeout);
-        resolve();
-      };
+        socket.onopen = () => {
+          clearTimeout(timeout);
+          resolve();
+        };
 
-      socket.onerror = () => {
-        clearTimeout(timeout);
-        reject(new Error("WebSocket connection failed"));
-      };
+        socket.onerror = () => {
+          clearTimeout(timeout);
+          reject(new Error("WebSocket connection failed"));
+        };
 
-      socket.onclose = (event) => {
-        clearTimeout(timeout);
-        reject(new Error(`WebSocket closed: ${event.reason || event.code}`));
-      };
-    });
+        socket.onclose = (event) => {
+          clearTimeout(timeout);
+          reject(new Error(`WebSocket closed: ${event.reason || event.code}`));
+        };
+      });
 
-    this.ws = socket;
-    this.setupSocketHandlers(socket);
-    this.logger.log("Connected to relay server");
+      this.ws = socket;
+      this.setupSocketHandlers(socket);
+      this.logger.log("Connected to relay server");
+    } finally {
+      this.connecting = false;
+    }
   }
 
   /**
@@ -201,6 +217,19 @@ export class ConnectionManager {
     socket.onclose = (event: CloseEvent) => {
       this.logger.debug("Connection closed:", event.code, event.reason);
       this.ws = null;
+
+      // If replaced by another extension instance, set a backoff period
+      // This prevents a reconnection loop when reloading the extension
+      if (event.code === 4001) {
+        this.logger.debug("Connection replaced, entering backoff period");
+        this.replacedUntil = Date.now() + 10000;
+        if (this.reconnectTimer) {
+          clearTimeout(this.reconnectTimer);
+          this.reconnectTimer = null;
+        }
+        return;
+      }
+
       this.onDisconnect();
       if (this.shouldMaintain) {
         this.startMaintaining();
