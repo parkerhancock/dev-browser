@@ -36,6 +36,8 @@ Connects to user's existing Chrome browser. Use this when:
 
 **Important**: The core flow is still the same. You create named pages inside of their browser.
 
+**Session isolation is automatic.** The client uses `CLAUDE_SESSION_ID` to isolate your tabs into a dedicated Chrome tab group. Just call `connect()` without any session parameters - it works transparently.
+
 **Start the relay server:**
 
 ```bash
