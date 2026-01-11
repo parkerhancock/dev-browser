@@ -104,6 +104,39 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
   const playwrightClients = new Map<string, PlaywrightClient>();
   let extensionWs: WSContext | null = null;
 
+  // Page name registry: session -> (name -> tabId)
+  const pageNames = new Map<string, Map<string, number>>();
+  // Reverse lookup: session -> (tabId -> name)
+  const tabIdToName = new Map<string, Map<number, string>>();
+
+  function getPageRegistry(session: string): Map<string, number> {
+    let registry = pageNames.get(session);
+    if (!registry) {
+      registry = new Map();
+      pageNames.set(session, registry);
+    }
+    return registry;
+  }
+
+  function getTabNameRegistry(session: string): Map<number, string> {
+    let registry = tabIdToName.get(session);
+    if (!registry) {
+      registry = new Map();
+      tabIdToName.set(session, registry);
+    }
+    return registry;
+  }
+
+  function registerPage(session: string, name: string, tabId: number) {
+    getPageRegistry(session).set(name, tabId);
+    getTabNameRegistry(session).set(tabId, name);
+  }
+
+  function unregisterPage(session: string, name: string, tabId: number) {
+    getPageRegistry(session).delete(name);
+    getTabNameRegistry(session).delete(tabId);
+  }
+
   // Pending requests to extension
   const extensionPendingRequests = new Map<
     number,
@@ -481,8 +514,10 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
         params: { sessionId: agentSession },
       })) as { tabs: Array<{ tabId: number; url: string }> };
 
+      // Look up names from registry, fall back to tab-{id} format
+      const nameRegistry = getTabNameRegistry(agentSession);
       return c.json({
-        pages: result.tabs.map((t) => `tab-${t.tabId}`),
+        pages: result.tabs.map((t) => nameRegistry.get(t.tabId) ?? `tab-${t.tabId}`),
       });
     } catch {
       return c.json({ pages: [] });
@@ -504,6 +539,31 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
     }
 
     try {
+      // Check if page with this name already exists
+      const registry = getPageRegistry(agentSession);
+      const existingTabId = registry.get(name);
+
+      if (existingTabId !== undefined) {
+        // Page exists - get its current info
+        const tabsResult = (await sendToExtension({
+          method: "getSessionTabs",
+          params: { sessionId: agentSession },
+        })) as { tabs: Array<{ tabId: number; url: string; targetId?: string }> };
+
+        const existingTab = tabsResult.tabs.find((t) => t.tabId === existingTabId);
+        if (existingTab) {
+          return c.json({
+            wsEndpoint: `ws://${host}:${port}/cdp/${agentSession}`,
+            name,
+            targetId: existingTab.targetId,
+            url: existingTab.url,
+          });
+        }
+        // Tab no longer exists - remove from registry and create new
+        registry.delete(name);
+        getTabNameRegistry(agentSession).delete(existingTabId);
+      }
+
       // Ensure session exists
       await sendToExtension({
         method: "getOrCreateSession",
@@ -515,6 +575,9 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
         method: "createTab",
         params: { sessionId: agentSession, url: "about:blank" },
       })) as { tabId: number; targetId: string; cdpSessionId: string };
+
+      // Register the page name
+      registerPage(agentSession, name, result.tabId);
 
       // Wait for target to be registered
       await new Promise((resolve) => setTimeout(resolve, 100));
@@ -533,6 +596,40 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
       });
     } catch (err) {
       log("Error creating page:", err);
+      return c.json({ error: (err as Error).message }, 500);
+    }
+  });
+
+  // Legacy: Close a named page
+  app.delete("/pages/:name", async (c) => {
+    const agentSession = c.req.header("X-DevBrowser-Session") ?? "default";
+    const name = decodeURIComponent(c.req.param("name"));
+
+    if (!extensionWs) {
+      return c.json({ error: "Extension not connected" }, 503);
+    }
+
+    // Look up tabId by name
+    const registry = getPageRegistry(agentSession);
+    const tabId = registry.get(name);
+
+    if (tabId === undefined) {
+      return c.json({ error: "page not found" }, 404);
+    }
+
+    try {
+      // Close the tab directly by tabId
+      await sendToExtension({
+        method: "closeTab",
+        params: { tabId },
+      });
+
+      // Remove from registry
+      unregisterPage(agentSession, name, tabId);
+
+      return c.json({ success: true });
+    } catch (err) {
+      log("Error closing page:", err);
       return c.json({ error: (err as Error).message }, 500);
     }
   });

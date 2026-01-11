@@ -43,6 +43,9 @@ export class CDPRouter {
       case "createTab":
         return this.handleCreateTab(msg.params.sessionId, msg.params.url);
 
+      case "closeTab":
+        return this.handleCloseTab(msg.params.tabId);
+
       case "forwardCDPCommand":
         return this.handleCDPCommand(msg);
 
@@ -134,6 +137,19 @@ export class CDPRouter {
       targetId: targetInfo.targetId,
       cdpSessionId: tabInfo.sessionId,
     };
+  }
+
+  /**
+   * Close a tab by tabId.
+   */
+  private async handleCloseTab(tabId: number): Promise<{ success: boolean }> {
+    try {
+      await chrome.tabs.remove(tabId);
+      return { success: true };
+    } catch (err) {
+      this.logger.debug("Error closing tab:", tabId, err);
+      return { success: false };
+    }
   }
 
   /**

@@ -69,12 +69,21 @@ export interface CreateTabMessage {
   };
 }
 
+export interface CloseTabMessage {
+  id: number;
+  method: "closeTab";
+  params: {
+    tabId: number;
+  };
+}
+
 export type ExtensionCommandMessage =
   | ForwardCDPCommandMessage
   | GetOrCreateSessionMessage
   | CloseSessionMessage
   | GetSessionTabsMessage
-  | CreateTabMessage;
+  | CreateTabMessage
+  | CloseTabMessage;
 
 // Messages from extension to relay (responses)
 export interface ExtensionResponseMessage {
