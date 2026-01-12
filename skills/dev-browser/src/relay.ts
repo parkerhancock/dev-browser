@@ -16,7 +16,6 @@ import {
   createDebouncedSave,
   type PersistedPage,
 } from "./persistence.js";
-import { NetworkStore, type NetworkSearchOptions } from "./network-store.js";
 
 // ============================================================================
 // Types
@@ -138,9 +137,6 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
   log(`Loaded ${persistedPages.length} persisted page mappings`);
   const debouncedSave = createDebouncedSave(() => persistedPages);
 
-  // Network request store for debugging
-  const networkStore = new NetworkStore();
-
   // Pending requests to extension
   const extensionPendingRequests = new Map<
     number,
@@ -157,17 +153,6 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
 
   function log(...args: unknown[]) {
     console.log("[relay]", ...args);
-  }
-
-  // Helper to get page name from CDP sessionId (for network store keying)
-  function getPageIdFromSessionId(cdpSessionId: string): string | null {
-    for (const [pageKey, sid] of namedPages) {
-      if (sid === cdpSessionId) {
-        return pageKey; // Returns "session:name" format
-      }
-    }
-    // Fallback to using CDP sessionId directly if no named page
-    return cdpSessionId;
   }
 
   // Helper to get or create a session
@@ -656,130 +641,6 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
   });
 
   // ============================================================================
-  // Network Debugging Endpoints
-  // ============================================================================
-
-  // Search network requests for a page
-  app.get("/pages/:name/network", async (c) => {
-    const agentSession = c.req.header("X-DevBrowser-Session") ?? "default";
-    const name = c.req.param("name");
-    const pageKey = `${agentSession}:${name}`;
-
-    // Check if page exists
-    if (!namedPages.has(pageKey)) {
-      return c.json({ error: "Page not found" }, 404);
-    }
-
-    // Parse query params for filtering
-    const query = c.req.query();
-    const options: NetworkSearchOptions = {
-      filter: {},
-      limit: query.limit ? parseInt(query.limit, 10) : 50,
-      offset: query.offset ? parseInt(query.offset, 10) : 0,
-      sortBy: (query.sortBy as NetworkSearchOptions["sortBy"]) ?? "timestamp",
-      sortOrder: (query.sortOrder as NetworkSearchOptions["sortOrder"]) ?? "desc",
-    };
-
-    if (query.url) options.filter!.url = query.url;
-    if (query.method) options.filter!.method = query.method;
-    if (query.status) options.filter!.status = parseInt(query.status, 10);
-    if (query.statusMin) options.filter!.statusMin = parseInt(query.statusMin, 10);
-    if (query.statusMax) options.filter!.statusMax = parseInt(query.statusMax, 10);
-    if (query.resourceType) options.filter!.resourceType = query.resourceType;
-    if (query.failed === "true") options.filter!.failed = true;
-    if (query.failed === "false") options.filter!.failed = false;
-    if (query.hasResponseBody === "true") options.filter!.hasResponseBody = true;
-
-    const result = networkStore.search(pageKey, options);
-    return c.json(result);
-  });
-
-  // Get details for a specific request
-  app.get("/pages/:name/network/:requestId", async (c) => {
-    const agentSession = c.req.header("X-DevBrowser-Session") ?? "default";
-    const name = c.req.param("name");
-    const requestId = c.req.param("requestId");
-    const pageKey = `${agentSession}:${name}`;
-
-    // Check if page exists
-    if (!namedPages.has(pageKey)) {
-      return c.json({ error: "Page not found" }, 404);
-    }
-
-    const detail = networkStore.getDetail(pageKey, requestId);
-    if (!detail) {
-      return c.json({ error: "Request not found" }, 404);
-    }
-
-    return c.json(detail);
-  });
-
-  // Get response body for a specific request (on-demand fetch)
-  app.get("/pages/:name/network/:requestId/body", async (c) => {
-    const agentSession = c.req.header("X-DevBrowser-Session") ?? "default";
-    const name = c.req.param("name");
-    const requestId = c.req.param("requestId");
-    const pageKey = `${agentSession}:${name}`;
-
-    // Check if page exists
-    const cdpSessionId = namedPages.get(pageKey);
-    if (!cdpSessionId) {
-      return c.json({ error: "Page not found" }, 404);
-    }
-
-    const detail = networkStore.getDetail(pageKey, requestId);
-    if (!detail) {
-      return c.json({ error: "Request not found" }, 404);
-    }
-
-    // Return cached body if available
-    if (detail.responseBody !== undefined) {
-      return c.json({ body: detail.responseBody, base64Encoded: false });
-    }
-    if (detail.responseBodyBase64 !== undefined) {
-      return c.json({ body: detail.responseBodyBase64, base64Encoded: true });
-    }
-
-    // Fetch body on demand via CDP
-    if (!extensionWs) {
-      return c.json({ error: "Extension not connected" }, 503);
-    }
-
-    try {
-      const result = (await sendToExtension({
-        method: "forwardCDPCommand",
-        params: {
-          sessionId: cdpSessionId,
-          method: "Network.getResponseBody",
-          params: { requestId },
-        },
-      })) as { body: string; base64Encoded: boolean };
-
-      // Cache the result
-      networkStore.storeResponseBody(pageKey, requestId, result.body, result.base64Encoded);
-
-      return c.json(result);
-    } catch (err) {
-      return c.json({ error: (err as Error).message }, 500);
-    }
-  });
-
-  // Clear network requests for a page
-  app.delete("/pages/:name/network", async (c) => {
-    const agentSession = c.req.header("X-DevBrowser-Session") ?? "default";
-    const name = c.req.param("name");
-    const pageKey = `${agentSession}:${name}`;
-
-    networkStore.clear(pageKey);
-    return c.json({ success: true });
-  });
-
-  // Get network store stats (for debugging)
-  app.get("/network/stats", (c) => {
-    return c.json(networkStore.getStats());
-  });
-
-  // ============================================================================
   // Playwright Client WebSocket
   // ============================================================================
 
@@ -1088,65 +949,7 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
                 });
               }
             } else {
-              // Intercept Network.* events for network debugging store
-              if (sessionId && method.startsWith("Network.")) {
-                const pageId = getPageIdFromSessionId(sessionId);
-                if (pageId) {
-                  switch (method) {
-                    case "Network.requestWillBeSent":
-                      networkStore.handleRequestWillBeSent(
-                        pageId,
-                        params as Parameters<typeof networkStore.handleRequestWillBeSent>[1]
-                      );
-                      break;
-                    case "Network.responseReceived":
-                      networkStore.handleResponseReceived(
-                        pageId,
-                        params as Parameters<typeof networkStore.handleResponseReceived>[1]
-                      );
-                      break;
-                    case "Network.loadingFinished":
-                      networkStore.handleLoadingFinished(
-                        pageId,
-                        params as Parameters<typeof networkStore.handleLoadingFinished>[1]
-                      );
-                      // Auto-fetch body for small text responses
-                      const finishedParams = params as { requestId: string };
-                      if (networkStore.shouldAutoStoreBody(pageId, finishedParams.requestId)) {
-                        // Fire and forget - don't block event forwarding
-                        sendToExtension({
-                          method: "forwardCDPCommand",
-                          params: {
-                            sessionId,
-                            method: "Network.getResponseBody",
-                            params: { requestId: finishedParams.requestId },
-                          },
-                        })
-                          .then((result) => {
-                            const bodyResult = result as { body: string; base64Encoded: boolean };
-                            networkStore.storeResponseBody(
-                              pageId,
-                              finishedParams.requestId,
-                              bodyResult.body,
-                              bodyResult.base64Encoded
-                            );
-                          })
-                          .catch(() => {
-                            // Body fetch failed, that's ok
-                          });
-                      }
-                      break;
-                    case "Network.loadingFailed":
-                      networkStore.handleLoadingFailed(
-                        pageId,
-                        params as Parameters<typeof networkStore.handleLoadingFailed>[1]
-                      );
-                      break;
-                  }
-                }
-              }
-
-              // Forward other CDP events to Playwright
+              // Forward CDP events to Playwright
               // Route to owning session based on CDP sessionId
               const agentSession = sessionId
                 ? targetToAgentSession.get(sessionId)
