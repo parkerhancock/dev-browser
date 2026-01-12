@@ -7,6 +7,11 @@ import type {
   ViewportSize,
 } from "./types";
 import { getSnapshotScript } from "./snapshot/browser-script";
+import type {
+  NetworkSearchOptions,
+  NetworkSearchResult,
+  NetworkRequest,
+} from "./network-store";
 
 /**
  * Options for waiting for page load
@@ -274,6 +279,24 @@ export interface DevBrowserClient {
    * Get the session ID for this client.
    */
   getSession: () => string;
+  /**
+   * Search network requests for a page with optional filtering.
+   * Returns request summaries (use networkDetail for full info).
+   */
+  network: (name: string, options?: NetworkSearchOptions) => Promise<NetworkSearchResult>;
+  /**
+   * Get full details for a specific network request.
+   */
+  networkDetail: (name: string, requestId: string) => Promise<NetworkRequest>;
+  /**
+   * Get response body for a specific network request.
+   * Bodies are fetched on-demand for large responses.
+   */
+  networkBody: (name: string, requestId: string) => Promise<{ body: string; base64Encoded: boolean }>;
+  /**
+   * Clear stored network requests for a page.
+   */
+  clearNetwork: (name: string) => Promise<void>;
 }
 
 export async function connect(
@@ -585,6 +608,68 @@ export async function connect(
 
     getSession(): string {
       return session;
+    },
+
+    async network(name: string, options?: NetworkSearchOptions): Promise<NetworkSearchResult> {
+      const queryParams = new URLSearchParams();
+      if (options?.filter?.url) queryParams.set("url", options.filter.url);
+      if (options?.filter?.method) queryParams.set("method", options.filter.method);
+      if (options?.filter?.status !== undefined) queryParams.set("status", String(options.filter.status));
+      if (options?.filter?.statusMin !== undefined) queryParams.set("statusMin", String(options.filter.statusMin));
+      if (options?.filter?.statusMax !== undefined) queryParams.set("statusMax", String(options.filter.statusMax));
+      if (options?.filter?.resourceType) queryParams.set("resourceType", options.filter.resourceType);
+      if (options?.filter?.failed !== undefined) queryParams.set("failed", String(options.filter.failed));
+      if (options?.filter?.hasResponseBody !== undefined) queryParams.set("hasResponseBody", String(options.filter.hasResponseBody));
+      if (options?.sortBy) queryParams.set("sortBy", options.sortBy);
+      if (options?.sortOrder) queryParams.set("sortOrder", options.sortOrder);
+      if (options?.limit !== undefined) queryParams.set("limit", String(options.limit));
+      if (options?.offset !== undefined) queryParams.set("offset", String(options.offset));
+
+      const url = `${serverUrl}/pages/${encodeURIComponent(name)}/network?${queryParams.toString()}`;
+      const res = await fetch(url, { headers: sessionHeaders });
+
+      if (!res.ok) {
+        throw new Error(`Failed to get network requests: ${await res.text()}`);
+      }
+
+      return (await res.json()) as NetworkSearchResult;
+    },
+
+    async networkDetail(name: string, requestId: string): Promise<NetworkRequest> {
+      const res = await fetch(
+        `${serverUrl}/pages/${encodeURIComponent(name)}/network/${encodeURIComponent(requestId)}`,
+        { headers: sessionHeaders }
+      );
+
+      if (!res.ok) {
+        throw new Error(`Failed to get network request detail: ${await res.text()}`);
+      }
+
+      return (await res.json()) as NetworkRequest;
+    },
+
+    async networkBody(name: string, requestId: string): Promise<{ body: string; base64Encoded: boolean }> {
+      const res = await fetch(
+        `${serverUrl}/pages/${encodeURIComponent(name)}/network/${encodeURIComponent(requestId)}/body`,
+        { headers: sessionHeaders }
+      );
+
+      if (!res.ok) {
+        throw new Error(`Failed to get response body: ${await res.text()}`);
+      }
+
+      return (await res.json()) as { body: string; base64Encoded: boolean };
+    },
+
+    async clearNetwork(name: string): Promise<void> {
+      const res = await fetch(
+        `${serverUrl}/pages/${encodeURIComponent(name)}/network`,
+        { method: "DELETE", headers: sessionHeaders }
+      );
+
+      if (!res.ok) {
+        throw new Error(`Failed to clear network requests: ${await res.text()}`);
+      }
     },
   };
 }
