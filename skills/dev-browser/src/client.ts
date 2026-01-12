@@ -314,7 +314,7 @@ export async function connect(
     return connectingPromise;
   }
 
-  // Find page by CDP targetId - more reliable than JS globals
+  // Find page by CDP targetId - used in standalone mode
   async function findPageByTargetId(b: Browser, targetId: string): Promise<Page | null> {
     for (const context of b.contexts()) {
       for (const page of context.pages()) {
@@ -373,8 +373,8 @@ export async function connect(
     const isExtensionMode = info.mode === "extension";
 
     if (isExtensionMode) {
-      // In extension mode, DON'T use findPageByTargetId as it corrupts page state
-      // Instead, find page by URL or use the only available page
+      // In extension mode, CDP session creation interferes with page operations
+      // Use URL-based matching instead
       const allPages = b.contexts().flatMap((ctx) => ctx.pages());
 
       if (allPages.length === 0) {
@@ -385,19 +385,41 @@ export async function connect(
         return allPages[0]!;
       }
 
-      // Multiple pages - try to match by URL if available
-      if (pageInfo.url) {
-        const matchingPage = allPages.find((p) => p.url() === pageInfo.url);
+      // Multiple pages - match by URL
+      // The server returns the current URL of the tab
+      if (pageInfo.url && pageInfo.url !== "about:blank") {
+        // Try exact URL match first
+        let matchingPage = allPages.find((p) => p.url() === pageInfo.url);
         if (matchingPage) {
           return matchingPage;
         }
+
+        // Try origin match (handles redirects like google.com -> www.google.com)
+        try {
+          const targetOrigin = new URL(pageInfo.url).origin;
+          matchingPage = allPages.find((p) => {
+            try {
+              return new URL(p.url()).origin === targetOrigin;
+            } catch {
+              return false;
+            }
+          });
+          if (matchingPage) {
+            return matchingPage;
+          }
+        } catch {
+          // Invalid URL, skip origin matching
+        }
       }
 
-      // Fall back to first page
-      if (!allPages[0]) {
-        throw new Error(`No pages available in browser`);
+      // No URL match - this is a newly created page, find the about:blank one
+      const blankPage = allPages.find((p) => p.url() === "about:blank");
+      if (blankPage) {
+        return blankPage;
       }
-      return allPages[0];
+
+      // Last resort: return first page
+      return allPages[0]!;
     }
 
     // In launch mode, use the original targetId-based lookup
