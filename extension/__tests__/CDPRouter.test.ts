@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { fakeBrowser } from "wxt/testing";
 import { CDPRouter } from "../services/CDPRouter";
 import { TabManager } from "../services/TabManager";
+import type { SessionManager } from "../services/SessionManager";
 import type { Logger } from "../utils/logger";
 import type { ExtensionCommandMessage } from "../utils/types";
 
@@ -23,6 +24,7 @@ vi.stubGlobal("chrome", {
 describe("CDPRouter", () => {
   let cdpRouter: CDPRouter;
   let tabManager: TabManager;
+  let mockSessionManager: SessionManager;
   let mockLogger: Logger;
   let mockSendMessage: ReturnType<typeof vi.fn>;
 
@@ -43,9 +45,22 @@ describe("CDPRouter", () => {
       sendMessage: mockSendMessage,
     });
 
+    mockSessionManager = {
+      initialize: vi.fn(),
+      getOrCreateGroup: vi.fn(),
+      getSessionForTab: vi.fn(),
+      getGroupForSession: vi.fn(),
+      getSessionForGroup: vi.fn(),
+      addTabToSession: vi.fn(),
+      getTabsForSession: vi.fn(),
+      closeSession: vi.fn(),
+      isManagedGroup: vi.fn(),
+    } as unknown as SessionManager;
+
     cdpRouter = new CDPRouter({
       logger: mockLogger,
       tabManager,
+      sessionManager: mockSessionManager,
     });
   });
 

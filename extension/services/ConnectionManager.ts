@@ -5,12 +5,13 @@
 import type { Logger } from "../utils/logger";
 import type { ExtensionCommandMessage, ExtensionResponseMessage } from "../utils/types";
 
-const RELAY_URL = "ws://localhost:9222/extension";
+const RELAY_URL = "ws://localhost:9224/extension";
 const RECONNECT_INTERVAL = 3000;
 
 export interface ConnectionManagerDeps {
   logger: Logger;
   onMessage: (message: ExtensionCommandMessage) => Promise<unknown>;
+  onConnect: () => void;
   onDisconnect: () => void;
 }
 
@@ -22,11 +23,13 @@ export class ConnectionManager {
   private replacedUntil = 0; // Timestamp until which we should not reconnect (after 4001)
   private logger: Logger;
   private onMessage: (message: ExtensionCommandMessage) => Promise<unknown>;
+  private onConnect: () => void;
   private onDisconnect: () => void;
 
   constructor(deps: ConnectionManagerDeps) {
     this.logger = deps.logger;
     this.onMessage = deps.onMessage;
+    this.onConnect = deps.onConnect;
     this.onDisconnect = deps.onDisconnect;
   }
 
@@ -48,7 +51,7 @@ export class ConnectionManager {
 
     // Verify server is actually reachable
     try {
-      const response = await fetch("http://localhost:9222", {
+      const response = await fetch("http://localhost:9224", {
         method: "HEAD",
         signal: AbortSignal.timeout(1000),
       });
@@ -149,7 +152,7 @@ export class ConnectionManager {
 
     // Check if server is available
     try {
-      await fetch("http://localhost:9222", { method: "HEAD" });
+      await fetch("http://localhost:9224", { method: "HEAD" });
     } catch {
       return;
     }
@@ -183,6 +186,7 @@ export class ConnectionManager {
       this.ws = socket;
       this.setupSocketHandlers(socket);
       this.logger.log("Connected to relay server");
+      this.onConnect();
     } finally {
       this.connecting = false;
     }

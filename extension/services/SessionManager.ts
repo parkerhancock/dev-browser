@@ -211,7 +211,7 @@ export class SessionManager {
    */
   private async loadSessions(): Promise<SessionGroup[]> {
     const result = await chrome.storage.local.get(STORAGE_KEY);
-    return result[STORAGE_KEY] || [];
+    return (result[STORAGE_KEY] as SessionGroup[] | undefined) || [];
   }
 
   /**

@@ -228,4 +228,47 @@ export class TabManager {
   getAllTabIds(): number[] {
     return Array.from(this.tabs.keys());
   }
+
+  /**
+   * Re-announce all existing targets via Target.attachedToTarget events.
+   * Used when a new client connects and needs to know about existing tabs.
+   */
+  async reannounceTargets(): Promise<void> {
+    for (const [tabId, tabInfo] of this.tabs) {
+      if (tabInfo.state !== "connected" || !tabInfo.sessionId || !tabInfo.targetId) {
+        continue;
+      }
+
+      try {
+        // Get current target info
+        const result = (await chrome.debugger.sendCommand({ tabId }, "Target.getTargetInfo")) as {
+          targetInfo: TargetInfo;
+        };
+
+        this.sendMessage({
+          method: "forwardCDPEvent",
+          params: {
+            method: "Target.attachedToTarget",
+            params: {
+              sessionId: tabInfo.sessionId,
+              targetInfo: { ...result.targetInfo, attached: true },
+              waitingForDebugger: false,
+            },
+          },
+        });
+
+        this.logger.debug("Re-announced target:", tabId, tabInfo.sessionId);
+      } catch (err) {
+        this.logger.debug("Failed to re-announce target:", tabId, err);
+      }
+    }
+  }
+
+  /**
+   * Check if a tab has an active debugger session.
+   */
+  isAttached(tabId: number): boolean {
+    const tab = this.tabs.get(tabId);
+    return tab?.state === "connected" && !!tab.sessionId;
+  }
 }

@@ -46,7 +46,21 @@ export default defineBackground(() => {
   connectionManager = new ConnectionManager({
     logger,
     onMessage: (msg) => cdpRouter.handleCommand(msg),
-    onDisconnect: () => tabManager.detachAll(),
+    onConnect: () => {
+      // Re-announce existing targets when a client connects
+      // so Playwright sees tabs that were attached before reconnection
+      logger.debug("Relay connected, re-announcing existing targets");
+      tabManager.reannounceTargets().catch((err) => {
+        logger.debug("Error re-announcing targets:", err);
+      });
+    },
+    onDisconnect: () => {
+      // DON'T detach debuggers on disconnect - keep them attached
+      // so tabs remain accessible when a new client connects.
+      // The debugger sessions persist and will be re-announced
+      // via Target.attachedToTarget when a new client connects.
+      logger.debug("Relay disconnected, keeping debuggers attached");
+    },
   });
 
   // Keep-alive alarm name for Chrome Alarms API
@@ -80,7 +94,7 @@ export default defineBackground(() => {
     cdpRouter.handleDebuggerEvent(source, method, params, (msg, agentSession) => {
       // Send with agent session for routing on relay side
       if (agentSession) {
-        connectionManager.send({ ...msg, _agentSession: agentSession });
+        connectionManager.send({ ...(msg as object), _agentSession: agentSession });
       } else {
         connectionManager.send(msg);
       }
