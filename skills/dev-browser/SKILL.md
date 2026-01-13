@@ -3,6 +3,24 @@ name: dev-browser
 description: Browser automation with persistent page state. Use when users ask to navigate websites, fill forms, take screenshots, extract web data, test web apps, or automate browser workflows. Trigger phrases include "go to [url]", "click on", "fill out the form", "take a screenshot", "scrape", "automate", "test the website", "log into", or any browser interaction request.
 ---
 
+<!--
+TODO: Move session ID hook back to frontmatter when fixed
+======================================================
+Skill-scoped hooks in SKILL.md frontmatter don't work (Claude Code bug).
+Tracking: https://github.com/anthropics/claude-code/issues/17688
+
+When resolved, restore this frontmatter and remove from ~/.claude/settings.json:
+
+hooks:
+  PreToolUse:
+    - matcher: Bash
+      hooks:
+        - type: command
+          command: "$HOME/.claude/skills/dev-browser/scripts/inject-session-id.sh"
+
+Current workaround: Hook is in ~/.claude/settings.json (global PreToolUse)
+-->
+
 # Dev Browser Skill
 
 Browser automation that maintains page state across script executions. Write small, focused scripts to accomplish tasks incrementally. Once you've proven out part of a workflow and there is repeated work to be done, you can write a script to do the repeated work in a single execution.
