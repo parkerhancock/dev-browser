@@ -162,6 +162,11 @@ await client.disconnect(); // Disconnect (pages persist)
 const info = await client.getServerInfo(); // { mode, extensionConnected, wsEndpoint }
 const sessionId = client.getSession(); // Current session ID
 
+// Tab management (extension mode) - bypasses session isolation
+const tabs = await client.allTargets(); // List ALL browser tabs (not just this session)
+await client.closeTarget(tabId); // Close a specific tab by tabId
+const result = await client.cleanup("^about:blank$"); // Close tabs matching URL pattern
+
 // ARIA Snapshot methods
 const snapshot = await client.getAISnapshot("name"); // Get accessibility tree (10s timeout)
 const snapshot = await client.getAISnapshot("name", { timeout: 5000 }); // Custom timeout
@@ -248,6 +253,33 @@ await page.click('button[type="submit"]');
 ```
 
 The `getAISnapshot()` function has a 10-second default timeout and will fail with a helpful error message on unresponsive pages. You can adjust with `client.getAISnapshot("name", { timeout: 5000 })`.
+
+## Tab Management (Extension Mode)
+
+When using extension mode, tabs persist in Chrome even after scripts disconnect. Use these methods to manage tabs across sessions:
+
+```typescript
+const client = await connect({ mode: "extension" });
+
+// See ALL browser tabs (not just your session's pages)
+const tabs = await client.allTargets();
+console.log(`Browser has ${tabs.length} tabs`);
+// Returns: [{ tabId, targetId, url, title }, ...]
+
+// Close orphaned tabs from previous automation runs
+const result = await client.cleanup("^about:blank$");
+console.log(`Closed ${result.closed} blank tabs`);
+
+// Close a specific tab by tabId
+await client.closeTarget(tabs[0].tabId);
+```
+
+**When to use:**
+- Clean up tabs left over from crashed scripts
+- Find tabs created by other sessions
+- Close multiple tabs matching a pattern (e.g., all `example.com` tabs)
+
+**Note:** These methods bypass session isolation intentionally. Normal `client.page()` and `client.list()` remain session-scoped.
 
 ## Error Recovery
 
