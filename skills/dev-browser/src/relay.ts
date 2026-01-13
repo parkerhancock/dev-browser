@@ -170,6 +170,20 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
     return session;
   }
 
+  /** Check if a target belongs to an agent session */
+  function isTargetOwnedBySession(
+    cdpSessionId: string,
+    agentSession: string
+  ): boolean {
+    return targetToAgentSession.get(cdpSessionId) === agentSession;
+  }
+
+  /** Get all CDP sessionIds owned by an agent session */
+  function getSessionTargets(agentSession: string): string[] {
+    const sessionState = sessions.get(agentSession);
+    return sessionState ? Array.from(sessionState.targetSessions) : [];
+  }
+
   // Recover persisted pages by re-attaching to existing tabs
   async function recoverPersistedPages(): Promise<void> {
     if (persistedPages.length === 0) {
@@ -388,10 +402,12 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
     method,
     params,
     sessionId,
+    agentSession = "default",
   }: {
     method: string;
     params?: Record<string, unknown>;
     sessionId?: string;
+    agentSession?: string;
   }): Promise<unknown> {
     // Handle some CDP commands locally
     switch (method) {
@@ -434,9 +450,20 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
           throw new Error("targetId is required for Target.attachToTarget");
         }
 
-        for (const target of connectedTargets.values()) {
+        for (const [cdpSessionId, target] of connectedTargets) {
           if (target.targetId === targetId) {
-            return { sessionId: target.sessionId };
+            const owner = targetToAgentSession.get(cdpSessionId);
+            // Allow if owned by this session OR unclaimed (for new page creation)
+            if (!owner || owner === agentSession) {
+              // Claim unclaimed targets
+              if (!owner) {
+                targetToAgentSession.set(cdpSessionId, agentSession);
+                const sessionState = getOrCreateSession(agentSession);
+                sessionState.targetSessions.add(cdpSessionId);
+              }
+              return { sessionId: cdpSessionId };
+            }
+            throw new Error(`Target ${targetId} belongs to another session`);
           }
         }
 
@@ -447,9 +474,14 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
         const targetId = params?.targetId as string;
 
         if (targetId) {
-          for (const target of connectedTargets.values()) {
+          for (const [cdpSessionId, target] of connectedTargets) {
             if (target.targetId === targetId) {
-              return { targetInfo: target.targetInfo };
+              const owner = targetToAgentSession.get(cdpSessionId);
+              // Only return info if owned by this session or unclaimed
+              if (!owner || owner === agentSession) {
+                return { targetInfo: { ...target.targetInfo, attached: true } };
+              }
+              throw new Error(`Target ${targetId} belongs to another session`);
             }
           }
         }
@@ -457,22 +489,36 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
         if (sessionId) {
           const target = connectedTargets.get(sessionId);
           if (target) {
-            return { targetInfo: target.targetInfo };
+            const owner = targetToAgentSession.get(sessionId);
+            if (!owner || owner === agentSession) {
+              return { targetInfo: { ...target.targetInfo, attached: true } };
+            }
           }
         }
 
-        // Return first target if no specific one requested
-        const firstTarget = Array.from(connectedTargets.values())[0];
-        return { targetInfo: firstTarget?.targetInfo };
+        // Return first owned target if no specific one requested
+        const ownedSessionIds = getSessionTargets(agentSession);
+        const firstOwned = Array.from(connectedTargets.values()).find((t) =>
+          ownedSessionIds.includes(t.sessionId)
+        );
+        if (firstOwned) {
+          return { targetInfo: { ...firstOwned.targetInfo, attached: true } };
+        }
+        throw new Error("No targets available in this session");
       }
 
-      case "Target.getTargets":
+      case "Target.getTargets": {
+        const ownedSessionIds = getSessionTargets(agentSession);
+        const ownedTargets = Array.from(connectedTargets.values()).filter((t) =>
+          ownedSessionIds.includes(t.sessionId)
+        );
         return {
-          targetInfos: Array.from(connectedTargets.values()).map((t) => ({
+          targetInfos: ownedTargets.map((t) => ({
             ...t.targetInfo,
             attached: true,
           })),
         };
+      }
 
       case "Target.createTarget":
       case "Target.closeTarget":
@@ -788,31 +834,44 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
           }
 
           try {
-            const result = await routeCdpCommand({ method, params, sessionId });
+            const result = await routeCdpCommand({
+              method,
+              params,
+              sessionId,
+              agentSession,
+            });
 
             // After Target.setAutoAttach, send attachedToTarget for existing targets
             // Uses deduplication to prevent "Duplicate target" errors
+            // Only send for targets owned by this session
             if (method === "Target.setAutoAttach" && !sessionId) {
+              const ownedSessionIds = getSessionTargets(agentSession);
               for (const target of connectedTargets.values()) {
-                sendAttachedToTarget(target, { clientId });
+                if (ownedSessionIds.includes(target.sessionId)) {
+                  sendAttachedToTarget(target, { clientId });
+                }
               }
             }
 
             // After Target.setDiscoverTargets, send targetCreated events
+            // Only send for targets owned by this session
             if (
               method === "Target.setDiscoverTargets" &&
               (params as { discover?: boolean })?.discover
             ) {
+              const ownedSessionIds = getSessionTargets(agentSession);
               for (const target of connectedTargets.values()) {
-                sendToPlaywright(
-                  {
-                    method: "Target.targetCreated",
-                    params: {
-                      targetInfo: { ...target.targetInfo, attached: true },
+                if (ownedSessionIds.includes(target.sessionId)) {
+                  sendToPlaywright(
+                    {
+                      method: "Target.targetCreated",
+                      params: {
+                        targetInfo: { ...target.targetInfo, attached: true },
+                      },
                     },
-                  },
-                  { clientId }
-                );
+                    { clientId }
+                  );
+                }
               }
             }
 
@@ -952,14 +1011,14 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
 
               log(`Target attached: ${targetParams.targetInfo.url} (${targetParams.sessionId})`);
 
-              // Route to session that owns this target, or broadcast if unknown
+              // Route to session that owns this target
+              // Unclaimed targets are NOT broadcast - they're revealed when
+              // the agent calls Target.attachToTarget (which claims the target)
               const agentSession = targetToAgentSession.get(targetParams.sessionId);
               if (agentSession) {
                 sendAttachedToTarget(target, { session: agentSession });
-              } else {
-                // Target not yet claimed by any session - broadcast to all
-                sendAttachedToTarget(target);
               }
+              // If unclaimed, don't broadcast - wait for explicit attachment
             } else if (method === "Target.detachedFromTarget") {
               const detachParams = params as { sessionId: string };
               const cdpSessionId = detachParams.sessionId;
