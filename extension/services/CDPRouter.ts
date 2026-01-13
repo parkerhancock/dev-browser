@@ -60,6 +60,10 @@ export class CDPRouter {
       case "attachToTab":
         return this.attachToTab(msg.params.tabId);
 
+      case "closeTab":
+        await chrome.tabs.remove(msg.params.tabId);
+        return { success: true };
+
       case "forwardCDPCommand":
         // Continue to handle CDP command below
         break;
@@ -143,7 +147,7 @@ export class CDPRouter {
 
         await new Promise((resolve) => setTimeout(resolve, 100));
         const targetInfo = await this.tabManager.attach(tab.id);
-        return { targetId: targetInfo.targetId };
+        return { targetId: targetInfo.targetId, tabId: tab.id };
       }
 
       case "Target.closeTarget": {
@@ -230,10 +234,10 @@ export class CDPRouter {
    * Get all available tabs that can be attached to for recovery.
    */
   private async getAvailableTargets(): Promise<{
-    targets: Array<{ tabId: number; targetId: string; url: string }>;
+    targets: Array<{ tabId: number; targetId: string; url: string; title: string }>;
   }> {
     const tabs = await chrome.tabs.query({});
-    const targets: Array<{ tabId: number; targetId: string; url: string }> = [];
+    const targets: Array<{ tabId: number; targetId: string; url: string; title: string }> = [];
 
     for (const tab of tabs) {
       if (!tab.id || !tab.url) continue;
@@ -244,6 +248,7 @@ export class CDPRouter {
         tabId: tab.id,
         targetId: `tab-${tab.id}`, // Placeholder, real targetId comes after attach
         url: tab.url,
+        title: tab.title || "",
       });
     }
 

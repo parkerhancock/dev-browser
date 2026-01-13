@@ -569,7 +569,7 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
       const result = (await sendToExtension({
         method: "forwardCDPCommand",
         params: { method: "Target.createTarget", params: { url: "about:blank" } },
-      })) as { targetId: string };
+      })) as { targetId: string; tabId: number };
 
       // Wait for Target.attachedToTarget event to register the new target
       await new Promise((resolve) => setTimeout(resolve, 200));
@@ -590,7 +590,7 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
           persistedPages.push({
             key: pageKey,
             targetId: target.targetId,
-            tabId: 0, // Will be updated when we get tabId from extension
+            tabId: result.tabId,
             url: target.targetInfo.url,
             lastSeen: Date.now(),
           });
@@ -638,6 +638,95 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
     savePersistedPages(persistedPages);
 
     return c.json({ success: true });
+  });
+
+  // ============================================================================
+  // Tab Management Endpoints (bypass session isolation for management)
+  // ============================================================================
+
+  // List all browser tabs (not just session-scoped ones)
+  app.get("/all-targets", async (c) => {
+    if (!extensionWs) {
+      return c.json({ error: "Extension not connected" }, 503);
+    }
+
+    try {
+      const result = (await sendToExtension({
+        method: "getAvailableTargets",
+        params: {},
+      })) as {
+        targets: Array<{ tabId: number; url: string; title: string; targetId?: string }>;
+      };
+
+      return c.json({
+        targets: result.targets.map((t) => ({
+          tabId: t.tabId,
+          targetId: t.targetId,
+          url: t.url,
+          title: t.title,
+        })),
+      });
+    } catch (err) {
+      return c.json({ error: String(err) }, 500);
+    }
+  });
+
+  // Close a specific tab by tabId
+  app.post("/close-target", async (c) => {
+    if (!extensionWs) {
+      return c.json({ error: "Extension not connected" }, 503);
+    }
+
+    const { tabId } = await c.req.json();
+
+    if (!tabId) {
+      return c.json({ error: "Must provide tabId" }, 400);
+    }
+
+    try {
+      await sendToExtension({
+        method: "closeTab",
+        params: { tabId },
+      });
+
+      return c.json({ success: true });
+    } catch (err) {
+      return c.json({ error: String(err) }, 500);
+    }
+  });
+
+  // Close all tabs matching a URL pattern
+  app.post("/cleanup", async (c) => {
+    if (!extensionWs) {
+      return c.json({ error: "Extension not connected" }, 503);
+    }
+
+    const { pattern } = await c.req.json();
+
+    if (!pattern) {
+      return c.json({ error: "Must provide pattern (string or regex)" }, 400);
+    }
+
+    try {
+      const result = (await sendToExtension({
+        method: "getAvailableTargets",
+        params: {},
+      })) as { targets: Array<{ tabId: number; url: string }> };
+
+      const regex = new RegExp(pattern);
+      const matching = result.targets.filter((t) => regex.test(t.url));
+
+      for (const target of matching) {
+        await sendToExtension({
+          method: "closeTab",
+          params: { tabId: target.tabId },
+        });
+      }
+
+      return c.json({ closed: matching.length, urls: matching.map((t) => t.url) });
+    } catch (err) {
+      return c.json({ error: String(err) }, 500);
+    }
   });
 
   // ============================================================================

@@ -250,6 +250,16 @@ export interface ConnectOptions {
   session?: string;
 }
 
+/**
+ * Browser target info returned by allTargets()
+ */
+export interface BrowserTarget {
+  tabId: number;
+  targetId?: string;
+  url: string;
+  title: string;
+}
+
 export interface DevBrowserClient {
   page: (name: string, options?: PageOptions) => Promise<Page>;
   list: () => Promise<string[]>;
@@ -274,6 +284,21 @@ export interface DevBrowserClient {
    * Get the session ID for this client.
    */
   getSession: () => string;
+  /**
+   * List all browser tabs (bypasses session isolation).
+   * Useful for discovering orphaned tabs or tabs from other sessions.
+   */
+  allTargets: () => Promise<BrowserTarget[]>;
+  /**
+   * Close a specific tab by tabId.
+   * Use allTargets() to get tabIds.
+   */
+  closeTarget: (tabId: number) => Promise<void>;
+  /**
+   * Close all tabs matching a URL pattern (regex).
+   * Returns the count and URLs of closed tabs.
+   */
+  cleanup: (pattern: string) => Promise<{ closed: number; urls: string[] }>;
 }
 
 export async function connect(
@@ -585,6 +610,36 @@ export async function connect(
 
     getSession(): string {
       return session;
+    },
+
+    async allTargets(): Promise<BrowserTarget[]> {
+      const res = await fetch(`${serverUrl}/all-targets`, {
+        headers: sessionHeaders,
+      });
+      const data = (await res.json()) as { error?: string; targets?: BrowserTarget[] };
+      if (data.error) throw new Error(data.error);
+      return data.targets ?? [];
+    },
+
+    async closeTarget(tabId: number): Promise<void> {
+      const res = await fetch(`${serverUrl}/close-target`, {
+        method: "POST",
+        headers: { ...sessionHeaders, "Content-Type": "application/json" },
+        body: JSON.stringify({ tabId }),
+      });
+      const data = (await res.json()) as { error?: string; success?: boolean };
+      if (data.error) throw new Error(data.error);
+    },
+
+    async cleanup(pattern: string): Promise<{ closed: number; urls: string[] }> {
+      const res = await fetch(`${serverUrl}/cleanup`, {
+        method: "POST",
+        headers: { ...sessionHeaders, "Content-Type": "application/json" },
+        body: JSON.stringify({ pattern }),
+      });
+      const data = (await res.json()) as { error?: string; closed?: number; urls?: string[] };
+      if (data.error) throw new Error(data.error);
+      return { closed: data.closed ?? 0, urls: data.urls ?? [] };
     },
   };
 }
