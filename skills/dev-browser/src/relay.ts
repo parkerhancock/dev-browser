@@ -17,6 +17,10 @@ import {
   type PersistedPage,
 } from "./persistence.js";
 import { createLogger } from "./logging.js";
+import { mkdirSync, writeFileSync, unlinkSync, readdirSync, statSync } from "fs";
+import { join } from "path";
+import { homedir } from "os";
+import { randomUUID } from "crypto";
 
 // ============================================================================
 // Types
@@ -135,6 +139,42 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
   // Tab limits
   const TAB_WARNING_THRESHOLD = 3;
   const TAB_LIMIT = 5;
+
+  // PDF storage for large printToPDF responses
+  const pdfDir = join(homedir(), ".dev-browser", "pdfs");
+  mkdirSync(pdfDir, { recursive: true });
+  const pdfFiles = new Map<string, { path: string; createdAt: number }>(); // id -> file info
+  const PDF_MAX_AGE_MS = 5 * 60 * 1000; // 5 minutes
+
+  // Cleanup old PDF files on startup and periodically
+  function cleanupOldPdfs() {
+    const now = Date.now();
+    // Clean up tracked files
+    for (const [id, info] of pdfFiles) {
+      if (now - info.createdAt > PDF_MAX_AGE_MS) {
+        try {
+          unlinkSync(info.path);
+        } catch {
+          // File may already be deleted
+        }
+        pdfFiles.delete(id);
+      }
+    }
+    // Clean up orphaned files on disk
+    try {
+      for (const file of readdirSync(pdfDir)) {
+        const filePath = join(pdfDir, file);
+        const stat = statSync(filePath);
+        if (now - stat.mtimeMs > PDF_MAX_AGE_MS) {
+          unlinkSync(filePath);
+        }
+      }
+    } catch {
+      // Ignore cleanup errors
+    }
+  }
+  cleanupOldPdfs();
+  const pdfCleanupInterval = setInterval(cleanupOldPdfs, 60 * 1000); // Every minute
 
   // Multi-agent session state
   const sessions = new Map<string, SessionState>();
@@ -531,6 +571,39 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
           method: "forwardCDPCommand",
           params: { method, params },
         });
+
+      case "Page.printToPDF": {
+        // Intercept PDF generation to handle large responses
+        log(`Page.printToPDF requested for session ${sessionId}`);
+
+        // Forward the command to extension
+        const pdfResult = (await sendToExtension({
+          method: "forwardCDPCommand",
+          params: { sessionId, method, params },
+        })) as { data?: string; stream?: string };
+
+        if (!pdfResult.data) {
+          throw new Error("PDF generation failed: no data returned");
+        }
+
+        // Save PDF to disk instead of returning inline
+        const pdfId = randomUUID();
+        const pdfPath = join(pdfDir, `${pdfId}.pdf`);
+        const pdfBuffer = Buffer.from(pdfResult.data, "base64");
+        writeFileSync(pdfPath, pdfBuffer);
+
+        pdfFiles.set(pdfId, { path: pdfPath, createdAt: Date.now() });
+
+        log(`Page.printToPDF saved ${pdfBuffer.length} bytes to ${pdfPath}`);
+
+        // Return URL instead of base64 data
+        // The client will need to download from this URL
+        return {
+          data: pdfResult.data, // Still return data for compatibility
+          _pdfUrl: `http://${host}:${port}/pdf/${pdfId}`,
+          _pdfSize: pdfBuffer.length,
+        };
+      }
     }
 
     // Forward all other commands to extension
@@ -751,6 +824,39 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
       tabWarningThreshold: TAB_WARNING_THRESHOLD,
       bySession: sessionStats,
     });
+  });
+
+  // Download a generated PDF file
+  app.get("/pdf/:id", (c) => {
+    const id = c.req.param("id");
+    const pdfInfo = pdfFiles.get(id);
+
+    if (!pdfInfo) {
+      return c.json({ error: "PDF not found or expired" }, 404);
+    }
+
+    try {
+      const { readFileSync } = require("fs");
+      const pdfData = readFileSync(pdfInfo.path);
+
+      // Delete after download (one-time use)
+      try {
+        unlinkSync(pdfInfo.path);
+      } catch {
+        // Ignore deletion errors
+      }
+      pdfFiles.delete(id);
+
+      return new Response(pdfData, {
+        headers: {
+          "Content-Type": "application/pdf",
+          "Content-Disposition": `attachment; filename="${id}.pdf"`,
+        },
+      });
+    } catch {
+      pdfFiles.delete(id);
+      return c.json({ error: "PDF file not found" }, 404);
+    }
   });
 
   // ============================================================================
@@ -1241,6 +1347,7 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
       }
       playwrightClients.clear();
       extensionWs?.close(1000, "Server stopped");
+      clearInterval(pdfCleanupInterval);
       server.close();
     },
   };

@@ -1,6 +1,6 @@
 ---
 name: dev-browser
-description: Browser automation with persistent page state. Use when users ask to navigate websites, fill forms, take screenshots, extract web data, test web apps, or automate browser workflows. Trigger phrases include "go to [url]", "click on", "fill out the form", "take a screenshot", "scrape", "automate", "test the website", "log into", or any browser interaction request.
+description: Browser automation with persistent page state. Use when users ask to navigate websites, fill forms, take screenshots, generate PDFs, extract web data, test web apps, or automate browser workflows. Trigger phrases include "go to [url]", "click on", "fill out the form", "take a screenshot", "save as PDF", "scrape", "automate", "test the website", "log into", or any browser interaction request.
 ---
 
 <!--
@@ -298,6 +298,98 @@ await client.closeTarget(tabs[0].tabId);
 - Close multiple tabs matching a pattern (e.g., all `example.com` tabs)
 
 **Note:** These methods bypass session isolation intentionally. Normal `client.page()` and `client.list()` remain session-scoped.
+
+## PDF Generation
+
+Generate PDFs from pages using Playwright's `page.pdf()`. Requires **headless mode** for standalone server.
+
+```typescript
+const page = await client.page("report");
+await page.goto("https://example.com/report");
+
+const pdfBuffer = await page.pdf({
+  format: "A4",
+  printBackground: true,
+  margin: { top: "1cm", bottom: "1cm" }
+});
+
+// Save to file
+import { writeFileSync } from "fs";
+writeFileSync("tmp/report.pdf", pdfBuffer);
+```
+
+**Starting standalone server in headless mode:**
+
+```bash
+cd skills/dev-browser && npx tsx -e '
+import { serve } from "./src/index.js";
+await serve({ headless: true });
+'
+```
+
+**Extension mode:** PDF generation works but requires the page to be fully loaded. The relay intercepts `Page.printToPDF` and logs generation details.
+
+## Tab Limits
+
+Each session is limited to **5 tabs** to prevent runaway automation:
+
+| Tabs | Behavior |
+|------|----------|
+| 1-2 | Normal operation |
+| 3-4 | Warning in response: `"Consider closing unused tabs"` |
+| 5 | Hard limit - new pages rejected with HTTP 429 |
+
+Close unused pages to stay within limits:
+
+```typescript
+await client.close("old-page");
+// Or in extension mode, clean up by pattern:
+await client.cleanup("^about:blank$");
+```
+
+## Diagnostics
+
+### Log Files
+
+Server logs are written to `~/.dev-browser/logs/`:
+- `server-YYYY-MM-DD.log` - Standalone mode
+- `relay-YYYY-MM-DD.log` - Extension mode
+
+```bash
+# Tail current day's log
+tail -f ~/.dev-browser/logs/relay-$(date +%Y-%m-%d).log
+
+# Find page creation patterns
+grep "action=created" ~/.dev-browser/logs/relay-*.log
+```
+
+**Log format:**
+```
+[2025-01-14T12:35:00.123Z] [relay] POST /pages session=agent-123 name=search action=created total=5 sessionTotal=2
+```
+
+### Stats Endpoint
+
+Query server state at any time:
+
+```bash
+curl http://localhost:9222/stats | jq   # Standalone
+curl http://localhost:9224/stats | jq   # Extension
+```
+
+**Response:**
+```json
+{
+  "totalPages": 8,
+  "totalSessions": 2,
+  "tabLimit": 5,
+  "tabWarningThreshold": 3,
+  "bySession": {
+    "agent-123": [{"name": "search", "url": "https://..."}],
+    "default": [{"name": "main", "url": "https://..."}]
+  }
+}
+```
 
 ## Error Recovery
 
