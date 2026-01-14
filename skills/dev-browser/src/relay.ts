@@ -16,6 +16,7 @@ import {
   createDebouncedSave,
   type PersistedPage,
 } from "./persistence.js";
+import { createLogger } from "./logging.js";
 
 // ============================================================================
 // Types
@@ -128,6 +129,13 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
   let extensionWs: WSContext | null = null;
   let isRecovering = false; // True during extension reconnect recovery
 
+  // Logging
+  const { log, logFile } = createLogger("relay");
+
+  // Tab limits
+  const TAB_WARNING_THRESHOLD = 3;
+  const TAB_LIMIT = 5;
+
   // Multi-agent session state
   const sessions = new Map<string, SessionState>();
   const targetToAgentSession = new Map<string, string>(); // CDP sessionId -> agent session
@@ -150,10 +158,6 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
   // ============================================================================
   // Helper Functions
   // ============================================================================
-
-  function log(...args: unknown[]) {
-    console.log("[relay]", ...args);
-  }
 
   // Helper to get or create a session
   function getOrCreateSession(sessionId: string): SessionState {
@@ -588,12 +592,15 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
     // Ensure session exists
     const sessionState = getOrCreateSession(agentSession);
 
+    const sessionPageCount = sessionState.pageNames.size;
+
     // Check if page already exists for THIS session
     const existingCdpSessionId = namedPages.get(pageKey);
     if (existingCdpSessionId) {
       const target = connectedTargets.get(existingCdpSessionId);
       if (target) {
         // Return existing page without activating (use page.bringToFront() if needed)
+        log(`POST /pages session=${agentSession} name=${name} action=reused total=${namedPages.size} sessionTotal=${sessionPageCount}`);
         return c.json({
           wsEndpoint: `ws://${host}:${port}/cdp`,
           name, // Return without session prefix
@@ -602,8 +609,27 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
         });
       }
       // CDP session no longer valid, clean up
+      log(`POST /pages session=${agentSession} name=${name} action=stale-cleanup`);
       namedPages.delete(pageKey);
       sessionState.pageNames.delete(name);
+    }
+
+    // Check tab limits before creating
+    if (sessionPageCount >= TAB_LIMIT) {
+      log(`POST /pages session=${agentSession} name=${name} action=rejected-limit total=${namedPages.size} sessionTotal=${sessionPageCount}`);
+      return c.json(
+        {
+          error: `Tab limit exceeded. Session "${agentSession}" already has ${sessionPageCount} tabs (limit: ${TAB_LIMIT}). Close some tabs before opening new ones.`,
+        },
+        429
+      );
+    }
+
+    // Check for warning threshold
+    let warning: string | undefined;
+    if (sessionPageCount >= TAB_WARNING_THRESHOLD) {
+      warning = `Warning: Session "${agentSession}" has ${sessionPageCount} tabs. Limit is ${TAB_LIMIT}. Consider closing unused tabs.`;
+      log(`POST /pages session=${agentSession} name=${name} warning=approaching-limit sessionTotal=${sessionPageCount}`);
     }
 
     // Create a new tab
@@ -642,13 +668,25 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
           });
           savePersistedPages(persistedPages);
 
+          log(`POST /pages session=${agentSession} name=${name} action=created total=${namedPages.size} sessionTotal=${sessionState.pageNames.size}`);
+
           // Return new page without activating (use page.bringToFront() if needed)
-          return c.json({
+          const response: {
+            wsEndpoint: string;
+            name: string;
+            targetId: string;
+            url: string;
+            warning?: string;
+          } = {
             wsEndpoint: `ws://${host}:${port}/cdp`,
             name, // Return without session prefix
             targetId: target.targetId,
             url: target.targetInfo.url,
-          });
+          };
+          if (warning) {
+            response.warning = warning;
+          }
+          return c.json(response);
         }
       }
 
@@ -667,6 +705,7 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
 
     const cdpSessionId = namedPages.get(pageKey);
     if (!cdpSessionId) {
+      log(`DELETE /pages session=${agentSession} name=${name} action=not-found`);
       return c.json({ error: "Page not found" }, 404);
     }
 
@@ -683,7 +722,35 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
     persistedPages = persistedPages.filter((p) => p.key !== pageKey);
     savePersistedPages(persistedPages);
 
+    log(`DELETE /pages session=${agentSession} name=${name} action=deleted total=${namedPages.size}`);
     return c.json({ success: true });
+  });
+
+  // Get server stats for debugging
+  app.get("/stats", (c) => {
+    // Group pages by session
+    const sessionStats: Record<string, string[]> = {};
+    for (const [pageKey] of namedPages) {
+      const parts = pageKey.split(":");
+      const session = parts[0] ?? "unknown";
+      const name = parts.slice(1).join(":");
+      if (!sessionStats[session]) {
+        sessionStats[session] = [];
+      }
+      sessionStats[session].push(name);
+    }
+
+    return c.json({
+      namedPages: namedPages.size,
+      connectedTargets: connectedTargets.size,
+      sessions: sessions.size,
+      persistedPages: persistedPages.length,
+      extensionConnected: !!extensionWs,
+      playwrightClients: playwrightClients.size,
+      tabLimit: TAB_LIMIT,
+      tabWarningThreshold: TAB_WARNING_THRESHOLD,
+      bySession: sessionStats,
+    });
   });
 
   // ============================================================================
@@ -1161,6 +1228,7 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
   log(`  HTTP: http://${host}:${port}`);
   log(`  CDP endpoint: ${wsEndpoint}`);
   log(`  Extension endpoint: ws://${host}:${port}/extension`);
+  log(`  Log file: ${logFile}`);
   log("");
   log("Waiting for extension to connect...");
 
