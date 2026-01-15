@@ -1064,7 +1064,8 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
 
             sendToPlaywright({ id, sessionId, result }, { clientId });
           } catch (e) {
-            log("Error handling CDP command:", method, e);
+            const errMsg = e instanceof Error ? e.message : String(e);
+            log(`Error handling CDP command ${method}: ${errMsg}`);
             sendToPlaywright(
               {
                 id,
@@ -1174,6 +1175,14 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
                 sessionId: string;
                 targetInfo: TargetInfo;
               };
+
+              // Only track page targets - ignore service workers, iframes, etc.
+              // Service workers (like x.com/sw.js) can interfere with CDP routing
+              const targetType = targetParams.targetInfo.type;
+              if (targetType !== "page") {
+                log(`Ignoring non-page target: ${targetType} ${targetParams.targetInfo.url}`);
+                return;
+              }
 
               const target: ConnectedTarget = {
                 sessionId: targetParams.sessionId,
