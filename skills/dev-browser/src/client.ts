@@ -13,6 +13,7 @@ import type {
   ViewportSize,
 } from "./types";
 import { getSnapshotScript } from "./snapshot/browser-script";
+import { createWaczFromHar } from "./wacz.js";
 
 // HAR types (exported for consumers)
 export interface HarCookie {
@@ -427,6 +428,19 @@ export interface DevBrowserClient {
    * Check if HAR recording is active for a page.
    */
   isRecordingHar: (name: string) => boolean;
+  /**
+   * Save HAR as WACZ (Web Archive Collection Zipped) file.
+   * WACZ is a standard format for portable web archives.
+   *
+   * @param har - HAR data from stopHarRecording()
+   * @param outputPath - Path for the .wacz file
+   * @param options - Optional title and description
+   */
+  saveAsWacz: (
+    har: HarLog,
+    outputPath: string,
+    options?: { title?: string; description?: string }
+  ) => Promise<void>;
 }
 
 export async function connect(
@@ -951,6 +965,15 @@ export async function connect(
 
     isRecordingHar(name: string): boolean {
       return harRecorders.has(name);
+    },
+
+    async saveAsWacz(
+      har: HarLog,
+      outputPath: string,
+      options?: { title?: string; description?: string }
+    ): Promise<void> {
+      await createWaczFromHar(har, outputPath, options);
+      console.log(`[dev-browser] Saved WACZ to ${outputPath}`);
     },
   };
 }

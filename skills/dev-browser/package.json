@@ -15,9 +15,12 @@
   "dependencies": {
     "@hono/node-server": "^1.19.7",
     "@hono/node-ws": "^1.2.0",
+    "@types/archiver": "^7.0.0",
+    "archiver": "^7.0.1",
     "express": "^4.21.0",
     "hono": "^4.11.1",
-    "playwright": "^1.49.0"
+    "playwright": "^1.49.0",
+    "warcio": "^2.4.7"
   },
   "devDependencies": {
     "@types/express": "^5.0.0",
