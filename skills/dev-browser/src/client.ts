@@ -1,4 +1,10 @@
-import { chromium, type Browser, type Page, type ElementHandle } from "playwright";
+import {
+  chromium,
+  type Browser,
+  type Page,
+  type ElementHandle,
+  type CDPSession,
+} from "playwright";
 import type {
   GetPageRequest,
   GetPageResponse,
@@ -7,6 +13,108 @@ import type {
   ViewportSize,
 } from "./types";
 import { getSnapshotScript } from "./snapshot/browser-script";
+
+// HAR types (exported for consumers)
+export interface HarCookie {
+  name: string;
+  value: string;
+  path?: string;
+  domain?: string;
+  expires?: string;
+  httpOnly?: boolean;
+  secure?: boolean;
+  sameSite?: string;
+}
+
+export interface HarPostData {
+  mimeType: string;
+  text: string;
+}
+
+export interface HarContent {
+  size: number;
+  mimeType: string;
+  text?: string;
+  encoding?: string;
+}
+
+export interface HarEntry {
+  startedDateTime: string;
+  time: number;
+  request: {
+    method: string;
+    url: string;
+    httpVersion: string;
+    headers: Array<{ name: string; value: string }>;
+    queryString: Array<{ name: string; value: string }>;
+    cookies: HarCookie[];
+    headersSize: number;
+    bodySize: number;
+    postData?: HarPostData;
+  };
+  response: {
+    status: number;
+    statusText: string;
+    httpVersion: string;
+    headers: Array<{ name: string; value: string }>;
+    cookies: HarCookie[];
+    content: HarContent;
+    headersSize: number;
+    bodySize: number;
+  };
+  timings: { send: number; wait: number; receive: number };
+}
+
+export interface HarLog {
+  log: {
+    version: string;
+    creator: { name: string; version: string };
+    entries: HarEntry[];
+  };
+}
+
+// State for an active HAR recording
+interface PendingHarEntry {
+  entry: Partial<HarEntry>;
+  startTime: number;
+  requestId: string;
+  mimeType?: string;
+}
+
+interface HarRecorderState {
+  cdpSession: CDPSession;
+  pending: Map<string, PendingHarEntry>;
+  completed: HarEntry[];
+}
+
+// Helper: parse Cookie header into HarCookie array
+function parseCookieHeader(cookieHeader: string): HarCookie[] {
+  if (!cookieHeader) return [];
+  return cookieHeader.split(";").map((part) => {
+    const [name, ...rest] = part.trim().split("=");
+    return { name: name ?? "", value: rest.join("=") };
+  });
+}
+
+// Helper: parse Set-Cookie header into HarCookie
+function parseSetCookie(setCookie: string): HarCookie {
+  const parts = setCookie.split(";").map((p) => p.trim());
+  const [nameValue, ...attrs] = parts;
+  const [name, ...rest] = (nameValue ?? "").split("=");
+  const cookie: HarCookie = { name: name ?? "", value: rest.join("=") };
+
+  for (const attr of attrs) {
+    const [key, val] = attr.split("=");
+    const lowerKey = key?.toLowerCase();
+    if (lowerKey === "path") cookie.path = val;
+    else if (lowerKey === "domain") cookie.domain = val;
+    else if (lowerKey === "expires") cookie.expires = val;
+    else if (lowerKey === "httponly") cookie.httpOnly = true;
+    else if (lowerKey === "secure") cookie.secure = true;
+    else if (lowerKey === "samesite") cookie.sameSite = val;
+  }
+  return cookie;
+}
 
 /**
  * Options for waiting for page load
@@ -299,6 +407,26 @@ export interface DevBrowserClient {
    * Returns the count and URLs of closed tabs.
    */
   cleanup: (pattern: string) => Promise<{ closed: number; urls: string[] }>;
+  /**
+   * Start recording network traffic to a HAR.
+   * Uses CDP Network events directly.
+   *
+   * @param name - Page name
+   * @throws Error if recording is already active for this page
+   */
+  startHarRecording: (name: string) => Promise<void>;
+  /**
+   * Stop HAR recording and return the HAR data.
+   *
+   * @param name - Page name
+   * @returns HAR log object
+   * @throws Error if no recording is active for this page
+   */
+  stopHarRecording: (name: string) => Promise<HarLog>;
+  /**
+   * Check if HAR recording is active for a page.
+   */
+  isRecordingHar: (name: string) => boolean;
 }
 
 export async function connect(
@@ -344,6 +472,9 @@ export async function connect(
   let browser: Browser | null = null;
   let wsEndpoint: string | null = null;
   let connectingPromise: Promise<Browser> | null = null;
+
+  // Track active HAR recordings: pageName -> recorder state
+  const harRecorders = new Map<string, HarRecorderState>();
 
   async function ensureConnected(): Promise<Browser> {
     // Return existing connection if still active
@@ -640,6 +771,186 @@ export async function connect(
       const data = (await res.json()) as { error?: string; closed?: number; urls?: string[] };
       if (data.error) throw new Error(data.error);
       return { closed: data.closed ?? 0, urls: data.urls ?? [] };
+    },
+
+    async startHarRecording(name: string): Promise<void> {
+      if (harRecorders.has(name)) {
+        throw new Error(`HAR recording already active for page "${name}"`);
+      }
+
+      const page = await getPage(name);
+      const cdpSession = await page.context().newCDPSession(page);
+
+      const state: HarRecorderState = {
+        cdpSession,
+        pending: new Map(),
+        completed: [],
+      };
+
+      // Enable network tracking
+      await cdpSession.send("Network.enable");
+
+      // Handle request start
+      cdpSession.on("Network.requestWillBeSent", (params) => {
+        const url = new URL(params.request.url);
+        const headers = Object.entries(params.request.headers).map(([n, v]) => ({
+          name: n,
+          value: String(v),
+        }));
+
+        // Parse cookies from Cookie header
+        const cookieHeader = params.request.headers["Cookie"] ?? params.request.headers["cookie"] ?? "";
+        const cookies = parseCookieHeader(cookieHeader);
+
+        // Capture POST data
+        const postData = params.request.postData
+          ? {
+              mimeType: params.request.headers["Content-Type"] ??
+                        params.request.headers["content-type"] ?? "application/octet-stream",
+              text: params.request.postData,
+            }
+          : undefined;
+
+        state.pending.set(params.requestId, {
+          startTime: params.wallTime * 1000,
+          requestId: params.requestId,
+          entry: {
+            startedDateTime: new Date(params.wallTime * 1000).toISOString(),
+            request: {
+              method: params.request.method,
+              url: params.request.url,
+              httpVersion: "HTTP/1.1",
+              headers,
+              queryString: [...url.searchParams].map(([n, v]) => ({ name: n, value: v })),
+              cookies,
+              headersSize: -1,
+              bodySize: params.request.postData?.length ?? 0,
+              postData,
+            },
+          },
+        });
+      });
+
+      // Handle response
+      cdpSession.on("Network.responseReceived", (params) => {
+        const pending = state.pending.get(params.requestId);
+        if (!pending) return;
+
+        const timing = params.response.timing;
+        const headers = Object.entries(params.response.headers).map(([n, v]) => ({
+          name: n,
+          value: String(v),
+        }));
+
+        // Parse Set-Cookie headers
+        const cookies: HarCookie[] = [];
+        for (const [name, value] of Object.entries(params.response.headers)) {
+          if (name.toLowerCase() === "set-cookie") {
+            cookies.push(parseSetCookie(String(value)));
+          }
+        }
+
+        pending.mimeType = params.response.mimeType;
+        pending.entry.response = {
+          status: params.response.status,
+          statusText: params.response.statusText,
+          httpVersion: params.response.protocol ?? "HTTP/1.1",
+          headers,
+          cookies,
+          content: {
+            size: params.response.encodedDataLength ?? 0,
+            mimeType: params.response.mimeType,
+          },
+          headersSize: -1,
+          bodySize: -1,
+        };
+
+        // Calculate timings if available
+        if (timing) {
+          pending.entry.timings = {
+            send: timing.sendEnd - timing.sendStart,
+            wait: timing.receiveHeadersEnd - timing.sendEnd,
+            receive: 0,
+          };
+        }
+      });
+
+      // Handle completion - fetch response body
+      cdpSession.on("Network.loadingFinished", async (params) => {
+        const pending = state.pending.get(params.requestId);
+        if (!pending?.entry.response) return;
+
+        const endTime = params.timestamp * 1000;
+        pending.entry.time = endTime - pending.startTime;
+        pending.entry.response.bodySize = params.encodedDataLength;
+
+        if (pending.entry.timings) {
+          pending.entry.timings.receive = Math.max(
+            0,
+            pending.entry.time - (pending.entry.timings.send + pending.entry.timings.wait)
+          );
+        } else {
+          pending.entry.timings = { send: 0, wait: pending.entry.time, receive: 0 };
+        }
+
+        // Fetch response body for text-based content
+        const isText = pending.mimeType?.startsWith("text/") ||
+                       pending.mimeType?.includes("json") ||
+                       pending.mimeType?.includes("xml") ||
+                       pending.mimeType?.includes("javascript");
+        if (isText && params.encodedDataLength < 1024 * 1024) {
+          try {
+            const { body, base64Encoded } = await cdpSession.send("Network.getResponseBody", {
+              requestId: params.requestId,
+            });
+            pending.entry.response.content.text = body;
+            if (base64Encoded) {
+              pending.entry.response.content.encoding = "base64";
+            }
+          } catch {
+            // Body may not be available (e.g., cached response)
+          }
+        }
+
+        state.completed.push(pending.entry as HarEntry);
+        state.pending.delete(params.requestId);
+      });
+
+      // Handle failures
+      cdpSession.on("Network.loadingFailed", (params) => {
+        state.pending.delete(params.requestId);
+      });
+
+      harRecorders.set(name, state);
+      console.log(`[dev-browser] Started HAR recording for "${name}"`);
+    },
+
+    async stopHarRecording(name: string): Promise<HarLog> {
+      const state = harRecorders.get(name);
+      if (!state) {
+        throw new Error(`No HAR recording active for page "${name}"`);
+      }
+
+      // Wait a bit for any pending body fetches to complete
+      await new Promise((r) => setTimeout(r, 100));
+
+      await state.cdpSession.detach();
+      harRecorders.delete(name);
+
+      const har: HarLog = {
+        log: {
+          version: "1.2",
+          creator: { name: "dev-browser", version: "0.0.1" },
+          entries: state.completed,
+        },
+      };
+
+      console.log(`[dev-browser] Stopped HAR recording for "${name}" (${state.completed.length} entries)`);
+      return har;
+    },
+
+    isRecordingHar(name: string): boolean {
+      return harRecorders.has(name);
     },
   };
 }
