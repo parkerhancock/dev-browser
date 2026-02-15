@@ -274,11 +274,40 @@ const waczPath = await client.saveWacz("name");        // WACZ only
 client.isRecordingHar("name");                          // Check if recording
 ```
 
-The `page` object is a standard Playwright Page. **Use `navigateTo(page, url)` instead of `page.goto(url)`** — it never hangs on problematic sites.
+The `page` object implements the unified `Page` interface — a Playwright-compatible subset with ~45 methods + keyboard/mouse/locators. In standalone mode it's a real Playwright Page; in extension mode it's a `CDPPage` (same interface, different transport). **Use `navigateTo(page, url)` instead of `page.goto(url)` in standalone mode** — it never hangs on problematic sites. In extension mode, `page.goto()` works fine.
+
+### Locators & Interaction Methods
+
+The Page interface includes Playwright-style locators and interaction methods:
+
+```typescript
+// Locator factory methods
+await page.locator("button.submit").click();
+await page.getByRole("button", { name: "Submit" }).click();
+await page.getByTestId("email-input").fill("test@example.com");
+await page.getByText("Sign in").click();
+await page.getByLabel("Password").fill("secret");
+await page.getByPlaceholder("Search...").fill("query");
+
+// Direct selector methods
+await page.click("button.submit");
+await page.fill("input#email", "test@example.com");
+await page.type("input#search", "query"); // Types character-by-character
+await page.hover("nav a.menu");
+await page.check("input[type=checkbox]");
+await page.selectOption("select#country", "US");
+await page.press("input", "Enter");
+
+// Keyboard and mouse
+await page.keyboard.type("Hello world");
+await page.keyboard.press("Control+a");
+await page.mouse.click(100, 200);
+await page.mouse.wheel(0, 300); // Scroll down
+```
 
 ## Navigation & Waiting
 
-**Always use `navigateTo()` instead of `page.goto()`.** It never hangs — even on sites with websockets, long-polling, or heavy analytics that cause `page.goto()` to time out.
+**Always use `navigateTo()` instead of `page.goto()` in standalone mode.** It never hangs — even on sites with websockets, long-polling, or heavy analytics that cause `page.goto()` to time out. In extension mode, `page.goto()` is safe (CDPPage handles timeouts internally).
 
 ```typescript
 import { navigateTo } from "@/client.js";
@@ -316,7 +345,7 @@ await page.screenshot({ path: "tmp/full.png", fullPage: true });
 
 ### ARIA Snapshot (Element Discovery)
 
-Use `getAISnapshot()` to discover page elements. Returns YAML-formatted accessibility tree:
+Use ARIA snapshots to discover page elements. Returns YAML-formatted accessibility tree:
 
 ```yaml
 - banner:
@@ -340,7 +369,7 @@ Use `getAISnapshot()` to discover page elements. Returns YAML-formatted accessib
 - `[level=N]` - Heading level
 - `/url:`, `/placeholder:` - Element properties
 
-**Interacting with refs:**
+**Interacting with refs — standalone mode:**
 
 ```typescript
 const snapshot = await client.getAISnapshot("hackernews");
@@ -348,6 +377,52 @@ console.log(snapshot); // Find the ref you need
 
 const element = await client.selectSnapshotRef("hackernews", "e2");
 await element.click();
+```
+
+**Interacting with refs — extension mode (CDPPage):**
+
+`selectSnapshotRef()` is not available in extension mode. Use CDPPage's direct ref methods instead:
+
+```typescript
+import type { CDPPage } from "@/cdp-page.js";
+
+const page = await client.page("hackernews") as CDPPage;
+const snapshot = await page.snapshot(); // ARIA tree (same format)
+console.log(snapshot);
+
+await page.clickRef("e2");              // Click by ref
+await page.fillRef("e10", "search query"); // Fill input by ref
+```
+
+## CDPPage Extras (Extension Mode Only)
+
+When using extension mode, `page` is a `CDPPage` with additional methods not on the standard `Page` interface. Access via type narrowing:
+
+```typescript
+import type { CDPPage } from "@/cdp-page.js";
+
+const page = await client.page("mypage") as CDPPage;
+```
+
+| Method | Purpose |
+|--------|---------|
+| `page.snapshot()` | ARIA accessibility tree (same as `client.getAISnapshot()`) |
+| `page.clickRef(ref)` | Click element by ARIA snapshot ref |
+| `page.fillRef(ref, value)` | Fill input by ARIA snapshot ref |
+| `page.syncUrl()` | Refresh cached URL from actual page |
+| `page.cdp(method, params?)` | Raw CDP command escape hatch |
+
+**Raw CDP escape hatch** — for anything not covered by the Page interface:
+
+```typescript
+// Execute arbitrary CDP commands
+const result = await page.cdp("DOM.getDocument");
+const { data } = await page.cdp<{ data: string }>("Page.captureScreenshot", { format: "png" });
+
+// Useful CDP methods:
+await page.cdp("Emulation.setDeviceMetricsOverride", { width: 375, height: 812, deviceScaleFactor: 3, mobile: true });
+await page.cdp("Network.enable");
+await page.cdp("Network.setExtraHTTPHeaders", { headers: { "X-Custom": "value" } });
 ```
 
 ## Troubleshooting Heavy JavaScript Sites
