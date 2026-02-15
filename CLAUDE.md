@@ -48,6 +48,9 @@ All source code lives in `skills/dev-browser/`:
 - `src/index.ts` - Server: launches persistent Chromium context, exposes HTTP API for page management
 - `src/relay.ts` - Relay server for extension mode: bridges Chrome extension to Playwright clients
 - `src/client.ts` - Client: connects to server, retrieves pages by name via CDP
+- `src/page.ts` - Unified `Page`, `Locator`, `Keyboard`, `Mouse` interfaces (Playwright-compatible subset)
+- `src/cdp-page.ts` - `CDPPage` implementation: full Page interface via CDP over HTTP RPC (extension mode)
+- `src/cdp-helpers.ts` - Key code mapping, element coordinate resolution, modifier bitmask utilities
 - `src/types.ts` - Shared TypeScript types for API requests/responses
 - `src/snapshot/` - ARIA snapshot utilities for LLM-friendly page inspection
 - `scripts/start-server.ts` - Entry point to start standalone server
@@ -76,14 +79,28 @@ import { serve } from "@/index.js";
 
 2. **Client** (`connect()` in `src/client.ts`):
    - Connects to server's HTTP API
-   - Uses CDP `targetId` to reliably find pages across reconnections
-   - Returns standard Playwright `Page` objects for automation
+   - Returns a unified `Page` interface regardless of mode
+   - **Standalone mode:** Returns Playwright's real Page (structurally satisfies our `Page` interface)
+   - **Extension mode:** Returns `CDPPage` (implements `Page` via HTTP RPC to relay's `/cdp` endpoint)
 
 3. **Key API Endpoints**:
    - `GET /` - Returns CDP WebSocket endpoint
    - `GET /pages` - Lists all named pages
    - `POST /pages` - Gets or creates a page by name (body: `{ name: string }`)
    - `DELETE /pages/:name` - Closes a page
+
+### Unified Page API
+
+Both modes return the same `Page` interface. Scripts work identically regardless of mode.
+
+```
+Standalone: client.page("x") → Playwright Page (satisfies Page interface structurally)
+Extension:  client.page("x") → CDPPage        (implements Page interface via CDP)
+```
+
+The `Page` interface is a Playwright-compatible subset (~45 methods + keyboard/mouse/locators). A compile-time test verifies Playwright's Page structurally satisfies our interface.
+
+Extension-mode `CDPPage` also exposes extras not on the `Page` interface: `snapshot()`, `clickRef()`, `fillRef()`, `syncUrl()`, and a public `cdp()` escape hatch. Access via type narrowing (`page as CDPPage`).
 
 ### Usage Pattern
 
@@ -93,6 +110,9 @@ import { connect } from "@/client.js";
 const client = await connect("http://localhost:9222");
 const page = await client.page("my-page"); // Gets existing or creates new
 await page.goto("https://example.com");
+await page.click("button.submit");
+await page.fill("input#email", "test@example.com");
+const text = await page.locator("h1").textContent();
 // Page persists for future scripts
 await client.disconnect(); // Disconnects CDP but page stays alive on server
 ```

@@ -30,7 +30,6 @@ async function main() {
 
   const startTime = Date.now();
   const pdfBuffer = await page.pdf({
-    format: "A4",
     printBackground: true,
   });
   const elapsed = Date.now() - startTime;

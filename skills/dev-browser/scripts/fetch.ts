@@ -149,13 +149,8 @@ async function fetchWithMode(mode: "extension" | "standalone"): Promise<string> 
       timeout,
     });
 
-    // Wait for network to settle
-    try {
-      await page.waitForLoadState("networkidle", { timeout: Math.min(timeout, 10000) });
-    } catch {
-      // Network idle timeout is acceptable - page may have streaming content
-      console.error("Note: Network idle timeout, proceeding with available content");
-    }
+    // Brief wait for dynamic content to settle
+    await new Promise((resolve) => setTimeout(resolve, 2000));
 
     // Get page title
     const title = await page.title();

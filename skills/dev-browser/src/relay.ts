@@ -17,6 +17,7 @@ import {
   type PersistedPage,
 } from "./persistence.js";
 import { createLogger } from "./logging.js";
+import { getSnapshotScript } from "./snapshot/browser-script.js";
 import { mkdirSync, writeFileSync, unlinkSync, readdirSync, statSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
@@ -42,6 +43,7 @@ interface TargetInfo {
   type: string;
   title: string;
   url: string;
+  browserContextId?: string;
   attached: boolean;
 }
 
@@ -52,17 +54,9 @@ interface ConnectedTarget {
   lastActivity: number; // Timestamp of last CDP activity
 }
 
-interface PlaywrightClient {
-  id: string;
-  ws: WSContext;
-  knownTargets: Set<string>; // targetIds this client has received attachedToTarget for
-  session: string; // agent session for multi-agent isolation
-}
-
 // Session state for multi-agent isolation
 interface SessionState {
   id: string;
-  clientIds: Set<string>; // WebSocket client IDs in this session
   pageNames: Set<string>; // Page names owned by this session
   targetSessions: Set<string>; // CDP sessionIds owned by this session
 }
@@ -98,27 +92,6 @@ type ExtensionMessage =
   | ExtensionEventMessage
   | { method: "log"; params: { level: string; args: string[] } };
 
-// CDP message types
-interface CDPCommand {
-  id: number;
-  method: string;
-  params?: Record<string, unknown>;
-  sessionId?: string;
-}
-
-interface CDPResponse {
-  id: number;
-  sessionId?: string;
-  result?: unknown;
-  error?: { message: string };
-}
-
-interface CDPEvent {
-  method: string;
-  sessionId?: string;
-  params?: Record<string, unknown>;
-}
-
 // ============================================================================
 // Relay Server Implementation
 // ============================================================================
@@ -135,7 +108,6 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
   const pendingDetach = new Map<string, { timeout: NodeJS.Timeout; targetId: string }>(); // cdpSessionId -> {timeout, targetId}
   // Waiters for target attachment (event-driven replacement for sleep after createTarget)
   const pendingTargetWaiters = new Map<string, { resolve: () => void }>();
-  const playwrightClients = new Map<string, PlaywrightClient>();
   let extensionWs: WSContext | null = null;
   let isRecovering = false; // True during extension reconnect recovery
 
@@ -185,6 +157,235 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
   }
   cleanupOldPdfs();
   const pdfCleanupInterval = setInterval(cleanupOldPdfs, 60 * 1000); // Every minute
+
+  // ---- Server-side HAR recording ----
+  // Buffers CDP Network events per-page for HAR generation.
+  // This replaces the client-side CDPSession-based HAR recording in extension mode.
+
+  interface HarCookie {
+    name: string;
+    value: string;
+    path?: string;
+    domain?: string;
+    expires?: string;
+    httpOnly?: boolean;
+    secure?: boolean;
+    sameSite?: string;
+  }
+
+  interface HarEntry {
+    startedDateTime: string;
+    time: number;
+    request: {
+      method: string;
+      url: string;
+      httpVersion: string;
+      headers: Array<{ name: string; value: string }>;
+      queryString: Array<{ name: string; value: string }>;
+      cookies: HarCookie[];
+      headersSize: number;
+      bodySize: number;
+      postData?: { mimeType: string; text: string };
+    };
+    response: {
+      status: number;
+      statusText: string;
+      httpVersion: string;
+      headers: Array<{ name: string; value: string }>;
+      cookies: HarCookie[];
+      content: { size: number; mimeType: string; text?: string; encoding?: string };
+      headersSize: number;
+      bodySize: number;
+    };
+    timings: { send: number; wait: number; receive: number };
+  }
+
+  interface PendingHarEntry {
+    entry: Partial<HarEntry>;
+    startTime: number;
+    requestId: string;
+    mimeType?: string;
+  }
+
+  interface RelayHarState {
+    cdpSessionId: string;
+    pending: Map<string, PendingHarEntry>;
+    completed: HarEntry[];
+  }
+
+  const harRecorders = new Map<string, RelayHarState>(); // pageKey -> state
+
+  function parseCookieHeader(cookieHeader: string): HarCookie[] {
+    if (!cookieHeader) return [];
+    return cookieHeader.split(";").map((part) => {
+      const [name, ...rest] = part.trim().split("=");
+      return { name: name ?? "", value: rest.join("=") };
+    });
+  }
+
+  function parseSetCookie(setCookie: string): HarCookie {
+    const parts = setCookie.split(";").map((p) => p.trim());
+    const [nameValue, ...attrs] = parts;
+    const [name, ...rest] = (nameValue ?? "").split("=");
+    const cookie: HarCookie = { name: name ?? "", value: rest.join("=") };
+    for (const attr of attrs) {
+      const [key, val] = attr.split("=");
+      const lk = key?.toLowerCase();
+      if (lk === "path") cookie.path = val;
+      else if (lk === "domain") cookie.domain = val;
+      else if (lk === "expires") cookie.expires = val;
+      else if (lk === "httponly") cookie.httpOnly = true;
+      else if (lk === "secure") cookie.secure = true;
+      else if (lk === "samesite") cookie.sameSite = val;
+    }
+    return cookie;
+  }
+
+  /** Handle a CDP Network event for HAR recording */
+  function handleHarNetworkEvent(
+    state: RelayHarState,
+    method: string,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    params: Record<string, any>
+  ): void {
+    if (method === "Network.requestWillBeSent") {
+      const url = new URL(params.request.url);
+      const headers = Object.entries(params.request.headers).map(([n, v]) => ({
+        name: n,
+        value: String(v),
+      }));
+      const cookieHeader =
+        params.request.headers["Cookie"] ?? params.request.headers["cookie"] ?? "";
+      const cookies = parseCookieHeader(cookieHeader);
+      const postData = params.request.postData
+        ? {
+            mimeType:
+              params.request.headers["Content-Type"] ??
+              params.request.headers["content-type"] ??
+              "application/octet-stream",
+            text: params.request.postData,
+          }
+        : undefined;
+
+      state.pending.set(params.requestId, {
+        startTime: params.timestamp * 1000,
+        requestId: params.requestId,
+        entry: {
+          startedDateTime: new Date(params.wallTime * 1000).toISOString(),
+          request: {
+            method: params.request.method,
+            url: params.request.url,
+            httpVersion: "HTTP/1.1",
+            headers,
+            queryString: [...url.searchParams].map(([n, v]) => ({
+              name: n,
+              value: v,
+            })),
+            cookies,
+            headersSize: -1,
+            bodySize: params.request.postData?.length ?? 0,
+            postData,
+          },
+        },
+      });
+    } else if (method === "Network.responseReceived") {
+      const pending = state.pending.get(params.requestId);
+      if (!pending) return;
+
+      const headers = Object.entries(params.response.headers).map(([n, v]) => ({
+        name: n,
+        value: String(v),
+      }));
+      const resCookies: HarCookie[] = [];
+      for (const [hName, hValue] of Object.entries(params.response.headers)) {
+        if (hName.toLowerCase() === "set-cookie") {
+          resCookies.push(parseSetCookie(String(hValue)));
+        }
+      }
+
+      const timing = params.response.timing;
+      pending.mimeType = params.response.mimeType;
+      pending.entry.response = {
+        status: params.response.status,
+        statusText: params.response.statusText,
+        httpVersion: params.response.protocol ?? "HTTP/1.1",
+        headers,
+        cookies: resCookies,
+        content: {
+          size: params.response.encodedDataLength ?? 0,
+          mimeType: params.response.mimeType,
+        },
+        headersSize: -1,
+        bodySize: -1,
+      };
+
+      if (timing) {
+        pending.entry.timings = {
+          send: timing.sendEnd - timing.sendStart,
+          wait: timing.receiveHeadersEnd - timing.sendEnd,
+          receive: 0,
+        };
+      }
+    } else if (method === "Network.loadingFinished") {
+      const pending = state.pending.get(params.requestId);
+      if (!pending?.entry.response) return;
+
+      const endTime = params.timestamp * 1000;
+      pending.entry.time = endTime - pending.startTime;
+      pending.entry.response.bodySize = params.encodedDataLength;
+
+      if (pending.entry.timings) {
+        pending.entry.timings.receive = Math.max(
+          0,
+          pending.entry.time -
+            (pending.entry.timings.send + pending.entry.timings.wait)
+        );
+      } else {
+        pending.entry.timings = {
+          send: 0,
+          wait: pending.entry.time,
+          receive: 0,
+        };
+      }
+
+      // Fetch response body for text content (async, but fire-and-forget)
+      const isText =
+        pending.mimeType?.startsWith("text/") ||
+        pending.mimeType?.includes("json") ||
+        pending.mimeType?.includes("xml") ||
+        pending.mimeType?.includes("javascript");
+      if (isText && params.encodedDataLength < 1024 * 1024) {
+        sendToExtension({
+          method: "forwardCDPCommand",
+          params: {
+            sessionId: state.cdpSessionId,
+            method: "Network.getResponseBody",
+            params: { requestId: params.requestId },
+          },
+        })
+          .then((bodyResult) => {
+            const br = bodyResult as {
+              body?: string;
+              base64Encoded?: boolean;
+            };
+            if (br.body) {
+              pending.entry.response!.content.text = br.body;
+              if (br.base64Encoded) {
+                pending.entry.response!.content.encoding = "base64";
+              }
+            }
+          })
+          .catch(() => {
+            // Body may not be available
+          });
+      }
+
+      state.completed.push(pending.entry as HarEntry);
+      state.pending.delete(params.requestId);
+    } else if (method === "Network.loadingFailed") {
+      state.pending.delete(params.requestId);
+    }
+  }
 
   // Idle page cleanup - close pages with no activity
   async function cleanupIdlePages(): Promise<void> {
@@ -269,7 +470,6 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
     if (!session) {
       session = {
         id: sessionId,
-        clientIds: new Set(),
         pageNames: new Set(),
         targetSessions: new Set(),
       };
@@ -394,121 +594,6 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
 
     log(`Recovery complete: ${recovered.length} recovered, ${stale.length} stale`);
     isRecovering = false;
-  }
-
-  function sendToPlaywright(
-    message: CDPResponse | CDPEvent,
-    options?: { clientId?: string; session?: string }
-  ) {
-    const messageStr = JSON.stringify(message);
-
-    if (options?.clientId) {
-      // Send to specific client
-      const client = playwrightClients.get(options.clientId);
-      if (client) {
-        client.ws.send(messageStr);
-      }
-    } else if (options?.session) {
-      // Send to all clients in this agent session
-      const sessionState = sessions.get(options.session);
-      if (sessionState) {
-        for (const clientId of sessionState.clientIds) {
-          const client = playwrightClients.get(clientId);
-          client?.ws.send(messageStr);
-        }
-      }
-    } else {
-      // Broadcast to all clients
-      for (const client of playwrightClients.values()) {
-        client.ws.send(messageStr);
-      }
-    }
-  }
-
-  /**
-   * Send Target.targetCreated event to Playwright clients.
-   * This is needed for Playwright to discover new pages via browser.pages().
-   */
-  function sendTargetCreated(
-    target: ConnectedTarget,
-    options?: { clientId?: string; session?: string }
-  ) {
-    const event: CDPEvent = {
-      method: "Target.targetCreated",
-      params: {
-        targetInfo: { ...target.targetInfo, attached: true },
-      },
-    };
-    const eventStr = JSON.stringify(event);
-
-    if (options?.clientId) {
-      const client = playwrightClients.get(options.clientId);
-      if (client) {
-        client.ws.send(eventStr);
-      }
-    } else if (options?.session) {
-      const sessionState = sessions.get(options.session);
-      if (sessionState) {
-        for (const clientId of sessionState.clientIds) {
-          const client = playwrightClients.get(clientId);
-          if (client) {
-            client.ws.send(eventStr);
-          }
-        }
-      }
-    } else {
-      for (const client of playwrightClients.values()) {
-        client.ws.send(eventStr);
-      }
-    }
-  }
-
-  /**
-   * Send Target.attachedToTarget event with deduplication.
-   * Tracks which targets each client has seen to prevent "Duplicate target" errors.
-   */
-  function sendAttachedToTarget(
-    target: ConnectedTarget,
-    options?: { clientId?: string; session?: string },
-    waitingForDebugger = false
-  ) {
-    const event: CDPEvent = {
-      method: "Target.attachedToTarget",
-      params: {
-        sessionId: target.sessionId,
-        targetInfo: { ...target.targetInfo, attached: true },
-        waitingForDebugger,
-      },
-    };
-    const eventStr = JSON.stringify(event);
-
-    if (options?.clientId) {
-      const client = playwrightClients.get(options.clientId);
-      if (client && !client.knownTargets.has(target.targetId)) {
-        client.knownTargets.add(target.targetId);
-        client.ws.send(eventStr);
-      }
-    } else if (options?.session) {
-      // Send to all clients in this agent session that don't know about this target
-      const sessionState = sessions.get(options.session);
-      if (sessionState) {
-        for (const clientId of sessionState.clientIds) {
-          const client = playwrightClients.get(clientId);
-          if (client && !client.knownTargets.has(target.targetId)) {
-            client.knownTargets.add(target.targetId);
-            client.ws.send(eventStr);
-          }
-        }
-      }
-    } else {
-      // Broadcast to all clients that don't know about this target yet
-      for (const client of playwrightClients.values()) {
-        if (!client.knownTargets.has(target.targetId)) {
-          client.knownTargets.add(target.targetId);
-          client.ws.send(eventStr);
-        }
-      }
-    }
   }
 
   async function sendToExtension({
@@ -888,11 +973,6 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
           targetToAgentSession.set(cdpSessionId, agentSession);
           sessionState.targetSessions.add(cdpSessionId);
 
-          // Notify Playwright clients about the new target
-          // This is critical for browser.pages() to discover the new tab
-          sendTargetCreated(target, { session: agentSession });
-          sendAttachedToTarget(target, { session: agentSession });
-
           // Persist the page mapping
           persistedPages = persistedPages.filter((p) => p.key !== pageKey);
           persistedPages.push({
@@ -989,7 +1069,7 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
       sessions: sessions.size,
       persistedPages: persistedPages.length,
       extensionConnected: !!extensionWs,
-      playwrightClients: playwrightClients.size,
+      harRecorders: harRecorders.size,
       tabLimit: TAB_LIMIT,
       tabWarningThreshold: TAB_WARNING_THRESHOLD,
       bySession: sessionStats,
@@ -1179,151 +1259,273 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
   });
 
   // ============================================================================
-  // Playwright Client WebSocket
+  // HTTP CDP Endpoint (replaces WebSocket proxy for extension mode)
   // ============================================================================
 
-  app.get(
-    "/cdp/:session?/:clientId?",
-    upgradeWebSocket((c) => {
-      const clientId =
-        c.req.param("clientId") || `client-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-      // Get agent session from URL path (preferred) or header for multi-agent isolation
-      // URL path is needed because Playwright's connectOverCDP can't send custom headers
-      const agentSession =
-        c.req.param("session") || c.req.header("X-DevBrowser-Session") || "default";
+  /**
+   * POST /cdp — Stateless CDP command execution.
+   *
+   * Body: { page: string, method: string, params?: object }
+   * Response: { result: object } | { error: { message: string } }
+   *
+   * Routes CDP commands to the extension via sendToExtension. No session tracking,
+   * no message routing, no reconnection state — just request/response.
+   */
+  app.post("/cdp", async (c) => {
+    if (!extensionWs) {
+      return c.json({ error: { message: "Extension not connected" } }, 503);
+    }
 
-      return {
-        onOpen(_event, ws) {
-          if (playwrightClients.has(clientId)) {
-            log(`Rejecting duplicate client ID: ${clientId}`);
-            ws.close(1000, "Client ID already connected");
-            return;
-          }
+    const agentSession = c.req.header("X-DevBrowser-Session") ?? "default";
+    const body = await c.req.json();
+    const { page: pageName, method, params } = body as {
+      page: string;
+      method: string;
+      params?: Record<string, unknown>;
+    };
 
-          // Register client with session tracking
-          const sessionState = getOrCreateSession(agentSession);
-          sessionState.clientIds.add(clientId);
+    if (!pageName || !method) {
+      return c.json(
+        { error: { message: "page and method are required" } },
+        400
+      );
+    }
 
-          playwrightClients.set(clientId, {
-            id: clientId,
-            ws,
-            knownTargets: new Set(),
-            session: agentSession,
-          });
-          log(`Playwright client connected: ${clientId} (session: ${agentSession})`);
-        },
+    // Resolve page name to CDP sessionId
+    const pageKey = `${agentSession}:${pageName}`;
+    const cdpSessionId = namedPages.get(pageKey);
 
-        async onMessage(event, _ws) {
-          let message: CDPCommand;
+    if (!cdpSessionId) {
+      return c.json(
+        { error: { message: `Page "${pageName}" not found in session "${agentSession}"` } },
+        404
+      );
+    }
 
-          try {
-            message = JSON.parse(event.data.toString());
-          } catch {
-            return;
-          }
+    try {
+      const result = await routeCdpCommand({
+        method,
+        params,
+        sessionId: cdpSessionId,
+        agentSession,
+      });
 
-          const { id, sessionId, method, params } = message;
+      return c.json({ result });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      log(`POST /cdp error: ${method} for ${pageName}: ${msg}`);
+      return c.json({ error: { message: msg } }, 500);
+    }
+  });
 
-          if (!extensionWs) {
-            sendToPlaywright(
-              {
-                id,
-                sessionId,
-                error: { message: "Extension not connected" },
-              },
-              { clientId }
-            );
-            return;
-          }
+  // ============================================================================
+  // Server-side HAR Recording Endpoints
+  // ============================================================================
 
-          try {
-            const result = await routeCdpCommand({
-              method,
-              params,
-              sessionId,
-              agentSession,
-            });
+  /**
+   * POST /har/start — Enable Network domain and start buffering events.
+   * Body: { page: string }
+   */
+  app.post("/har/start", async (c) => {
+    if (!extensionWs) {
+      return c.json({ error: "Extension not connected" }, 503);
+    }
 
-            // After Target.setAutoAttach, send attachedToTarget for existing targets
-            // Uses deduplication to prevent "Duplicate target" errors
-            // Only send for targets owned by this session
-            if (method === "Target.setAutoAttach" && !sessionId) {
-              const ownedSessionIds = getSessionTargets(agentSession);
-              for (const target of connectedTargets.values()) {
-                if (ownedSessionIds.includes(target.sessionId)) {
-                  sendAttachedToTarget(target, { clientId });
-                }
+    const agentSession = c.req.header("X-DevBrowser-Session") ?? "default";
+    const { page: pageName } = (await c.req.json()) as { page: string };
+    const pageKey = `${agentSession}:${pageName}`;
+    const cdpSessionId = namedPages.get(pageKey);
+
+    if (!cdpSessionId) {
+      return c.json({ error: `Page "${pageName}" not found` }, 404);
+    }
+
+    if (harRecorders.has(pageKey)) {
+      return c.json({ error: `HAR recording already active for "${pageName}"` }, 409);
+    }
+
+    // Enable Network domain for this page
+    await sendToExtension({
+      method: "forwardCDPCommand",
+      params: {
+        sessionId: cdpSessionId,
+        method: "Network.enable",
+        params: {},
+      },
+    });
+
+    harRecorders.set(pageKey, {
+      cdpSessionId,
+      pending: new Map(),
+      completed: [],
+    });
+
+    log(`HAR recording started for ${pageKey}`);
+    return c.json({ success: true });
+  });
+
+  /**
+   * POST /har/stop — Stop recording and return HAR data.
+   * Body: { page: string }
+   */
+  app.post("/har/stop", async (c) => {
+    const agentSession = c.req.header("X-DevBrowser-Session") ?? "default";
+    const { page: pageName } = (await c.req.json()) as { page: string };
+    const pageKey = `${agentSession}:${pageName}`;
+    const state = harRecorders.get(pageKey);
+
+    if (!state) {
+      return c.json({ error: `No HAR recording active for "${pageName}"` }, 404);
+    }
+
+    // Give pending body fetches a moment to complete
+    await new Promise((r) => setTimeout(r, 500));
+
+    harRecorders.delete(pageKey);
+
+    log(`HAR recording stopped for ${pageKey} (${state.completed.length} entries)`);
+    return c.json({
+      log: {
+        version: "1.2",
+        creator: { name: "dev-browser", version: "0.0.1" },
+        entries: state.completed,
+      },
+    });
+  });
+
+  /**
+   * GET /har/status — Check if HAR recording is active for a page.
+   */
+  app.get("/har/status", (c) => {
+    const agentSession = c.req.header("X-DevBrowser-Session") ?? "default";
+    const pageName = c.req.query("page");
+    if (!pageName) {
+      return c.json({ error: "page query param required" }, 400);
+    }
+    const pageKey = `${agentSession}:${pageName}`;
+    return c.json({ recording: harRecorders.has(pageKey) });
+  });
+
+  // ============================================================================
+  // ARIA Snapshot & Ref-based Interaction Endpoints
+  // ============================================================================
+
+  /**
+   * POST /snapshot — Get ARIA snapshot for a page.
+   * Body: { page: string }
+   * Response: { snapshot: string }
+   */
+  app.post("/snapshot", async (c) => {
+    if (!extensionWs) {
+      return c.json({ error: "Extension not connected" }, 503);
+    }
+
+    const agentSession = c.req.header("X-DevBrowser-Session") ?? "default";
+    const { page: pageName } = (await c.req.json()) as { page: string };
+    const pageKey = `${agentSession}:${pageName}`;
+    const cdpSessionId = namedPages.get(pageKey);
+
+    if (!cdpSessionId) {
+      return c.json({ error: `Page "${pageName}" not found` }, 404);
+    }
+
+    try {
+      const snapshotScript = getSnapshotScript();
+
+      // Inject snapshot script and call it
+      const result = (await sendToExtension({
+        method: "forwardCDPCommand",
+        params: {
+          sessionId: cdpSessionId,
+          method: "Runtime.evaluate",
+          params: {
+            expression: `(() => {
+              const w = globalThis;
+              if (!w.__devBrowser_getAISnapshot) {
+                eval(${JSON.stringify(snapshotScript)});
               }
-            }
-
-            // After Target.setDiscoverTargets, send targetCreated events
-            // Only send for targets owned by this session
-            if (
-              method === "Target.setDiscoverTargets" &&
-              (params as { discover?: boolean })?.discover
-            ) {
-              const ownedSessionIds = getSessionTargets(agentSession);
-              for (const target of connectedTargets.values()) {
-                if (ownedSessionIds.includes(target.sessionId)) {
-                  sendToPlaywright(
-                    {
-                      method: "Target.targetCreated",
-                      params: {
-                        targetInfo: { ...target.targetInfo, attached: true },
-                      },
-                    },
-                    { clientId }
-                  );
-                }
-              }
-            }
-
-            // After Target.attachToTarget, send attachedToTarget event (with deduplication)
-            if (
-              method === "Target.attachToTarget" &&
-              (result as { sessionId?: string })?.sessionId
-            ) {
-              const targetId = params?.targetId as string;
-              const target = Array.from(connectedTargets.values()).find(
-                (t) => t.targetId === targetId
-              );
-              if (target) {
-                sendAttachedToTarget(target, { clientId });
-              }
-            }
-
-            sendToPlaywright({ id, sessionId, result }, { clientId });
-          } catch (e) {
-            const errMsg = e instanceof Error ? e.message : String(e);
-            log(`Error handling CDP command ${method}: ${errMsg}`);
-            sendToPlaywright(
-              {
-                id,
-                sessionId,
-                error: { message: (e as Error).message },
-              },
-              { clientId }
-            );
-          }
+              return w.__devBrowser_getAISnapshot();
+            })()`,
+            returnByValue: true,
+            awaitPromise: true,
+          },
         },
+        timeout: 15000,
+      })) as { result: { value: string } };
 
-        onClose() {
-          const client = playwrightClients.get(clientId);
-          if (client) {
-            // Remove client from session
-            const sessionState = sessions.get(client.session);
-            sessionState?.clientIds.delete(clientId);
-          }
-          playwrightClients.delete(clientId);
-          log(`Playwright client disconnected: ${clientId}`);
-        },
+      return c.json({ snapshot: result.result.value });
+    } catch (err) {
+      return c.json({ error: String(err) }, 500);
+    }
+  });
 
-        onError(event) {
-          log(`Playwright WebSocket error [${clientId}]:`, event);
+  /**
+   * POST /ref-action — Interact with an element by ARIA snapshot ref.
+   * Body: { page: string, action: "click" | "fill", ref: string, value?: string }
+   */
+  app.post("/ref-action", async (c) => {
+    if (!extensionWs) {
+      return c.json({ error: "Extension not connected" }, 503);
+    }
+
+    const agentSession = c.req.header("X-DevBrowser-Session") ?? "default";
+    const { page: pageName, action, ref, value } = (await c.req.json()) as {
+      page: string;
+      action: string;
+      ref: string;
+      value?: string;
+    };
+    const pageKey = `${agentSession}:${pageName}`;
+    const cdpSessionId = namedPages.get(pageKey);
+
+    if (!cdpSessionId) {
+      return c.json({ error: `Page "${pageName}" not found` }, 404);
+    }
+
+    let expression: string;
+
+    if (action === "click") {
+      expression = `(() => {
+        const refs = globalThis.__devBrowserRefs;
+        if (!refs) throw new Error("No refs available - call snapshot first");
+        const el = refs[${JSON.stringify(ref)}];
+        if (!el) throw new Error("Ref ${ref} not found");
+        el.scrollIntoView({ block: "center" });
+        el.click();
+        return true;
+      })()`;
+    } else if (action === "fill") {
+      expression = `(() => {
+        const refs = globalThis.__devBrowserRefs;
+        if (!refs) throw new Error("No refs available - call snapshot first");
+        const el = refs[${JSON.stringify(ref)}];
+        if (!el) throw new Error("Ref ${ref} not found");
+        el.scrollIntoView({ block: "center" });
+        el.focus();
+        el.value = ${JSON.stringify(value ?? "")};
+        el.dispatchEvent(new Event("input", { bubbles: true }));
+        el.dispatchEvent(new Event("change", { bubbles: true }));
+        return true;
+      })()`;
+    } else {
+      return c.json({ error: `Unknown action: ${action}` }, 400);
+    }
+
+    try {
+      await sendToExtension({
+        method: "forwardCDPCommand",
+        params: {
+          sessionId: cdpSessionId,
+          method: "Runtime.evaluate",
+          params: { expression, returnByValue: true, awaitPromise: true },
         },
-      };
-    })
-  );
+      });
+
+      return c.json({ success: true });
+    } catch (err) {
+      return c.json({ error: String(err) }, 500);
+    }
+  });
 
   // ============================================================================
   // Extension WebSocket
@@ -1476,14 +1678,7 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
                 }
               }
 
-              // Route to session that owns this target
-              // Unclaimed targets are NOT broadcast - they're revealed when
-              // the agent calls Target.attachToTarget (which claims the target)
-              const agentSession = targetToAgentSession.get(targetParams.sessionId);
-              if (agentSession) {
-                sendAttachedToTarget(target, { session: agentSession });
-              }
-              // If unclaimed, don't broadcast - wait for explicit attachment
+              // No need to forward to Playwright — CDPPage uses HTTP RPC
             } else if (method === "Target.detachedFromTarget") {
               const detachParams = params as { sessionId: string };
               const cdpSessionId = detachParams.sessionId;
@@ -1549,19 +1744,6 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
                     }
                   }
                   targetToAgentSession.delete(cdpSessionId);
-
-                  // Now forward to Playwright
-                  if (agentSession) {
-                    sendToPlaywright(
-                      { method: "Target.detachedFromTarget", params: detachParams },
-                      { session: agentSession }
-                    );
-                  } else {
-                    sendToPlaywright({
-                      method: "Target.detachedFromTarget",
-                      params: detachParams,
-                    });
-                  }
                 }, 500); // 500ms grace period for reattachment
 
                 // Store timeout WITH targetId for reattachment matching
@@ -1571,19 +1753,6 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
                 connectedTargets.delete(cdpSessionId);
                 targetToAgentSession.delete(cdpSessionId);
                 log(`Target detached: ${cdpSessionId} (no named page - immediate cleanup)`);
-
-                // Route to owning session, or broadcast if unknown
-                if (agentSession) {
-                  sendToPlaywright(
-                    { method: "Target.detachedFromTarget", params: detachParams },
-                    { session: agentSession }
-                  );
-                } else {
-                  sendToPlaywright({
-                    method: "Target.detachedFromTarget",
-                    params: detachParams,
-                  });
-                }
               }
             } else if (method === "Target.targetInfoChanged") {
               const infoParams = params as { targetInfo: TargetInfo };
@@ -1607,18 +1776,6 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
                 debouncedSave();
               }
 
-              // Route to owning session, or broadcast if unknown
-              if (agentSession) {
-                sendToPlaywright(
-                  { method: "Target.targetInfoChanged", params: infoParams },
-                  { session: agentSession }
-                );
-              } else {
-                sendToPlaywright({
-                  method: "Target.targetInfoChanged",
-                  params: infoParams,
-                });
-              }
             } else if (method === "Page.frameNavigated") {
               // Extract URL from frameNavigated events to keep connectedTargets URL up to date
               // Chrome's extension API doesn't forward Target.targetInfoChanged, so we synthesize it
@@ -1645,22 +1802,20 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
                 }
               }
 
-              // Still forward the event to Playwright
-              const agentSession = sessionId
-                ? targetToAgentSession.get(sessionId)
-                : undefined;
-
-              if (agentSession) {
-                sendToPlaywright({ sessionId, method, params }, { session: agentSession });
-              } else {
-                sendToPlaywright({ sessionId, method, params });
-              }
             } else {
-              // Forward CDP events to Playwright
-              // Route to owning session based on CDP sessionId
-              const agentSession = sessionId
-                ? targetToAgentSession.get(sessionId)
-                : undefined;
+              // Route Network events to HAR recorders
+              if (sessionId && method.startsWith("Network.")) {
+                for (const [, harState] of harRecorders) {
+                  if (harState.cdpSessionId === sessionId) {
+                    handleHarNetworkEvent(
+                      harState,
+                      method,
+                      (params ?? {}) as Record<string, unknown>
+                    );
+                    break;
+                  }
+                }
+              }
 
               // Update activity timestamp for any CDP event
               if (sessionId) {
@@ -1668,13 +1823,6 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
                 if (target) {
                   target.lastActivity = Date.now();
                 }
-              }
-
-              if (agentSession) {
-                sendToPlaywright({ sessionId, method, params }, { session: agentSession });
-              } else {
-                // Unknown session - broadcast to all
-                sendToPlaywright({ sessionId, method, params });
               }
             }
           }
@@ -1706,12 +1854,7 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
           pendingDetach.clear();
           sessions.clear();
           targetToAgentSession.clear();
-
-          // Close all Playwright clients (they'll need to reconnect)
-          for (const client of playwrightClients.values()) {
-            client.ws.close(1000, "Extension disconnected");
-          }
-          playwrightClients.clear();
+          harRecorders.clear();
         },
 
         onError(event) {
@@ -1742,10 +1885,6 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
     wsEndpoint,
     port,
     async stop() {
-      for (const client of playwrightClients.values()) {
-        client.ws.close(1000, "Server stopped");
-      }
-      playwrightClients.clear();
       extensionWs?.close(1000, "Server stopped");
       clearInterval(pdfCleanupInterval);
       clearInterval(idleCleanupInterval);
