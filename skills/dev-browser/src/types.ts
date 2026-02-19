@@ -17,6 +17,8 @@ export interface GetPageRequest {
   name: string;
   /** Optional viewport size for new pages */
   viewport?: ViewportSize;
+  /** Pin this page to exempt it from idle cleanup (for human collaboration) */
+  pinned?: boolean;
 }
 
 export interface GetPageResponse {

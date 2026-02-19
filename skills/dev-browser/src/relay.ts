@@ -52,6 +52,7 @@ interface ConnectedTarget {
   targetId: string;
   targetInfo: TargetInfo;
   lastActivity: number; // Timestamp of last CDP activity
+  pinned: boolean; // Pinned pages are exempt from idle cleanup (for human collaboration)
 }
 
 // Session state for multi-agent isolation
@@ -112,15 +113,17 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
   let isRecovering = false; // True during extension reconnect recovery
 
   // Logging
-  const { log, logFile } = createLogger("relay");
+  const { log, logFile } = createLogger("relay", { stdout: true });
 
   // Tab limits
   const TAB_WARNING_THRESHOLD = 3;
   const TAB_LIMIT = 5;
 
-  // Idle timeout: close pages with no activity after 5 minutes
-  const IDLE_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
-  const IDLE_CHECK_INTERVAL_MS = 60 * 1000; // Check every 60 seconds
+  // Idle timeout: close pages with no CDP activity after 15 seconds.
+  // Page state (cookies, localStorage) persists in Chrome, so agents can
+  // re-open named pages cheaply. Short timeout keeps tab count minimal.
+  const IDLE_TIMEOUT_MS = 15 * 1000; // 15 seconds
+  const IDLE_CHECK_INTERVAL_MS = 5 * 1000; // Check every 5 seconds
 
   // PDF storage for large printToPDF responses
   const pdfDir = join(homedir(), ".dev-browser", "pdfs");
@@ -393,6 +396,7 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
     const idleThreshold = now - IDLE_TIMEOUT_MS;
 
     for (const [cdpSessionId, target] of connectedTargets) {
+      if (target.pinned) continue; // Pinned pages are exempt (human collaboration)
       if (target.lastActivity < idleThreshold) {
         // Find the page key for logging
         const pageKey = pageKeyByTargetId.get(target.targetId);
@@ -552,6 +556,7 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
             targetId: attachResult.targetInfo.targetId,
             targetInfo: attachResult.targetInfo,
             lastActivity: Date.now(),
+            pinned: false,
           });
           namedPages.set(persisted.key, cdpSessionId);
           pageKeyByTargetId.set(attachResult.targetInfo.targetId, persisted.key);
@@ -865,6 +870,7 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
     const agentSession = c.req.header("X-DevBrowser-Session") ?? "default";
     const body = await c.req.json();
     const name = body.name as string;
+    const pinned = body.pinned === true; // Pinned pages are exempt from idle cleanup
 
     if (!name) {
       return c.json({ error: "name is required" }, 400);
@@ -891,13 +897,18 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
     if (existingCdpSessionId) {
       const target = connectedTargets.get(existingCdpSessionId);
       if (target) {
+        // Update pinned flag if explicitly set on reuse
+        if (pinned && !target.pinned) {
+          target.pinned = true;
+        }
         // Return existing page without activating (use page.bringToFront() if needed)
-        log(`POST /pages session=${agentSession} name=${name} action=reused total=${namedPages.size} sessionTotal=${sessionPageCount}`);
+        log(`POST /pages session=${agentSession} name=${name} action=reused pinned=${target.pinned} total=${namedPages.size} sessionTotal=${sessionPageCount}`);
         return c.json({
           wsEndpoint: `ws://${host}:${port}/cdp`,
           name, // Return without session prefix
           targetId: target.targetId,
           url: target.targetInfo.url,
+          pinned: target.pinned,
         });
       }
       // CDP session no longer valid, clean up
@@ -964,6 +975,9 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
       // Find and name the new target
       for (const [cdpSessionId, target] of connectedTargets) {
         if (target.targetId === result.targetId) {
+          // Apply pinned flag from request
+          target.pinned = pinned;
+
           // Register with namespaced key
           namedPages.set(pageKey, cdpSessionId);
           pageKeyByTargetId.set(target.targetId, pageKey);
@@ -984,7 +998,7 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
           });
           savePersistedPages(persistedPages);
 
-          log(`POST /pages session=${agentSession} name=${name} action=created total=${namedPages.size} sessionTotal=${sessionState.pageNames.size}`);
+          log(`POST /pages session=${agentSession} name=${name} action=created pinned=${pinned} total=${namedPages.size} sessionTotal=${sessionState.pageNames.size}`);
 
           // Return new page without activating (use page.bringToFront() if needed)
           const response: {
@@ -992,12 +1006,14 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
             name: string;
             targetId: string;
             url: string;
+            pinned: boolean;
             warning?: string;
           } = {
             wsEndpoint: `ws://${host}:${port}/cdp`,
             name, // Return without session prefix
             targetId: target.targetId,
             url: target.targetInfo.url,
+            pinned,
           };
           if (warning) {
             response.warning = warning;
@@ -1045,6 +1061,31 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
 
     log(`DELETE /pages session=${agentSession} name=${name} action=deleted total=${namedPages.size}`);
     return c.json({ success: true });
+  });
+
+  // Pin/unpin a page (pinned pages are exempt from idle cleanup)
+  app.patch("/pages/:name", async (c) => {
+    const agentSession = c.req.header("X-DevBrowser-Session") ?? "default";
+    const name = c.req.param("name");
+    const pageKey = `${agentSession}:${name}`;
+
+    const cdpSessionId = namedPages.get(pageKey);
+    if (!cdpSessionId) {
+      return c.json({ error: "Page not found" }, 404);
+    }
+
+    const target = connectedTargets.get(cdpSessionId);
+    if (!target) {
+      return c.json({ error: "Page target not connected" }, 404);
+    }
+
+    const body = await c.req.json();
+    if (typeof body.pinned === "boolean") {
+      target.pinned = body.pinned;
+      log(`PATCH /pages session=${agentSession} name=${name} pinned=${target.pinned}`);
+    }
+
+    return c.json({ name, pinned: target.pinned });
   });
 
   // Get server stats for debugging
@@ -1621,6 +1662,7 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
                 targetId: targetParams.targetInfo.targetId,
                 targetInfo: targetParams.targetInfo,
                 lastActivity: Date.now(),
+                pinned: false,
               };
               connectedTargets.set(targetParams.sessionId, target);
 

@@ -23,22 +23,31 @@ export class CDPRouter {
 
   /**
    * Gets or creates the "Dev Browser" tab group, returning its ID.
+   * Searches all existing tab groups first to avoid creating duplicates
+   * (the in-memory cache is lost when the service worker restarts).
    */
   private async getOrCreateDevBrowserGroup(tabId: number): Promise<number> {
     // If we have a cached group ID, verify it still exists
     if (this.devBrowserGroupId !== null) {
       try {
         await chrome.tabGroups.get(this.devBrowserGroupId);
-        // Group exists, add tab to it
         await chrome.tabs.group({ tabIds: [tabId], groupId: this.devBrowserGroupId });
         return this.devBrowserGroupId;
       } catch {
-        // Group no longer exists, reset cache
         this.devBrowserGroupId = null;
       }
     }
 
-    // Create a new group with this tab
+    // Cache miss — search for an existing "Dev Browser" group before creating one
+    const allGroups = await chrome.tabGroups.query({ title: "Dev Browser" });
+    if (allGroups.length > 0) {
+      const existing = allGroups[0];
+      await chrome.tabs.group({ tabIds: [tabId], groupId: existing.id });
+      this.devBrowserGroupId = existing.id;
+      return existing.id;
+    }
+
+    // No existing group found — create a new one
     const groupId = await chrome.tabs.group({ tabIds: [tabId] });
     await chrome.tabGroups.update(groupId, {
       title: "Dev Browser",

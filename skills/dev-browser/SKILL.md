@@ -248,9 +248,12 @@ const client = await connect({ ephemeral: true });
 // Get or create named page (viewport only applies to new pages)
 const page = await client.page("name");
 const pageWithSize = await client.page("name", { viewport: { width: 1920, height: 1080 } });
+const pinnedPage = await client.page("form", { pinned: true }); // Exempt from idle cleanup
 
 const pages = await client.list(); // List all page names
 await client.close("name"); // Close a single page
+await client.pin("name"); // Pin page (exempt from idle cleanup)
+await client.pin("name", false); // Unpin page (resume idle cleanup)
 await client.closeAll(); // Close ALL pages in this session
 await client.disconnect(); // Disconnect (pages persist, unless ephemeral)
 
@@ -479,6 +482,8 @@ await client.closeTarget(tabs[0].tabId);
 
 ## Archiving & PDF
 
+**Works in both standalone and extension mode.** HAR recording auto-starts when you call `client.page()`. In standalone mode it opens a CDP session via Playwright; in extension mode the relay server captures network events server-side. The client API is identical — no mode-specific code needed.
+
 ### saveArchive — Full Page Archive
 
 The recommended way to capture a page. Produces a `.zip` bundle with three files:
@@ -569,7 +574,20 @@ Pages are cleaned up through multiple mechanisms to prevent accumulating thousan
 
 ### Automatic Cleanup
 
-**Idle timeout (5 minutes):** Pages with no CDP activity are automatically closed after 5 minutes. Activity includes any navigation, clicks, evaluations, or events.
+**Idle timeout (15 seconds):** Pages with no CDP activity are automatically closed after 15 seconds. Activity includes any navigation, clicks, evaluations, or events. This keeps tab count minimal — Chrome's persistent profile preserves cookies and localStorage, so re-opening a page by name is cheap.
+
+**Pinned pages** are exempt from idle cleanup. Use pinning when a human needs to interact with a tab (the idle timer can't detect human activity since it doesn't generate CDP commands):
+
+```typescript
+// Pin at creation — tab stays open until explicitly closed or unpinned
+const page = await client.page("form", { pinned: true });
+
+// Pin an existing page
+await client.pin("form");
+
+// Unpin when the human is done — resumes idle cleanup
+await client.pin("form", false);
+```
 
 **Ephemeral sessions:** Use `{ ephemeral: true }` for one-off tasks. Pages auto-close on disconnect:
 
@@ -651,9 +669,14 @@ const client = await connect({ ephemeral: true });
 
 ### Log Files
 
-Server logs are written to `~/.dev-browser/logs/`:
-- `server-YYYY-MM-DD.log` - Standalone mode
-- `relay-YYYY-MM-DD.log` - Extension mode
+**Server logs** are written to `~/.dev-browser/logs/` (persistent across reboots):
+- `server-YYYY-MM-DD.log` — Standalone server
+- `relay-YYYY-MM-DD.log` — Extension relay server
+
+**Client/script logs** are written to `$TMPDIR/claude-skills/dev-browser/` (ephemeral, OS-managed):
+- `client-YYYY-MM-DD.log` — Library diagnostics from scriptlet executions
+
+Client logs are file-only — they never appear on stdout, keeping scriptlet output clean for agents. Warnings and errors still appear on stderr.
 
 ```bash
 # Tail current day's log
