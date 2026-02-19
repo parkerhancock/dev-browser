@@ -15,6 +15,15 @@ export interface TabManagerDeps {
 // Random prefix per service worker lifetime to prevent session ID collisions across restarts
 const SESSION_PREFIX = Math.random().toString(36).slice(2, 6);
 
+// Stealth script injected into every new page before navigation.
+// Masks CDP debugger fingerprints that sites use to detect automation.
+const STEALTH_SCRIPT = `
+  Object.defineProperty(navigator, 'webdriver', {
+    configurable: true,
+    get: () => undefined,
+  });
+`;
+
 export class TabManager {
   private tabs = new Map<number, TabInfo>();
   private childSessions = new Map<string, number>(); // sessionId -> parentTabId
@@ -137,6 +146,18 @@ export class TabManager {
       // Continue anyway - Playwright will enable them
     }
 
+    // Inject stealth overrides before any navigation occurs.
+    // Sites like X.com detect CDP debugger attachment and degrade
+    // functionality (e.g., refusing to render React or blocking API calls).
+    try {
+      await chrome.debugger.sendCommand(debuggee, "Page.addScriptToEvaluateOnNewDocument", {
+        source: STEALTH_SCRIPT,
+      });
+      this.logger.debug("Stealth script injected for tab:", tabId);
+    } catch (err) {
+      this.logger.debug("Error injecting stealth script:", err);
+    }
+
     // Notify relay of new target
     this.sendMessage({
       method: "forwardCDPEvent",
@@ -144,7 +165,7 @@ export class TabManager {
         method: "Target.attachedToTarget",
         params: {
           sessionId,
-          targetInfo: { ...targetInfo, attached: true },
+          targetInfo: { ...targetInfo, browserContextId: "default", attached: true },
           waitingForDebugger: false,
         },
       },

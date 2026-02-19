@@ -113,7 +113,7 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
   const TAB_LIMIT = 5;
 
   // Logging
-  const { log, logFile } = createLogger("server");
+  const { log, logFile } = createLogger("server", { stdout: true });
 
   // Helper to get or create session state
   function getOrCreateSession(sessionId: string): SessionState {
@@ -212,6 +212,15 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
 
       // Create new page in the persistent context (with timeout to prevent hangs)
       const page = await withTimeout(context.newPage(), 30000, "Page creation timed out after 30s");
+
+      // Inject stealth overrides before any navigation occurs.
+      // Sites like X.com detect CDP/automation and degrade functionality.
+      await page.addInitScript(() => {
+        Object.defineProperty(navigator, "webdriver", {
+          configurable: true,
+          get: () => undefined,
+        });
+      });
 
       // Apply viewport if provided
       if (viewport) {

@@ -237,6 +237,12 @@ export class ConnectionManager {
       if (this.intentionalDisconnect) {
         this.onDisconnect();
       }
+      // Code 4001 means the relay replaced this connection with a newer one
+      // from this same extension. Don't reconnect — the new connection is already active.
+      if (event.code === 4001) {
+        this.logger.debug("Replaced by newer connection, skipping reconnect");
+        return;
+      }
       // Only reconnect if this was the active socket and we should maintain
       if (this.ws === null && this.shouldMaintain) {
         this.startMaintaining();

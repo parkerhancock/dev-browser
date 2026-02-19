@@ -87,6 +87,7 @@ export interface TargetInfo {
   type: string;
   title: string;
   url: string;
+  browserContextId?: string;
   attached?: boolean;
 }
 
