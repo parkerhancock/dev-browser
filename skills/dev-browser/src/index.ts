@@ -54,7 +54,7 @@ function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promi
 
 export async function serve(options: ServeOptions = {}): Promise<DevBrowserServer> {
   const port = options.port ?? 9222;
-  const headless = options.headless ?? false;
+  const headless = options.headless ?? true;
   const cdpPort = options.cdpPort ?? 9223;
   const profileDir = options.profileDir;
 
@@ -81,9 +81,16 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
   console.log("Launching browser with persistent context...");
 
   // Launch persistent context - this persists cookies, localStorage, cache, etc.
+  const launchArgs = [`--remote-debugging-port=${cdpPort}`];
+
+  // When running headed, prevent the browser from stealing focus on launch
+  if (!headless) {
+    launchArgs.push("--silent-launch", "--no-startup-window");
+  }
+
   const context: BrowserContext = await chromium.launchPersistentContext(userDataDir, {
     headless,
-    args: [`--remote-debugging-port=${cdpPort}`],
+    args: launchArgs,
   });
   console.log("Browser launched with persistent profile...");
 
