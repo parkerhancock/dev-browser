@@ -47,10 +47,12 @@ All source code lives in `skills/dev-browser/`:
 
 - `src/index.ts` - Server: launches persistent Chromium context, exposes HTTP API for page management
 - `src/relay.ts` - Relay server for extension mode: bridges Chrome extension to Playwright clients
+- `src/relay-registry.ts` - Target registry: manages page/session/target lifecycle state (4 Maps, explicit state machine)
 - `src/client.ts` - Client: connects to server, retrieves pages by name via CDP
 - `src/page.ts` - Unified `Page`, `Locator`, `Keyboard`, `Mouse` interfaces (Playwright-compatible subset)
 - `src/cdp-page.ts` - `CDPPage` implementation: full Page interface via CDP over HTTP RPC (extension mode)
 - `src/cdp-helpers.ts` - Key code mapping, element coordinate resolution, modifier bitmask utilities
+- `src/har.ts` - HAR recording: processes CDP Network events into HAR entries
 - `src/types.ts` - Shared TypeScript types for API requests/responses
 - `src/snapshot/` - ARIA snapshot utilities for LLM-friendly page inspection
 - `scripts/start-server.ts` - Entry point to start standalone server

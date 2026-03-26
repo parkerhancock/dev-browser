@@ -22,6 +22,23 @@ import { mkdirSync, writeFileSync, unlinkSync, readdirSync, statSync } from "fs"
 import { join } from "path";
 import { homedir } from "os";
 import { randomUUID } from "crypto";
+import {
+  type HarEntry,
+  type PendingHarEntry,
+  processNetworkEvent,
+} from "./har.js";
+import {
+  createTargetRegistry,
+  type TargetInfo,
+  type ConnectedTarget,
+  type SessionState,
+} from "./relay-registry.js";
+import {
+  getAgentSession,
+  validatePageName,
+  TAB_WARNING_THRESHOLD,
+  TAB_LIMIT,
+} from "./types.js";
 
 // ============================================================================
 // Types
@@ -38,29 +55,7 @@ export interface RelayServer {
   stop(): Promise<void>;
 }
 
-interface TargetInfo {
-  targetId: string;
-  type: string;
-  title: string;
-  url: string;
-  browserContextId?: string;
-  attached: boolean;
-}
-
-interface ConnectedTarget {
-  sessionId: string;
-  targetId: string;
-  targetInfo: TargetInfo;
-  lastActivity: number; // Timestamp of last CDP activity
-  pinned: boolean; // Pinned pages are exempt from idle cleanup (for human collaboration)
-}
-
-// Session state for multi-agent isolation
-interface SessionState {
-  id: string;
-  pageNames: Set<string>; // Page names owned by this session
-  targetSessions: Set<string>; // CDP sessionIds owned by this session
-}
+// TargetInfo, ConnectedTarget, and SessionState are imported from ./relay-registry.js
 
 // Message types for extension communication
 interface ExtensionCommandMessage {
@@ -101,12 +96,10 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
   const port = options.port ?? 9224;
   const host = options.host ?? "127.0.0.1";
 
-  // State
-  const connectedTargets = new Map<string, ConnectedTarget>();
-  const namedPages = new Map<string, string>(); // "session:name" -> CDP sessionId
-  const pageKeyByTargetId = new Map<string, string>(); // targetId -> "session:name"
-  // Track pending detach with targetId for reattachment matching
-  const pendingDetach = new Map<string, { timeout: NodeJS.Timeout; targetId: string }>(); // cdpSessionId -> {timeout, targetId}
+  // State — all page/session/target tracking is in the registry
+  const registry = createTargetRegistry();
+  // Read-only Map references for lookups (mutations go through registry methods)
+  const { targets: connectedTargets, namedPages, sessions } = registry;
   // Waiters for target attachment (event-driven replacement for sleep after createTarget)
   const pendingTargetWaiters = new Map<string, { resolve: () => void }>();
   let extensionWs: WSContext | null = null;
@@ -114,10 +107,6 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
 
   // Logging
   const { log, logFile } = createLogger("relay", { stdout: true });
-
-  // Tab limits
-  const TAB_WARNING_THRESHOLD = 3;
-  const TAB_LIMIT = 5;
 
   // Idle timeout: close pages with no CDP activity after 60 seconds.
   // Page state (cookies, localStorage) persists in Chrome, so agents can
@@ -168,51 +157,6 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
   // Buffers CDP Network events per-page for HAR generation.
   // This replaces the client-side CDPSession-based HAR recording in extension mode.
 
-  interface HarCookie {
-    name: string;
-    value: string;
-    path?: string;
-    domain?: string;
-    expires?: string;
-    httpOnly?: boolean;
-    secure?: boolean;
-    sameSite?: string;
-  }
-
-  interface HarEntry {
-    startedDateTime: string;
-    time: number;
-    request: {
-      method: string;
-      url: string;
-      httpVersion: string;
-      headers: Array<{ name: string; value: string }>;
-      queryString: Array<{ name: string; value: string }>;
-      cookies: HarCookie[];
-      headersSize: number;
-      bodySize: number;
-      postData?: { mimeType: string; text: string };
-    };
-    response: {
-      status: number;
-      statusText: string;
-      httpVersion: string;
-      headers: Array<{ name: string; value: string }>;
-      cookies: HarCookie[];
-      content: { size: number; mimeType: string; text?: string; encoding?: string };
-      headersSize: number;
-      bodySize: number;
-    };
-    timings: { send: number; wait: number; receive: number };
-  }
-
-  interface PendingHarEntry {
-    entry: Partial<HarEntry>;
-    startTime: number;
-    requestId: string;
-    mimeType?: string;
-  }
-
   interface RelayHarState {
     cdpSessionId: string;
     pending: Map<string, PendingHarEntry>;
@@ -221,32 +165,6 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
 
   const harRecorders = new Map<string, RelayHarState>(); // pageKey -> state
 
-  function parseCookieHeader(cookieHeader: string): HarCookie[] {
-    if (!cookieHeader) return [];
-    return cookieHeader.split(";").map((part) => {
-      const [name, ...rest] = part.trim().split("=");
-      return { name: name ?? "", value: rest.join("=") };
-    });
-  }
-
-  function parseSetCookie(setCookie: string): HarCookie {
-    const parts = setCookie.split(";").map((p) => p.trim());
-    const [nameValue, ...attrs] = parts;
-    const [name, ...rest] = (nameValue ?? "").split("=");
-    const cookie: HarCookie = { name: name ?? "", value: rest.join("=") };
-    for (const attr of attrs) {
-      const [key, val] = attr.split("=");
-      const lk = key?.toLowerCase();
-      if (lk === "path") cookie.path = val;
-      else if (lk === "domain") cookie.domain = val;
-      else if (lk === "expires") cookie.expires = val;
-      else if (lk === "httponly") cookie.httpOnly = true;
-      else if (lk === "secure") cookie.secure = true;
-      else if (lk === "samesite") cookie.sameSite = val;
-    }
-    return cookie;
-  }
-
   /** Handle a CDP Network event for HAR recording */
   function handleHarNetworkEvent(
     state: RelayHarState,
@@ -254,143 +172,23 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     params: Record<string, any>
   ): void {
-    if (method === "Network.requestWillBeSent") {
-      const url = new URL(params.request.url);
-      const headers = Object.entries(params.request.headers).map(([n, v]) => ({
-        name: n,
-        value: String(v),
-      }));
-      const cookieHeader =
-        params.request.headers["Cookie"] ?? params.request.headers["cookie"] ?? "";
-      const cookies = parseCookieHeader(cookieHeader);
-      const postData = params.request.postData
-        ? {
-            mimeType:
-              params.request.headers["Content-Type"] ??
-              params.request.headers["content-type"] ??
-              "application/octet-stream",
-            text: params.request.postData,
-          }
-        : undefined;
-
-      state.pending.set(params.requestId, {
-        startTime: params.timestamp * 1000,
-        requestId: params.requestId,
-        entry: {
-          startedDateTime: new Date(params.wallTime * 1000).toISOString(),
-          request: {
-            method: params.request.method,
-            url: params.request.url,
-            httpVersion: "HTTP/1.1",
-            headers,
-            queryString: [...url.searchParams].map(([n, v]) => ({
-              name: n,
-              value: v,
-            })),
-            cookies,
-            headersSize: -1,
-            bodySize: params.request.postData?.length ?? 0,
-            postData,
-          },
-        },
-      });
-    } else if (method === "Network.responseReceived") {
-      const pending = state.pending.get(params.requestId);
-      if (!pending) return;
-
-      const headers = Object.entries(params.response.headers).map(([n, v]) => ({
-        name: n,
-        value: String(v),
-      }));
-      const resCookies: HarCookie[] = [];
-      for (const [hName, hValue] of Object.entries(params.response.headers)) {
-        if (hName.toLowerCase() === "set-cookie") {
-          resCookies.push(parseSetCookie(String(hValue)));
-        }
-      }
-
-      const timing = params.response.timing;
-      pending.mimeType = params.response.mimeType;
-      pending.entry.response = {
-        status: params.response.status,
-        statusText: params.response.statusText,
-        httpVersion: params.response.protocol ?? "HTTP/1.1",
-        headers,
-        cookies: resCookies,
-        content: {
-          size: params.response.encodedDataLength ?? 0,
-          mimeType: params.response.mimeType,
-        },
-        headersSize: -1,
-        bodySize: -1,
-      };
-
-      if (timing) {
-        pending.entry.timings = {
-          send: timing.sendEnd - timing.sendStart,
-          wait: timing.receiveHeadersEnd - timing.sendEnd,
-          receive: 0,
-        };
-      }
-    } else if (method === "Network.loadingFinished") {
-      const pending = state.pending.get(params.requestId);
-      if (!pending?.entry.response) return;
-
-      const endTime = params.timestamp * 1000;
-      pending.entry.time = endTime - pending.startTime;
-      pending.entry.response.bodySize = params.encodedDataLength;
-
-      if (pending.entry.timings) {
-        pending.entry.timings.receive = Math.max(
-          0,
-          pending.entry.time -
-            (pending.entry.timings.send + pending.entry.timings.wait)
-        );
-      } else {
-        pending.entry.timings = {
-          send: 0,
-          wait: pending.entry.time,
-          receive: 0,
-        };
-      }
-
-      // Fetch response body for text content (async, but fire-and-forget)
-      const isText =
-        pending.mimeType?.startsWith("text/") ||
-        pending.mimeType?.includes("json") ||
-        pending.mimeType?.includes("xml") ||
-        pending.mimeType?.includes("javascript");
-      if (isText && params.encodedDataLength < 1024 * 1024) {
-        sendToExtension({
+    processNetworkEvent(
+      state.pending,
+      state.completed,
+      method,
+      params,
+      async (requestId) => {
+        const result = await sendToExtension({
           method: "forwardCDPCommand",
           params: {
             sessionId: state.cdpSessionId,
             method: "Network.getResponseBody",
-            params: { requestId: params.requestId },
+            params: { requestId },
           },
-        })
-          .then((bodyResult) => {
-            const br = bodyResult as {
-              body?: string;
-              base64Encoded?: boolean;
-            };
-            if (br.body) {
-              pending.entry.response!.content.text = br.body;
-              if (br.base64Encoded) {
-                pending.entry.response!.content.encoding = "base64";
-              }
-            }
-          })
-          .catch(() => {
-            // Body may not be available
-          });
+        });
+        return result as { body?: string; base64Encoded?: boolean } | null;
       }
-
-      state.completed.push(pending.entry as HarEntry);
-      state.pending.delete(params.requestId);
-    } else if (method === "Network.loadingFailed") {
-      state.pending.delete(params.requestId);
-    }
+    );
   }
 
   // Idle page cleanup - close pages with no activity
@@ -402,7 +200,7 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
       if (target.pinned) continue; // Pinned pages are exempt (human collaboration)
       if (target.lastActivity < idleThreshold) {
         // Find the page key for logging
-        const pageKey = pageKeyByTargetId.get(target.targetId);
+        const pageKey = registry.getPageKeyByTargetId(target.targetId);
         log(`Idle timeout: closing ${pageKey ?? target.targetId} (inactive for ${Math.round((now - target.lastActivity) / 1000)}s)`);
 
         // Close the tab via extension
@@ -418,39 +216,21 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
           }
         }
 
-        // Clean up mappings (the Target.detachedFromTarget event will also fire)
+        // Clean up mappings atomically (the Target.detachedFromTarget event will also fire)
         if (pageKey) {
-          namedPages.delete(pageKey);
-          pageKeyByTargetId.delete(target.targetId);
-
-          // Extract session and name from pageKey
-          const colonIdx = pageKey.indexOf(":");
-          if (colonIdx > 0) {
-            const owningSession = pageKey.slice(0, colonIdx);
-            const pageName = pageKey.slice(colonIdx + 1);
-            const sessionState = sessions.get(owningSession);
-            if (sessionState) {
-              sessionState.pageNames.delete(pageName);
-              sessionState.targetSessions.delete(cdpSessionId);
-            }
-          }
+          registry.removeNamedPage(pageKey);
 
           // Remove from persistence
           persistedPages = persistedPages.filter((p) => p.key !== pageKey);
           debouncedSave();
+        } else {
+          registry.removeUnnamedTarget(cdpSessionId);
         }
-
-        targetToAgentSession.delete(cdpSessionId);
-        connectedTargets.delete(cdpSessionId);
       }
     }
   }
 
   const idleCleanupInterval = setInterval(cleanupIdlePages, IDLE_CHECK_INTERVAL_MS);
-
-  // Multi-agent session state
-  const sessions = new Map<string, SessionState>();
-  const targetToAgentSession = new Map<string, string>(); // CDP sessionId -> agent session
 
   // Persistence for page mappings (survives extension disconnects)
   let persistedPages: PersistedPage[] = loadPersistedPages();
@@ -471,33 +251,10 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
   // Helper Functions
   // ============================================================================
 
-  // Helper to get or create a session
-  function getOrCreateSession(sessionId: string): SessionState {
-    let session = sessions.get(sessionId);
-    if (!session) {
-      session = {
-        id: sessionId,
-        pageNames: new Set(),
-        targetSessions: new Set(),
-      };
-      sessions.set(sessionId, session);
-    }
-    return session;
-  }
-
-  /** Check if a target belongs to an agent session */
-  function isTargetOwnedBySession(
-    cdpSessionId: string,
-    agentSession: string
-  ): boolean {
-    return targetToAgentSession.get(cdpSessionId) === agentSession;
-  }
-
-  /** Get all CDP sessionIds owned by an agent session */
-  function getSessionTargets(agentSession: string): string[] {
-    const sessionState = sessions.get(agentSession);
-    return sessionState ? Array.from(sessionState.targetSessions) : [];
-  }
+  // Aliases for registry helpers (used throughout the code)
+  const getOrCreateSession = registry.getOrCreateSession;
+  const isTargetOwnedBySession = registry.isOwnedBySession;
+  const getSessionTargets = registry.getSessionTargetIds;
 
   // Recover persisted pages by re-attaching to existing tabs
   async function recoverPersistedPages(): Promise<void> {
@@ -554,25 +311,21 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
           const cdpSessionId = attachResult.sessionId;
 
           // Rebuild in-memory mappings
-          connectedTargets.set(cdpSessionId, {
+          registry.addTarget(cdpSessionId, {
             sessionId: cdpSessionId,
             targetId: attachResult.targetInfo.targetId,
             targetInfo: attachResult.targetInfo,
             lastActivity: Date.now(),
             pinned: false,
+            state: "attached",
           });
-          namedPages.set(persisted.key, cdpSessionId);
-          pageKeyByTargetId.set(attachResult.targetInfo.targetId, persisted.key);
 
           // Parse session and page name from key
           const colonIdx = persisted.key.indexOf(":");
           const agentSession = persisted.key.slice(0, colonIdx);
           const pageName = persisted.key.slice(colonIdx + 1);
 
-          const sessionState = getOrCreateSession(agentSession);
-          sessionState.pageNames.add(pageName);
-          sessionState.targetSessions.add(cdpSessionId);
-          targetToAgentSession.set(cdpSessionId, agentSession);
+          registry.nameTarget(persisted.key, pageName, cdpSessionId, attachResult.targetInfo.targetId, agentSession);
 
           // Update persisted entry with new targetId
           persisted.targetId = attachResult.targetInfo.targetId;
@@ -695,14 +448,12 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
 
         for (const [cdpSessionId, target] of connectedTargets) {
           if (target.targetId === targetId) {
-            const owner = targetToAgentSession.get(cdpSessionId);
+            const owner = registry.getOwner(cdpSessionId);
             // Allow if owned by this session OR unclaimed (for new page creation)
             if (!owner || owner === agentSession) {
               // Claim unclaimed targets
               if (!owner) {
-                targetToAgentSession.set(cdpSessionId, agentSession);
-                const sessionState = getOrCreateSession(agentSession);
-                sessionState.targetSessions.add(cdpSessionId);
+                registry.claimTarget(cdpSessionId, agentSession);
               }
               return { sessionId: cdpSessionId };
             }
@@ -719,7 +470,7 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
         if (targetId) {
           for (const [cdpSessionId, target] of connectedTargets) {
             if (target.targetId === targetId) {
-              const owner = targetToAgentSession.get(cdpSessionId);
+              const owner = registry.getOwner(cdpSessionId);
               // Only return info if owned by this session or unclaimed
               if (!owner || owner === agentSession) {
                 return { targetInfo: { ...target.targetInfo, attached: true } };
@@ -732,7 +483,7 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
         if (sessionId) {
           const target = connectedTargets.get(sessionId);
           if (target) {
-            const owner = targetToAgentSession.get(sessionId);
+            const owner = registry.getOwner(sessionId);
             if (!owner || owner === agentSession) {
               return { targetInfo: { ...target.targetInfo, attached: true } };
             }
@@ -823,10 +574,7 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
 
     // Update activity timestamp for the target
     if (sessionId) {
-      const target = connectedTargets.get(sessionId);
-      if (target) {
-        target.lastActivity = Date.now();
-      }
+      registry.updateActivity(sessionId);
     }
 
     return result;
@@ -850,7 +598,7 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
 
   // List named pages (filtered by session)
   app.get("/pages", (c) => {
-    const agentSession = c.req.header("X-DevBrowser-Session") ?? "default";
+    const agentSession = getAgentSession(c);
     const sessionState = sessions.get(agentSession);
 
     if (!sessionState) {
@@ -905,14 +653,13 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
       return c.json({ error: "Extension reconnecting, please retry" }, 503);
     }
 
-    const agentSession = c.req.header("X-DevBrowser-Session") ?? "default";
+    const agentSession = getAgentSession(c);
     const body = await c.req.json();
     const name = body.name as string;
     const pinned = body.pinned === true; // Pinned pages are exempt from idle cleanup
 
-    if (!name) {
-      return c.json({ error: "name is required" }, 400);
-    }
+    const nameError = validatePageName(name);
+    if (nameError) return c.json({ error: nameError }, 400);
 
     // Validate session and page name don't contain colons (used as key delimiter)
     if (agentSession.includes(":")) {
@@ -951,8 +698,7 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
       }
       // CDP session no longer valid, clean up
       log(`POST /pages session=${agentSession} name=${name} action=stale-cleanup`);
-      namedPages.delete(pageKey);
-      sessionState.pageNames.delete(name);
+      registry.removeStalePageName(pageKey, name, agentSession);
     }
 
     // Check tab limits before creating
@@ -1017,14 +763,8 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
           // Apply pinned flag from request
           target.pinned = pinned;
 
-          // Register with namespaced key
-          namedPages.set(pageKey, cdpSessionId);
-          pageKeyByTargetId.set(target.targetId, pageKey);
-          sessionState.pageNames.add(name);
-
-          // Track reverse mapping for event routing
-          targetToAgentSession.set(cdpSessionId, agentSession);
-          sessionState.targetSessions.add(cdpSessionId);
+          // Register with namespaced key (atomic across all Maps)
+          registry.nameTarget(pageKey, name, cdpSessionId, target.targetId, agentSession);
 
           // Persist the page mapping
           persistedPages = persistedPages.filter((p) => p.key !== pageKey);
@@ -1078,7 +818,7 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
 
   // Delete a named page (filtered by session)
   app.delete("/pages/:name", (c) => {
-    const agentSession = c.req.header("X-DevBrowser-Session") ?? "default";
+    const agentSession = getAgentSession(c);
     const name = c.req.param("name");
     const pageKey = `${agentSession}:${name}`;
 
@@ -1088,19 +828,8 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
       return c.json({ error: "Page not found" }, 404);
     }
 
-    // Clean up mappings
-    namedPages.delete(pageKey);
-    // Also clean up targetId reverse mapping
-    const target = connectedTargets.get(cdpSessionId);
-    if (target) {
-      pageKeyByTargetId.delete(target.targetId);
-    }
-    const sessionState = sessions.get(agentSession);
-    if (sessionState) {
-      sessionState.pageNames.delete(name);
-      sessionState.targetSessions.delete(cdpSessionId);
-    }
-    targetToAgentSession.delete(cdpSessionId);
+    // Clean up mappings (atomic across all Maps)
+    registry.removeNamedPage(pageKey);
 
     // Remove from persistence
     persistedPages = persistedPages.filter((p) => p.key !== pageKey);
@@ -1112,7 +841,7 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
 
   // Pin/unpin a page (pinned pages are exempt from idle cleanup)
   app.patch("/pages/:name", async (c) => {
-    const agentSession = c.req.header("X-DevBrowser-Session") ?? "default";
+    const agentSession = getAgentSession(c);
     const name = c.req.param("name");
     const pageKey = `${agentSession}:${name}`;
 
@@ -1151,8 +880,8 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
 
     return c.json({
       namedPages: namedPages.size,
-      pageKeyByTargetId: pageKeyByTargetId.size,
-      pendingDetach: pendingDetach.size,
+      pageKeyByTargetId: registry.pageKeyByTargetId.size,
+      detaching: registry.countDetaching(),
       connectedTargets: connectedTargets.size,
       sessions: sessions.size,
       persistedPages: persistedPages.length,
@@ -1266,42 +995,26 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
       return c.json({ error: "Extension not connected" }, 503);
     }
 
+    // Atomically remove all pages from registry (returns info for tab closing)
+    const evicted = registry.evictSession(sessionId);
+
     const closedPages: string[] = [];
     const errors: string[] = [];
 
-    // Snapshot page names before iterating (set modified during iteration)
-    const pageNames = Array.from(sessionState.pageNames);
-
-    // Close each page in the session
-    for (const pageName of pageNames) {
-      const pageKey = `${sessionId}:${pageName}`;
-      const cdpSessionId = namedPages.get(pageKey);
-
-      if (cdpSessionId) {
-        const target = connectedTargets.get(cdpSessionId);
-        if (target) {
-          try {
-            await sendToExtension({
-              method: "forwardCDPCommand",
-              params: { method: "Target.closeTarget", params: { targetId: target.targetId } },
-              timeout: 5000,
-            });
-            closedPages.push(pageName);
-          } catch (err) {
-            errors.push(`${pageName}: ${err}`);
-          }
-
-          // Clean up mappings immediately (don't wait for async detach events)
-          pageKeyByTargetId.delete(target.targetId);
-          connectedTargets.delete(cdpSessionId);
+    // Close each tab via extension
+    for (const { pageName, target } of evicted) {
+      if (target) {
+        try {
+          await sendToExtension({
+            method: "forwardCDPCommand",
+            params: { method: "Target.closeTarget", params: { targetId: target.targetId } },
+            timeout: 5000,
+          });
+          closedPages.push(pageName);
+        } catch (err) {
+          errors.push(`${pageName}: ${err}`);
         }
-
-        namedPages.delete(pageKey);
-        targetToAgentSession.delete(cdpSessionId!);
       }
-
-      sessionState.pageNames.delete(pageName);
-      sessionState.targetSessions.delete(cdpSessionId!);
     }
 
     // Remove persistence entries for this session
@@ -1364,7 +1077,7 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
       return c.json({ error: { message: "Extension not connected" } }, 503);
     }
 
-    const agentSession = c.req.header("X-DevBrowser-Session") ?? "default";
+    const agentSession = getAgentSession(c);
     const body = await c.req.json();
     const { page: pageName, method, params } = body as {
       page: string;
@@ -1419,7 +1132,7 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
       return c.json({ error: "Extension not connected" }, 503);
     }
 
-    const agentSession = c.req.header("X-DevBrowser-Session") ?? "default";
+    const agentSession = getAgentSession(c);
     const { page: pageName } = (await c.req.json()) as { page: string };
     const pageKey = `${agentSession}:${pageName}`;
     const cdpSessionId = namedPages.get(pageKey);
@@ -1457,7 +1170,7 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
    * Body: { page: string }
    */
   app.post("/har/stop", async (c) => {
-    const agentSession = c.req.header("X-DevBrowser-Session") ?? "default";
+    const agentSession = getAgentSession(c);
     const { page: pageName } = (await c.req.json()) as { page: string };
     const pageKey = `${agentSession}:${pageName}`;
     const state = harRecorders.get(pageKey);
@@ -1485,7 +1198,7 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
    * GET /har/status — Check if HAR recording is active for a page.
    */
   app.get("/har/status", (c) => {
-    const agentSession = c.req.header("X-DevBrowser-Session") ?? "default";
+    const agentSession = getAgentSession(c);
     const pageName = c.req.query("page");
     if (!pageName) {
       return c.json({ error: "page query param required" }, 400);
@@ -1508,7 +1221,7 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
       return c.json({ error: "Extension not connected" }, 503);
     }
 
-    const agentSession = c.req.header("X-DevBrowser-Session") ?? "default";
+    const agentSession = getAgentSession(c);
     const { page: pageName } = (await c.req.json()) as { page: string };
     const pageKey = `${agentSession}:${pageName}`;
     const cdpSessionId = namedPages.get(pageKey);
@@ -1556,7 +1269,7 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
       return c.json({ error: "Extension not connected" }, 503);
     }
 
-    const agentSession = c.req.header("X-DevBrowser-Session") ?? "default";
+    const agentSession = getAgentSession(c);
     const { page: pageName, action, ref, value } = (await c.req.json()) as {
       page: string;
       action: string;
@@ -1628,9 +1341,8 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
             log("Closing existing extension connection");
             extensionWs.close(4001, "Extension Replaced");
 
-            // Only clear connectedTargets - CDP sessions are invalid after reconnect
-            // Keep namedPages, sessions, targetToAgentSession - recovery will update them
-            connectedTargets.clear();
+            // Clear CDP session state but preserve namedPages/sessions for recovery
+            registry.clearTargetsOnly();
             isRecovering = true;
             for (const pending of extensionPendingRequests.values()) {
               pending.reject(new Error("Extension reconnecting, please retry"));
@@ -1710,8 +1422,9 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
                 targetInfo: targetParams.targetInfo,
                 lastActivity: Date.now(),
                 pinned: false,
+                state: "attached",
               };
-              connectedTargets.set(targetParams.sessionId, target);
+              registry.addTarget(targetParams.sessionId, target);
 
               // Resolve any pending waiter for this targetId (from POST /pages)
               const waiter = pendingTargetWaiters.get(targetParams.targetInfo.targetId);
@@ -1723,46 +1436,22 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
               log(`Target attached: ${targetParams.targetInfo.url} (${targetParams.sessionId})`);
 
               // Check if this is a reattachment after cross-origin navigation
-              // If we have a pending detach for this targetId, cancel it and update mappings
-              const pageKey = pageKeyByTargetId.get(targetParams.targetInfo.targetId);
+              const pageKey = registry.getPageKeyByTargetId(targetParams.targetInfo.targetId);
 
-              // Find and cancel any pending detach for this targetId (regardless of old sessionId)
-              for (const [oldSessionId, pendingInfo] of pendingDetach) {
-                if (pendingInfo.targetId === targetParams.targetInfo.targetId) {
-                  clearTimeout(pendingInfo.timeout);
-                  pendingDetach.delete(oldSessionId);
-                  log(`Cancelled pending detach for ${oldSessionId} - target ${targetParams.targetInfo.targetId} reattached as ${targetParams.sessionId}`);
-
-                  // Clean up the old session from connectedTargets if it's still there
-                  connectedTargets.delete(oldSessionId);
-                  break;
-                }
+              // Cancel any pending detach for this targetId
+              const cancelledOldSession = registry.cancelPendingDetach(targetParams.targetInfo.targetId);
+              if (cancelledOldSession) {
+                log(`Cancelled pending detach for ${cancelledOldSession} - target ${targetParams.targetInfo.targetId} reattached as ${targetParams.sessionId}`);
+                registry.removeTarget(cancelledOldSession);
               }
 
               if (pageKey) {
                 // Update all mappings atomically to point to the new CDP sessionId
                 const oldCdpSessionId = namedPages.get(pageKey);
                 if (oldCdpSessionId && oldCdpSessionId !== targetParams.sessionId) {
-                  // Update namedPages
-                  namedPages.set(pageKey, targetParams.sessionId);
-
-                  // Extract session info and update session state
                   const colonIdx = pageKey.indexOf(":");
-                  if (colonIdx > 0) {
-                    const owningSession = pageKey.slice(0, colonIdx);
-                    const sessionState = sessions.get(owningSession);
-                    if (sessionState) {
-                      sessionState.targetSessions.delete(oldCdpSessionId);
-                      sessionState.targetSessions.add(targetParams.sessionId);
-                    }
-                    // Update targetToAgentSession
-                    targetToAgentSession.delete(oldCdpSessionId);
-                    targetToAgentSession.set(targetParams.sessionId, owningSession);
-                  }
-
-                  // Clean up old session from connectedTargets
-                  connectedTargets.delete(oldCdpSessionId);
-
+                  const owningSession = colonIdx > 0 ? pageKey.slice(0, colonIdx) : "default";
+                  registry.reattachTarget(pageKey, oldCdpSessionId, targetParams.sessionId, owningSession);
                   log(`Updated mappings for ${pageKey}: ${oldCdpSessionId} -> ${targetParams.sessionId} (cross-origin navigation)`);
                 }
               }
@@ -1777,7 +1466,7 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
               const targetId = target?.targetId;
 
               // Find the owning agent session before cleanup
-              const agentSession = targetToAgentSession.get(cdpSessionId);
+              const agentSession = registry.getOwner(cdpSessionId);
 
               // DON'T delete from connectedTargets immediately!
               // Keep it so reattachment logic can find the old session info.
@@ -1786,61 +1475,28 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
               // 2. In the reattachment handler (when new session takes over)
 
               // Check if this session owns a named page
-              let ownedPageKey: string | undefined;
-              for (const [pageKey, sid] of namedPages) {
-                if (sid === cdpSessionId) {
-                  ownedPageKey = pageKey;
-                  break;
-                }
-              }
+              const ownedPageKey = registry.getPageKeyByCdpSession(cdpSessionId);
 
               // If this session owns a named page, defer cleanup to allow for reattachment
               // during cross-origin navigation (new session may attach with same targetId)
               if (ownedPageKey && targetId) {
                 log(`Target detached: ${cdpSessionId} (targetId=${targetId}) - deferring cleanup for potential reattachment`);
 
-                const cleanupTimeout = setTimeout(() => {
-                  pendingDetach.delete(cdpSessionId);
-
+                registry.deferDetach(cdpSessionId, targetId, () => {
                   // Check if a new session has taken over this page
                   const currentSessionId = namedPages.get(ownedPageKey!);
                   if (currentSessionId && currentSessionId !== cdpSessionId) {
-                    // A new session took over - don't clean up (reattachment handler already did)
                     log(`Skipping cleanup for ${cdpSessionId} - page ${ownedPageKey} now owned by ${currentSessionId}`);
                     return;
                   }
 
                   // No reattachment happened - do the full cleanup
                   log(`Cleanup timeout fired for ${cdpSessionId} - no reattachment, cleaning up`);
-
-                  // Now delete from connectedTargets
-                  connectedTargets.delete(cdpSessionId);
-
-                  namedPages.delete(ownedPageKey!);
-                  if (targetId) {
-                    pageKeyByTargetId.delete(targetId);
-                  }
-
-                  // Extract session and name from pageKey
-                  const colonIdx = ownedPageKey!.indexOf(":");
-                  if (colonIdx > 0) {
-                    const owningSession = ownedPageKey!.slice(0, colonIdx);
-                    const pageName = ownedPageKey!.slice(colonIdx + 1);
-                    const sessionState = sessions.get(owningSession);
-                    if (sessionState) {
-                      sessionState.pageNames.delete(pageName);
-                      sessionState.targetSessions.delete(cdpSessionId);
-                    }
-                  }
-                  targetToAgentSession.delete(cdpSessionId);
-                }, 500); // 500ms grace period for reattachment
-
-                // Store timeout WITH targetId for reattachment matching
-                pendingDetach.set(cdpSessionId, { timeout: cleanupTimeout, targetId });
+                  registry.removeNamedPage(ownedPageKey!);
+                }, 500);
               } else {
                 // No named page - clean up immediately
-                connectedTargets.delete(cdpSessionId);
-                targetToAgentSession.delete(cdpSessionId);
+                registry.removeUnnamedTarget(cdpSessionId);
                 log(`Target detached: ${cdpSessionId} (no named page - immediate cleanup)`);
               }
             } else if (method === "Target.targetInfoChanged") {
@@ -1850,7 +1506,7 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
               for (const target of connectedTargets.values()) {
                 if (target.targetId === infoParams.targetInfo.targetId) {
                   target.targetInfo = infoParams.targetInfo;
-                  agentSession = targetToAgentSession.get(target.sessionId);
+                  agentSession = registry.getOwner(target.sessionId);
                   break;
                 }
               }
@@ -1879,7 +1535,7 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
                   log(`Page.frameNavigated: Updated URL for ${sessionId} from ${oldUrl} to ${frameParams.frame.url}`);
 
                   // Also update persisted pages
-                  const pageKey = pageKeyByTargetId.get(target.targetId);
+                  const pageKey = registry.getPageKeyByTargetId(target.targetId);
                   if (pageKey) {
                     const persistedEntry = persistedPages.find((p) => p.key === pageKey);
                     if (persistedEntry) {
@@ -1908,10 +1564,7 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
 
               // Update activity timestamp for any CDP event
               if (sessionId) {
-                const target = connectedTargets.get(sessionId);
-                if (target) {
-                  target.lastActivity = Date.now();
-                }
+                registry.updateActivity(sessionId);
               }
             }
           }
@@ -1933,16 +1586,7 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
           extensionWs = null;
 
           // Clear in-memory state but PRESERVE persistedPages for recovery
-          connectedTargets.clear();
-          namedPages.clear();
-          pageKeyByTargetId.clear();
-          // Cancel any pending detach timeouts
-          for (const pendingInfo of pendingDetach.values()) {
-            clearTimeout(pendingInfo.timeout);
-          }
-          pendingDetach.clear();
-          sessions.clear();
-          targetToAgentSession.clear();
+          registry.clear();
           harRecorders.clear();
         },
 

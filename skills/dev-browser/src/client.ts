@@ -23,115 +23,27 @@ import { getSnapshotScript } from "./snapshot/browser-script";
 import { createWaczFromHar } from "./wacz.js";
 import { createLogger } from "./logging.js";
 import { wrapWithCleanErrors } from "./errors.js";
+import {
+  type HarEntry,
+  type HarLog,
+  type PendingHarEntry,
+  processNetworkEvent,
+} from "./har.js";
 
 const logger = createLogger("client");
 
 // Re-export for consumers
 export type { Page, Locator, Keyboard, Mouse } from "./page.js";
 export { CDPPage } from "./cdp-page.js";
+export type { HarCookie, HarPostData, HarContent, HarEntry, HarLog } from "./har.js";
 
-// HAR types (exported for consumers)
-export interface HarCookie {
-  name: string;
-  value: string;
-  path?: string;
-  domain?: string;
-  expires?: string;
-  httpOnly?: boolean;
-  secure?: boolean;
-  sameSite?: string;
-}
-
-export interface HarPostData {
-  mimeType: string;
-  text: string;
-}
-
-export interface HarContent {
-  size: number;
-  mimeType: string;
-  text?: string;
-  encoding?: string;
-}
-
-export interface HarEntry {
-  startedDateTime: string;
-  time: number;
-  request: {
-    method: string;
-    url: string;
-    httpVersion: string;
-    headers: Array<{ name: string; value: string }>;
-    queryString: Array<{ name: string; value: string }>;
-    cookies: HarCookie[];
-    headersSize: number;
-    bodySize: number;
-    postData?: HarPostData;
-  };
-  response: {
-    status: number;
-    statusText: string;
-    httpVersion: string;
-    headers: Array<{ name: string; value: string }>;
-    cookies: HarCookie[];
-    content: HarContent;
-    headersSize: number;
-    bodySize: number;
-  };
-  timings: { send: number; wait: number; receive: number };
-}
-
-export interface HarLog {
-  log: {
-    version: string;
-    creator: { name: string; version: string };
-    entries: HarEntry[];
-  };
-}
-
-// State for an active HAR recording
-interface PendingHarEntry {
-  entry: Partial<HarEntry>;
-  startTime: number;
-  requestId: string;
-  mimeType?: string;
-}
-
+// State for an active HAR recording (client-specific: has CDPSession and body fetch tracking)
 interface HarRecorderState {
   cdpSession: CDPSession;
   pending: Map<string, PendingHarEntry>;
   completed: HarEntry[];
   pendingBodyFetches: number;
   bodyFetchDone?: () => void; // Called when pendingBodyFetches reaches 0
-}
-
-// Helper: parse Cookie header into HarCookie array
-function parseCookieHeader(cookieHeader: string): HarCookie[] {
-  if (!cookieHeader) return [];
-  return cookieHeader.split(";").map((part) => {
-    const [name, ...rest] = part.trim().split("=");
-    return { name: name ?? "", value: rest.join("=") };
-  });
-}
-
-// Helper: parse Set-Cookie header into HarCookie
-function parseSetCookie(setCookie: string): HarCookie {
-  const parts = setCookie.split(";").map((p) => p.trim());
-  const [nameValue, ...attrs] = parts;
-  const [name, ...rest] = (nameValue ?? "").split("=");
-  const cookie: HarCookie = { name: name ?? "", value: rest.join("=") };
-
-  for (const attr of attrs) {
-    const [key, val] = attr.split("=");
-    const lowerKey = key?.toLowerCase();
-    if (lowerKey === "path") cookie.path = val;
-    else if (lowerKey === "domain") cookie.domain = val;
-    else if (lowerKey === "expires") cookie.expires = val;
-    else if (lowerKey === "httponly") cookie.httpOnly = true;
-    else if (lowerKey === "secure") cookie.secure = true;
-    else if (lowerKey === "samesite") cookie.sameSite = val;
-  }
-  return cookie;
 }
 
 /**
@@ -468,7 +380,6 @@ export interface PageOptions {
 const DEFAULT_PORTS = {
   standalone: 9222,
   extension: 9224,
-  electron: 9225,
 } as const;
 
 /**
@@ -479,16 +390,9 @@ export interface ConnectOptions {
    * Server mode. Determines which port to connect to if serverUrl is not specified.
    * - "standalone": Fresh Chromium browser (port 9222)
    * - "extension": User's Chrome via extension (port 9224)
-   * - "electron": Connect directly to Electron app's CDP (port 9225)
    * @default "standalone"
    */
-  mode?: "standalone" | "extension" | "electron";
-  /**
-   * CDP port for electron mode. The Electron app must be started with
-   * --remote-debugging-port=XXXX
-   * @default 9225
-   */
-  cdpPort?: number;
+  mode?: "standalone" | "extension";
   /**
    * Session ID for multi-agent isolation.
    * Each session has its own namespace for page names.
@@ -612,65 +516,226 @@ export interface DevBrowserClient {
    * Check if HAR recording is active for a page.
    */
   isRecordingHar: (name: string) => boolean;
-  /**
-   * Save HAR as WACZ (Web Archive Collection Zipped) file.
-   * WACZ is a standard format for portable web archives.
-   *
-   * @param har - HAR data from stopHarRecording()
-   * @param outputPath - Path for the .wacz file
-   * @param options - Optional title and description
-   */
-  saveAsWacz: (
-    har: HarLog,
-    outputPath: string,
-    options?: { title?: string; description?: string }
-  ) => Promise<void>;
-  /**
-   * Stop HAR recording and save as WACZ in one step.
-   * Recording is auto-started by page(), so this is usually all you need.
-   *
-   * @param name - Page name
-   * @param options - Output path (defaults to ~/.dev-browser/archives/<name>-<timestamp>.wacz),
-   *                  title, and description
-   * @returns Path to the saved WACZ file
-   */
-  saveWacz: (
-    name: string,
-    options?: { outputPath?: string; title?: string; description?: string }
-  ) => Promise<string>;
-  /**
-   * Save a complete archive bundle: WACZ + rendered HTML + PDF in a single .zip.
-   * This is the recommended way to archive a page for search engine ingestion.
-   *
-   * Recording is auto-started by page(), so typical usage is:
-   * ```typescript
-   * const page = await client.page("research");
-   * await page.goto("https://example.com");
-   * const archivePath = await client.saveArchive("research");
-   * ```
-   *
-   * The .zip contains:
-   * - `<name>.wacz` — WARC-based web archive (network traffic)
-   * - `<name>.html` — as-rendered DOM snapshot
-   * - `<name>.pdf`  — PDF rendering of the page
-   *
-   * @param name - Page name
-   * @param options - Output path, title, description, and format controls
-   * @returns Path to the saved .zip archive
-   */
-  saveArchive: (
-    name: string,
-    options?: {
-      outputPath?: string;
-      title?: string;
-      description?: string;
-      /** Skip PDF capture (e.g., if page.pdf() fails in headed mode) */
-      skipPdf?: boolean;
-      /** Skip rendered HTML capture */
-      skipHtml?: boolean;
-    }
-  ) => Promise<string>;
 }
+
+// ============================================================================
+// Shared HTTP helpers used by both extension and standalone modes
+// ============================================================================
+
+async function fetchServerInfo(
+  serverUrl: string,
+  defaultMode: "launch" | "extension"
+): Promise<ServerInfo> {
+  const res = await fetch(serverUrl);
+  if (!res.ok) {
+    throw new Error(`Server returned ${res.status}: ${await res.text()}`);
+  }
+  const info = (await res.json()) as {
+    wsEndpoint: string;
+    mode?: string;
+    extensionConnected?: boolean;
+  };
+  return {
+    wsEndpoint: info.wsEndpoint,
+    mode: (info.mode as "launch" | "extension") ?? defaultMode,
+    extensionConnected: info.extensionConnected,
+  };
+}
+
+async function fetchAllTargets(
+  serverUrl: string,
+  sessionHeaders: Record<string, string>
+): Promise<BrowserTarget[]> {
+  const res = await fetch(`${serverUrl}/all-targets`, {
+    headers: sessionHeaders,
+  });
+  const data = (await res.json()) as { error?: string; targets?: BrowserTarget[] };
+  if (data.error) throw new Error(data.error);
+  return data.targets ?? [];
+}
+
+async function fetchCloseTarget(
+  serverUrl: string,
+  sessionHeaders: Record<string, string>,
+  tabId: number
+): Promise<void> {
+  const res = await fetch(`${serverUrl}/close-target`, {
+    method: "POST",
+    headers: { ...sessionHeaders, "Content-Type": "application/json" },
+    body: JSON.stringify({ tabId }),
+  });
+  const data = (await res.json()) as { error?: string; success?: boolean };
+  if (data.error) throw new Error(data.error);
+}
+
+async function fetchCleanup(
+  serverUrl: string,
+  sessionHeaders: Record<string, string>,
+  pattern: string
+): Promise<{ closed: number; urls: string[] }> {
+  const res = await fetch(`${serverUrl}/cleanup`, {
+    method: "POST",
+    headers: { ...sessionHeaders, "Content-Type": "application/json" },
+    body: JSON.stringify({ pattern }),
+  });
+  const data = (await res.json()) as { error?: string; closed?: number; urls?: string[] };
+  if (data.error) throw new Error(data.error);
+  return { closed: data.closed ?? 0, urls: data.urls ?? [] };
+}
+
+async function fetchPin(
+  serverUrl: string,
+  sessionHeaders: Record<string, string>,
+  name: string,
+  pinned: boolean
+): Promise<void> {
+  const res = await fetch(
+    `${serverUrl}/pages/${encodeURIComponent(name)}`,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", ...sessionHeaders },
+      body: JSON.stringify({ pinned }),
+    }
+  );
+  if (!res.ok) {
+    throw new Error(`Failed to ${pinned ? "pin" : "unpin"} page: ${await res.text()}`);
+  }
+}
+
+async function deleteSessionPages(
+  serverUrl: string,
+  sessionHeaders: Record<string, string>,
+  session: string
+): Promise<{ closed: number; pages: string[] }> {
+  const res = await fetch(
+    `${serverUrl}/sessions/${encodeURIComponent(session)}`,
+    { method: "DELETE", headers: sessionHeaders }
+  );
+  const data = (await res.json()) as { error?: string; closed?: number; pages?: string[] };
+  if (data.error) throw new Error(data.error);
+  return { closed: data.closed ?? 0, pages: data.pages ?? [] };
+}
+
+export interface SaveWaczOptions {
+  outputPath?: string;
+  title?: string;
+  description?: string;
+}
+
+/**
+ * Stop HAR recording and save as WACZ in one step.
+ * Recording is auto-started by client.page(), so this is usually all you need.
+ *
+ * @returns Path to the saved WACZ file
+ */
+export async function saveWacz(
+  client: DevBrowserClient,
+  name: string,
+  options?: SaveWaczOptions
+): Promise<string> {
+  const har = await client.stopHarRecording(name);
+  const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const archiveDir = join(homedir(), ".dev-browser", "archives");
+  await mkdir(archiveDir, { recursive: true });
+  const outputPath = options?.outputPath ?? join(archiveDir, `${name}-${timestamp}.wacz`);
+  await createWaczFromHar(har, outputPath, {
+    title: options?.title,
+    description: options?.description,
+  });
+  logger.info(`Saved WACZ to ${outputPath}`);
+  return outputPath;
+}
+
+export interface SaveArchiveOptions extends SaveWaczOptions {
+  /** Skip PDF capture (e.g., if page.pdf() fails in headed mode) */
+  skipPdf?: boolean;
+  /** Skip rendered HTML capture */
+  skipHtml?: boolean;
+}
+
+/**
+ * Save a complete archive bundle: WACZ + rendered HTML + PDF in a single .zip.
+ *
+ * The .zip contains:
+ * - `<name>.wacz` — WARC-based web archive (network traffic)
+ * - `<name>.html` — as-rendered DOM snapshot
+ * - `<name>.pdf`  — PDF rendering of the page
+ *
+ * @returns Path to the saved .zip archive
+ */
+export async function saveArchive(
+  client: DevBrowserClient,
+  name: string,
+  options?: SaveArchiveOptions
+): Promise<string> {
+  const page = await client.page(name, { record: false });
+
+  // Capture rendered HTML
+  let renderedHtml: string | null = null;
+  if (!options?.skipHtml) {
+    try {
+      renderedHtml = await page.content();
+    } catch (err) {
+      logger.warn(`Failed to capture rendered HTML for "${name}":`, err);
+    }
+  }
+
+  // Capture PDF
+  let pdfBuffer: Buffer | null = null;
+  if (!options?.skipPdf) {
+    try {
+      pdfBuffer = await page.pdf({ printBackground: true });
+    } catch (err) {
+      logger.warn(`Failed to capture PDF for "${name}":`, err);
+    }
+  }
+
+  // Stop recording and create WACZ
+  const har = await client.stopHarRecording(name);
+  const tempDir = mkdtempSync(join(tmpdir(), "dev-browser-archive-"));
+  const waczPath = join(tempDir, `${name}.wacz`);
+  await createWaczFromHar(har, waczPath, {
+    title: options?.title,
+    description: options?.description,
+  });
+
+  // Determine output path
+  const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const archiveDir = join(homedir(), ".dev-browser", "archives");
+  await mkdir(archiveDir, { recursive: true });
+  const outputPath = options?.outputPath ?? join(archiveDir, `${name}-${timestamp}.zip`);
+
+  // Bundle into .zip
+  await new Promise<void>((resolve, reject) => {
+    const output = createWriteStream(outputPath);
+    const zip = archiver("zip", { zlib: { level: 9 } });
+    output.on("close", resolve);
+    zip.on("error", reject);
+    zip.pipe(output);
+    zip.file(waczPath, { name: `${name}.wacz` });
+    if (renderedHtml !== null) {
+      zip.append(renderedHtml, { name: `${name}.html` });
+    }
+    if (pdfBuffer !== null) {
+      zip.append(pdfBuffer, { name: `${name}.pdf` });
+    }
+    zip.finalize();
+  });
+
+  rmSync(tempDir, { recursive: true });
+
+  const parts = [
+    "wacz",
+    renderedHtml !== null ? "html" : null,
+    pdfBuffer !== null ? "pdf" : null,
+  ].filter(Boolean);
+  logger.info(`Saved archive to ${outputPath} (${parts.join(" + ")})`);
+  return outputPath;
+}
+
+// ============================================================================
+// Extension mode client
+// ============================================================================
 
 /**
  * Extension mode client — no Playwright, just HTTP RPC to the relay.
@@ -772,32 +837,15 @@ async function connectExtensionMode(
     },
 
     async pin(name: string, pinned = true): Promise<void> {
-      const res = await fetch(
-        `${serverUrl}/pages/${encodeURIComponent(name)}`,
-        {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json", ...sessionHeaders },
-          body: JSON.stringify({ pinned }),
-        }
-      );
-      if (!res.ok) {
-        throw new Error(`Failed to ${pinned ? "pin" : "unpin"} page: ${await res.text()}`);
-      }
+      return fetchPin(serverUrl, sessionHeaders, name, pinned);
     },
 
     async disconnect(): Promise<void> {
-      // For auto-generated sessions, close all pages
       if (isAutoGenerated) {
         try {
-          const res = await fetch(
-            `${serverUrl}/sessions/${encodeURIComponent(session)}`,
-            { method: "DELETE", headers: sessionHeaders }
-          );
-          const data = (await res.json()) as { closed?: number };
-          if (data.closed && data.closed > 0) {
-            logger.debug(
-              `Auto-closed ${data.closed} page(s) for ephemeral session`
-            );
+          const result = await deleteSessionPages(serverUrl, sessionHeaders, session);
+          if (result.closed > 0) {
+            logger.debug(`Auto-closed ${result.closed} page(s) for ephemeral session`);
           }
         } catch {
           // Server may be unreachable
@@ -823,8 +871,6 @@ async function connectExtensionMode(
       _name: string,
       _ref: string
     ): Promise<ElementHandle | null> {
-      // ElementHandle requires Playwright — not available in extension mode.
-      // Use CDPPage.clickRef() / fillRef() instead.
       logger.warn(
         "selectSnapshotRef is not available in extension mode. " +
           "Use page.clickRef(ref) or page.fillRef(ref, value) instead."
@@ -832,83 +878,16 @@ async function connectExtensionMode(
       return null;
     },
 
-    async getServerInfo(): Promise<ServerInfo> {
-      const res = await fetch(serverUrl);
-      if (!res.ok) {
-        throw new Error(`Server returned ${res.status}: ${await res.text()}`);
-      }
-      const info = (await res.json()) as {
-        wsEndpoint: string;
-        mode?: string;
-        extensionConnected?: boolean;
-      };
-      return {
-        wsEndpoint: info.wsEndpoint,
-        mode: (info.mode as "launch" | "extension") ?? "extension",
-        extensionConnected: info.extensionConnected,
-      };
-    },
-
-    getSession(): string {
-      return session;
-    },
-
-    async allTargets(): Promise<BrowserTarget[]> {
-      const res = await fetch(`${serverUrl}/all-targets`, {
-        headers: sessionHeaders,
-      });
-      const data = (await res.json()) as {
-        error?: string;
-        targets?: BrowserTarget[];
-      };
-      if (data.error) throw new Error(data.error);
-      return data.targets ?? [];
-    },
-
-    async closeTarget(tabId: number): Promise<void> {
-      const res = await fetch(`${serverUrl}/close-target`, {
-        method: "POST",
-        headers: { ...sessionHeaders, "Content-Type": "application/json" },
-        body: JSON.stringify({ tabId }),
-      });
-      const data = (await res.json()) as {
-        error?: string;
-        success?: boolean;
-      };
-      if (data.error) throw new Error(data.error);
-    },
-
-    async cleanup(pattern: string): Promise<{ closed: number; urls: string[] }> {
-      const res = await fetch(`${serverUrl}/cleanup`, {
-        method: "POST",
-        headers: { ...sessionHeaders, "Content-Type": "application/json" },
-        body: JSON.stringify({ pattern }),
-      });
-      const data = (await res.json()) as {
-        error?: string;
-        closed?: number;
-        urls?: string[];
-      };
-      if (data.error) throw new Error(data.error);
-      return { closed: data.closed ?? 0, urls: data.urls ?? [] };
-    },
+    getServerInfo: () => fetchServerInfo(serverUrl, "extension"),
+    getSession: () => session,
+    allTargets: () => fetchAllTargets(serverUrl, sessionHeaders),
+    closeTarget: (tabId: number) => fetchCloseTarget(serverUrl, sessionHeaders, tabId),
+    cleanup: (pattern: string) => fetchCleanup(serverUrl, sessionHeaders, pattern),
 
     async closeAll(): Promise<{ closed: number; pages: string[] }> {
-      const res = await fetch(
-        `${serverUrl}/sessions/${encodeURIComponent(session)}`,
-        { method: "DELETE", headers: sessionHeaders }
-      );
-      const data = (await res.json()) as {
-        error?: string;
-        closed?: number;
-        pages?: string[];
-      };
-      if (data.error) throw new Error(data.error);
-      const result = { closed: data.closed ?? 0, pages: data.pages ?? [] };
+      const result = await deleteSessionPages(serverUrl, sessionHeaders, session);
       if (result.closed > 0) {
-        logger.debug(
-          `Closed ${result.closed} page(s): ${result.pages.join(", ")}`
-        );
+        logger.debug(`Closed ${result.closed} page(s): ${result.pages.join(", ")}`);
       }
       harPages.clear();
       return result;
@@ -934,136 +913,7 @@ async function connectExtensionMode(
       return stopRecording(name);
     },
 
-    isRecordingHar(name: string): boolean {
-      return harPages.has(name);
-    },
-
-    async saveAsWacz(
-      har: HarLog,
-      outputPath: string,
-      options?: { title?: string; description?: string }
-    ): Promise<void> {
-      await createWaczFromHar(har, outputPath, options);
-      logger.info(`Saved WACZ to ${outputPath}`);
-    },
-
-    async saveWacz(
-      name: string,
-      options?: {
-        outputPath?: string;
-        title?: string;
-        description?: string;
-      }
-    ): Promise<string> {
-      const har = await stopRecording(name);
-      const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-      const archiveDir = join(homedir(), ".dev-browser", "archives");
-      await mkdir(archiveDir, { recursive: true });
-      const outputPath =
-        options?.outputPath ?? join(archiveDir, `${name}-${timestamp}.wacz`);
-      await createWaczFromHar(har, outputPath, {
-        title: options?.title,
-        description: options?.description,
-      });
-      logger.info(`Saved WACZ to ${outputPath}`);
-      return outputPath;
-    },
-
-    async saveArchive(
-      name: string,
-      options?: {
-        outputPath?: string;
-        title?: string;
-        description?: string;
-        skipPdf?: boolean;
-        skipHtml?: boolean;
-      }
-    ): Promise<string> {
-      // Get the page to capture HTML and PDF before stopping recording
-      const pageRes = await fetch(`${serverUrl}/pages`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", ...sessionHeaders },
-        body: JSON.stringify({ name } satisfies GetPageRequest),
-      });
-      if (!pageRes.ok) {
-        throw new Error(`Failed to get page for archive: ${await pageRes.text()}`);
-      }
-      const pageInfo = (await pageRes.json()) as GetPageResponse & {
-        url?: string;
-      };
-      const page = new CDPPage(serverUrl, name, session, pageInfo.url);
-
-      // Capture rendered HTML
-      let renderedHtml: string | null = null;
-      if (!options?.skipHtml) {
-        try {
-          renderedHtml = await page.content();
-        } catch (err) {
-          logger.warn(
-            `Failed to capture rendered HTML for "${name}":`,
-            err
-          );
-        }
-      }
-
-      // Capture PDF
-      let pdfBuffer: Buffer | null = null;
-      if (!options?.skipPdf) {
-        try {
-          pdfBuffer = await page.pdf({ printBackground: true });
-        } catch (err) {
-          logger.warn(
-            `Failed to capture PDF for "${name}":`,
-            err
-          );
-        }
-      }
-
-      // Stop recording and create WACZ
-      const har = await stopRecording(name);
-      const tempDir = mkdtempSync(join(tmpdir(), "dev-browser-archive-"));
-      const waczPath = join(tempDir, `${name}.wacz`);
-      await createWaczFromHar(har, waczPath, {
-        title: options?.title,
-        description: options?.description,
-      });
-
-      // Determine output path
-      const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-      const archiveDir = join(homedir(), ".dev-browser", "archives");
-      await mkdir(archiveDir, { recursive: true });
-      const outputPath =
-        options?.outputPath ?? join(archiveDir, `${name}-${timestamp}.zip`);
-
-      // Bundle into .zip
-      await new Promise<void>((resolve, reject) => {
-        const output = createWriteStream(outputPath);
-        const zip = archiver("zip", { zlib: { level: 9 } });
-        output.on("close", resolve);
-        zip.on("error", reject);
-        zip.pipe(output);
-        zip.file(waczPath, { name: `${name}.wacz` });
-        if (renderedHtml !== null) {
-          zip.append(renderedHtml, { name: `${name}.html` });
-        }
-        if (pdfBuffer !== null) {
-          zip.append(pdfBuffer, { name: `${name}.pdf` });
-        }
-        zip.finalize();
-      });
-
-      rmSync(tempDir, { recursive: true });
-
-      const parts = [
-        "wacz",
-        renderedHtml !== null ? "html" : null,
-        pdfBuffer !== null ? "pdf" : null,
-      ].filter(Boolean);
-      logger.info(
-        `Saved archive to ${outputPath} (${parts.join(" + ")})`
-      );
-      return outputPath;
-    },
+    isRecordingHar: (name: string) => harPages.has(name),
   };
 }
 
@@ -1126,12 +976,10 @@ export async function connect(
     );
   }
 
-  // ---- Standalone / Electron mode: Playwright-based implementation ----
+  // ---- Standalone mode: Playwright-based implementation ----
   let browser: Browser | null = null;
   let wsEndpoint: string | null = null;
   let connectingPromise: Promise<Browser> | null = null;
-  const isElectronMode = opts.mode === "electron";
-  const electronCdpPort = opts.cdpPort ?? DEFAULT_PORTS.electron;
   let cachedServerMode: "launch" | "extension" | null = null;
 
   // Track active HAR recordings: pageName -> recorder state
@@ -1167,29 +1015,6 @@ export async function connect(
     // Start new connection with mutex
     connectingPromise = (async () => {
       try {
-        if (isElectronMode) {
-          // Electron mode: connect directly to Electron's CDP endpoint
-          // Fetch wsEndpoint from Electron's /json/version endpoint
-          const cdpUrl = `http://127.0.0.1:${electronCdpPort}/json/version`;
-          logger.debug(`Connecting to Electron CDP at ${cdpUrl}...`);
-
-          const res = await fetch(cdpUrl);
-          if (!res.ok) {
-            throw new Error(
-              `Could not connect to Electron CDP at port ${electronCdpPort}. ` +
-              `Make sure the Electron app is running with --remote-debugging-port=${electronCdpPort}`
-            );
-          }
-          const info = (await res.json()) as { webSocketDebuggerUrl: string };
-          wsEndpoint = info.webSocketDebuggerUrl;
-          logger.debug(`Electron CDP WebSocket: ${wsEndpoint}`);
-
-          // Connect to Electron via CDP
-          browser = await chromium.connectOverCDP(wsEndpoint);
-          return browser;
-        }
-
-        // Standard mode: fetch wsEndpoint from dev-browser server
         const res = await fetch(serverUrl);
         if (!res.ok) {
           throw new Error(`Server returned ${res.status}: ${await res.text()}`);
@@ -1246,29 +1071,6 @@ export async function connect(
   async function getPage(name: string, options?: PageOptions): Promise<PlaywrightPage> {
     // Connect to browser first
     const b = await ensureConnected();
-
-    // Electron mode: get pages directly without server
-    if (isElectronMode) {
-      const allPages = b.contexts().flatMap((ctx) => ctx.pages());
-
-      // Filter out DevTools pages
-      const appPages = allPages.filter((p) => {
-        const url = p.url();
-        return !url.startsWith("devtools://") && !url.startsWith("chrome-devtools://");
-      });
-
-      logger.debug(`Electron mode: found ${allPages.length} page(s), ${appPages.length} app page(s)`);
-
-      if (appPages.length === 0) {
-        throw new Error(`No app pages available in Electron. Is the window open?`);
-      }
-
-      // Return first non-devtools page
-      // TODO: Support multiple windows by name/URL matching
-      const page = appPages[0]!;
-      logger.debug(`Using page: ${page.url()}`);
-      return page;
-    }
 
     // Request the page from server (creates if doesn't exist)
     const res = await fetch(`${serverUrl}/pages`, {
@@ -1364,131 +1166,34 @@ export async function connect(
 
     await cdpSession.send("Network.enable");
 
-    cdpSession.on("Network.requestWillBeSent", (params) => {
-      const url = new URL(params.request.url);
-      const headers = Object.entries(params.request.headers).map(([n, v]) => ({
-        name: n,
-        value: String(v),
-      }));
-      const cookieHeader = params.request.headers["Cookie"] ?? params.request.headers["cookie"] ?? "";
-      const cookies = parseCookieHeader(cookieHeader);
-      const postData = params.request.postData
-        ? {
-            mimeType: params.request.headers["Content-Type"] ??
-                      params.request.headers["content-type"] ?? "application/octet-stream",
-            text: params.request.postData,
-          }
-        : undefined;
+    // Wrap fetchBody with pendingBodyFetches tracking for collectHarRecording()
+    const fetchBody = async (requestId: string) => {
+      state.pendingBodyFetches++;
+      try {
+        const { body, base64Encoded } = await cdpSession.send("Network.getResponseBody", {
+          requestId,
+        });
+        return { body, base64Encoded };
+      } catch {
+        return null;
+      } finally {
+        state.pendingBodyFetches--;
+        if (state.pendingBodyFetches === 0 && state.bodyFetchDone) {
+          state.bodyFetchDone();
+        }
+      }
+    };
 
-      state.pending.set(params.requestId, {
-        startTime: params.timestamp * 1000,
-        requestId: params.requestId,
-        entry: {
-          startedDateTime: new Date(params.wallTime * 1000).toISOString(),
-          request: {
-            method: params.request.method,
-            url: params.request.url,
-            httpVersion: "HTTP/1.1",
-            headers,
-            queryString: [...url.searchParams].map(([n, v]) => ({ name: n, value: v })),
-            cookies,
-            headersSize: -1,
-            bodySize: params.request.postData?.length ?? 0,
-            postData,
-          },
-        },
+    for (const event of [
+      "Network.requestWillBeSent",
+      "Network.responseReceived",
+      "Network.loadingFinished",
+      "Network.loadingFailed",
+    ] as const) {
+      cdpSession.on(event, (params) => {
+        processNetworkEvent(state.pending, state.completed, event, params, fetchBody);
       });
-    });
-
-    cdpSession.on("Network.responseReceived", (params) => {
-      const pending = state.pending.get(params.requestId);
-      if (!pending) return;
-
-      const timing = params.response.timing;
-      const headers = Object.entries(params.response.headers).map(([n, v]) => ({
-        name: n,
-        value: String(v),
-      }));
-
-      const resCookies: HarCookie[] = [];
-      for (const [hName, hValue] of Object.entries(params.response.headers)) {
-        if (hName.toLowerCase() === "set-cookie") {
-          resCookies.push(parseSetCookie(String(hValue)));
-        }
-      }
-
-      pending.mimeType = params.response.mimeType;
-      pending.entry.response = {
-        status: params.response.status,
-        statusText: params.response.statusText,
-        httpVersion: params.response.protocol ?? "HTTP/1.1",
-        headers,
-        cookies: resCookies,
-        content: {
-          size: params.response.encodedDataLength ?? 0,
-          mimeType: params.response.mimeType,
-        },
-        headersSize: -1,
-        bodySize: -1,
-      };
-
-      if (timing) {
-        pending.entry.timings = {
-          send: timing.sendEnd - timing.sendStart,
-          wait: timing.receiveHeadersEnd - timing.sendEnd,
-          receive: 0,
-        };
-      }
-    });
-
-    cdpSession.on("Network.loadingFinished", async (params) => {
-      const pending = state.pending.get(params.requestId);
-      if (!pending?.entry.response) return;
-
-      const endTime = params.timestamp * 1000;
-      pending.entry.time = endTime - pending.startTime;
-      pending.entry.response.bodySize = params.encodedDataLength;
-
-      if (pending.entry.timings) {
-        pending.entry.timings.receive = Math.max(
-          0,
-          pending.entry.time - (pending.entry.timings.send + pending.entry.timings.wait)
-        );
-      } else {
-        pending.entry.timings = { send: 0, wait: pending.entry.time, receive: 0 };
-      }
-
-      const isText = pending.mimeType?.startsWith("text/") ||
-                     pending.mimeType?.includes("json") ||
-                     pending.mimeType?.includes("xml") ||
-                     pending.mimeType?.includes("javascript");
-      if (isText && params.encodedDataLength < 1024 * 1024) {
-        state.pendingBodyFetches++;
-        try {
-          const { body, base64Encoded } = await cdpSession.send("Network.getResponseBody", {
-            requestId: params.requestId,
-          });
-          pending.entry.response.content.text = body;
-          if (base64Encoded) {
-            pending.entry.response.content.encoding = "base64";
-          }
-        } catch {
-          // Body may not be available
-        } finally {
-          state.pendingBodyFetches--;
-          if (state.pendingBodyFetches === 0 && state.bodyFetchDone) {
-            state.bodyFetchDone();
-          }
-        }
-      }
-
-      state.completed.push(pending.entry as HarEntry);
-      state.pending.delete(params.requestId);
-    });
-
-    cdpSession.on("Network.loadingFailed", (params) => {
-      state.pending.delete(params.requestId);
-    });
+    }
 
     return state;
   }
@@ -1553,13 +1258,6 @@ export async function connect(
     },
 
     async list(): Promise<string[]> {
-      if (isElectronMode) {
-        // Electron mode: list page URLs from browser
-        const b = await ensureConnected();
-        const allPages = b.contexts().flatMap((ctx) => ctx.pages());
-        return allPages.map((p) => p.url());
-      }
-
       const res = await fetch(`${serverUrl}/pages`, {
         headers: sessionHeaders,
       });
@@ -1568,14 +1266,7 @@ export async function connect(
     },
 
     async close(name: string): Promise<void> {
-      // Clean up any active HAR recording for this page
       await discardHarRecording(name);
-
-      if (isElectronMode) {
-        // Electron mode: can't close windows via CDP, just log
-        logger.debug(`Electron mode: close("${name}") is a no-op`);
-        return;
-      }
 
       const res = await fetch(`${serverUrl}/pages/${encodeURIComponent(name)}`, {
         method: "DELETE",
@@ -1587,45 +1278,19 @@ export async function connect(
       }
     },
 
-    async pin(name: string, pinned = true): Promise<void> {
-      const res = await fetch(
-        `${serverUrl}/pages/${encodeURIComponent(name)}`,
-        {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json", ...sessionHeaders },
-          body: JSON.stringify({ pinned }),
-        }
-      );
-      if (!res.ok) {
-        throw new Error(`Failed to ${pinned ? "pin" : "unpin"} page: ${await res.text()}`);
-      }
-    },
+    pin: (name: string, pinned = true) => fetchPin(serverUrl, sessionHeaders, name, pinned),
 
     async disconnect(): Promise<void> {
-      // Clean up all active HAR recordings
       for (const name of [...harRecorders.keys()]) {
         await discardHarRecording(name);
-      }
-
-      if (isElectronMode) {
-        // Electron mode: just disconnect CDP, don't try to close pages
-        if (browser) {
-          await browser.close();
-          browser = null;
-        }
-        return;
       }
 
       // For auto-generated sessions, close all pages first (they can't be reconnected anyway)
       if (isAutoGenerated) {
         try {
-          const res = await fetch(`${serverUrl}/sessions/${encodeURIComponent(session)}`, {
-            method: "DELETE",
-            headers: sessionHeaders,
-          });
-          const data = (await res.json()) as { closed?: number };
-          if (data.closed && data.closed > 0) {
-            logger.debug(`Auto-closed ${data.closed} page(s) for ephemeral session`);
+          const result = await deleteSessionPages(serverUrl, sessionHeaders, session);
+          if (result.closed > 0) {
+            logger.debug(`Auto-closed ${result.closed} page(s) for ephemeral session`);
           }
         } catch {
           // Server may be unreachable, continue with disconnect
@@ -1727,71 +1392,14 @@ export async function connect(
       return element;
     },
 
-    async getServerInfo(): Promise<ServerInfo> {
-      const res = await fetch(serverUrl);
-      if (!res.ok) {
-        throw new Error(`Server returned ${res.status}: ${await res.text()}`);
-      }
-      const info = (await res.json()) as {
-        wsEndpoint: string;
-        mode?: string;
-        extensionConnected?: boolean;
-      };
-      return {
-        wsEndpoint: info.wsEndpoint,
-        mode: (info.mode as "launch" | "extension") ?? "launch",
-        extensionConnected: info.extensionConnected,
-      };
-    },
-
-    getSession(): string {
-      return session;
-    },
-
-    async allTargets(): Promise<BrowserTarget[]> {
-      const res = await fetch(`${serverUrl}/all-targets`, {
-        headers: sessionHeaders,
-      });
-      const data = (await res.json()) as { error?: string; targets?: BrowserTarget[] };
-      if (data.error) throw new Error(data.error);
-      return data.targets ?? [];
-    },
-
-    async closeTarget(tabId: number): Promise<void> {
-      const res = await fetch(`${serverUrl}/close-target`, {
-        method: "POST",
-        headers: { ...sessionHeaders, "Content-Type": "application/json" },
-        body: JSON.stringify({ tabId }),
-      });
-      const data = (await res.json()) as { error?: string; success?: boolean };
-      if (data.error) throw new Error(data.error);
-    },
-
-    async cleanup(pattern: string): Promise<{ closed: number; urls: string[] }> {
-      const res = await fetch(`${serverUrl}/cleanup`, {
-        method: "POST",
-        headers: { ...sessionHeaders, "Content-Type": "application/json" },
-        body: JSON.stringify({ pattern }),
-      });
-      const data = (await res.json()) as { error?: string; closed?: number; urls?: string[] };
-      if (data.error) throw new Error(data.error);
-      return { closed: data.closed ?? 0, urls: data.urls ?? [] };
-    },
+    getServerInfo: () => fetchServerInfo(serverUrl, "launch"),
+    getSession: () => session,
+    allTargets: () => fetchAllTargets(serverUrl, sessionHeaders),
+    closeTarget: (tabId: number) => fetchCloseTarget(serverUrl, sessionHeaders, tabId),
+    cleanup: (pattern: string) => fetchCleanup(serverUrl, sessionHeaders, pattern),
 
     async closeAll(): Promise<{ closed: number; pages: string[] }> {
-      if (isElectronMode) {
-        logger.debug(`Electron mode: closeAll() is a no-op`);
-        return { closed: 0, pages: [] };
-      }
-
-      const res = await fetch(`${serverUrl}/sessions/${encodeURIComponent(session)}`, {
-        method: "DELETE",
-        headers: sessionHeaders,
-      });
-      const data = (await res.json()) as { error?: string; closed?: number; pages?: string[] };
-      if (data.error) throw new Error(data.error);
-
-      const result = { closed: data.closed ?? 0, pages: data.pages ?? [] };
+      const result = await deleteSessionPages(serverUrl, sessionHeaders, session);
       if (result.closed > 0) {
         logger.debug(`Closed ${result.closed} page(s): ${result.pages.join(", ")}`);
       }
@@ -1802,7 +1410,6 @@ export async function connect(
       if (harRecorders.has(name)) {
         throw new Error(`HAR recording already active for page "${name}"`);
       }
-
       const page = await getPage(name);
       const state = await setupHarRecording(page);
       harRecorders.set(name, state);
@@ -1813,117 +1420,6 @@ export async function connect(
       return collectHarRecording(name);
     },
 
-    isRecordingHar(name: string): boolean {
-      return harRecorders.has(name);
-    },
-
-    async saveAsWacz(
-      har: HarLog,
-      outputPath: string,
-      options?: { title?: string; description?: string }
-    ): Promise<void> {
-      await createWaczFromHar(har, outputPath, options);
-      logger.info(`Saved WACZ to ${outputPath}`);
-    },
-
-    async saveWacz(
-      name: string,
-      options?: { outputPath?: string; title?: string; description?: string }
-    ): Promise<string> {
-      const har = await collectHarRecording(name);
-
-      // Default path: ~/.dev-browser/archives/<name>-<ISO-timestamp>.wacz
-      const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-      const archiveDir = join(homedir(), ".dev-browser", "archives");
-      await mkdir(archiveDir, { recursive: true });
-      const outputPath = options?.outputPath ?? join(archiveDir, `${name}-${timestamp}.wacz`);
-
-      await createWaczFromHar(har, outputPath, {
-        title: options?.title,
-        description: options?.description,
-      });
-      logger.info(`Saved WACZ to ${outputPath}`);
-      return outputPath;
-    },
-
-    async saveArchive(
-      name: string,
-      options?: {
-        outputPath?: string;
-        title?: string;
-        description?: string;
-        skipPdf?: boolean;
-        skipHtml?: boolean;
-      }
-    ): Promise<string> {
-      // Get the live page before stopping recording
-      const page = await getPage(name);
-
-      // Capture rendered HTML
-      let renderedHtml: string | null = null;
-      if (!options?.skipHtml) {
-        try {
-          renderedHtml = await page.content();
-        } catch (err) {
-          logger.warn(`Failed to capture rendered HTML for "${name}":`, err);
-        }
-      }
-
-      // Capture PDF
-      let pdfBuffer: Buffer | null = null;
-      if (!options?.skipPdf) {
-        try {
-          pdfBuffer = await page.pdf({ format: "Letter", printBackground: true });
-        } catch (err) {
-          logger.warn(`Failed to capture PDF for "${name}":`, err);
-        }
-      }
-
-      // Stop recording and create WACZ in temp directory
-      const har = await collectHarRecording(name);
-      const tempDir = mkdtempSync(join(tmpdir(), "dev-browser-archive-"));
-      const waczPath = join(tempDir, `${name}.wacz`);
-      await createWaczFromHar(har, waczPath, {
-        title: options?.title,
-        description: options?.description,
-      });
-
-      // Determine output path
-      const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-      const archiveDir = join(homedir(), ".dev-browser", "archives");
-      await mkdir(archiveDir, { recursive: true });
-      const outputPath = options?.outputPath ?? join(archiveDir, `${name}-${timestamp}.zip`);
-
-      // Bundle into .zip
-      await new Promise<void>((resolve, reject) => {
-        const output = createWriteStream(outputPath);
-        const zip = archiver("zip", { zlib: { level: 9 } });
-
-        output.on("close", resolve);
-        zip.on("error", reject);
-        zip.pipe(output);
-
-        zip.file(waczPath, { name: `${name}.wacz` });
-        if (renderedHtml !== null) {
-          zip.append(renderedHtml, { name: `${name}.html` });
-        }
-        if (pdfBuffer !== null) {
-          zip.append(pdfBuffer, { name: `${name}.pdf` });
-        }
-
-        zip.finalize();
-      });
-
-      // Clean up temp
-      rmSync(tempDir, { recursive: true });
-
-      const parts = [
-        "wacz",
-        renderedHtml !== null ? "html" : null,
-        pdfBuffer !== null ? "pdf" : null,
-      ].filter(Boolean);
-      logger.info(`Saved archive to ${outputPath} (${parts.join(" + ")})`);
-      return outputPath;
-    },
+    isRecordingHar: (name: string) => harRecorders.has(name),
   }, "client");
 }

@@ -255,23 +255,15 @@ describe("Relay Server", () => {
   beforeAll(async () => {
     port = randomPort();
     relay = await serveRelay({ port, host: "127.0.0.1" });
-  });
-
-  afterAll(async () => {
-    await relay.stop();
-  });
-
-  beforeEach(async () => {
+    // Connect extension once for all tests (tests use unique session names for isolation)
     ext = new MockExtension(port);
     await ext.connect();
-    // Let the extension connection stabilize and recovery complete
     await new Promise((r) => setTimeout(r, 600));
   });
 
-  afterEach(async () => {
+  afterAll(async () => {
     await ext.disconnect();
-    // Wait for relay to clean up state after extension disconnect
-    await new Promise((r) => setTimeout(r, 100));
+    await relay.stop();
   });
 
   // --------------------------------------------------------------------------
@@ -566,7 +558,7 @@ describe("Relay Server", () => {
       // Wait for relay to detect disconnect
       await new Promise((r) => setTimeout(r, 100));
 
-      const { status, body } = await fetchJson(port, "/pages", {
+      const { status } = await fetchJson(port, "/pages", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name: "orphan" }),
@@ -574,7 +566,7 @@ describe("Relay Server", () => {
       });
       expect(status).toBe(503);
 
-      // Reconnect for afterEach cleanup
+      // Reconnect for remaining tests
       ext = new MockExtension(port);
       await ext.connect();
       await new Promise((r) => setTimeout(r, 600));
@@ -617,21 +609,14 @@ describe("Relay Server - Cross-origin Navigation", () => {
   beforeAll(async () => {
     port = randomPort();
     relay = await serveRelay({ port, host: "127.0.0.1" });
-  });
-
-  afterAll(async () => {
-    await relay.stop();
-  });
-
-  beforeEach(async () => {
     ext = new MockExtension(port);
     await ext.connect();
     await new Promise((r) => setTimeout(r, 600));
   });
 
-  afterEach(async () => {
+  afterAll(async () => {
     await ext.disconnect();
-    await new Promise((r) => setTimeout(r, 100));
+    await relay.stop();
   });
 
   test("cross-origin navigation updates session mapping without losing page", async () => {

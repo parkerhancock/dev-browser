@@ -210,12 +210,14 @@ HAR recording starts automatically when you call `client.page()`. When you're do
 | `<name>.pdf` | PDF rendering (Letter) | Human-readable reference |
 
 ```typescript
+import { connect, navigateTo, saveArchive } from "@/client.js";
+
 const client = await connect();
 const page = await client.page("research");
 await navigateTo(page, "https://example.com");
 
 // One call: stops recording, captures HTML + PDF, bundles into .zip
-const archivePath = await client.saveArchive("research");
+const archivePath = await saveArchive(client, "research");
 // => ~/.dev-browser/archives/research-2026-02-05T13-30-00-000Z.zip
 
 await client.disconnect();
@@ -224,7 +226,9 @@ await client.disconnect();
 For just the network archive without HTML/PDF, use `saveWacz()`:
 
 ```typescript
-const waczPath = await client.saveWacz("research");
+import { saveWacz } from "@/client.js";
+
+const waczPath = await saveWacz(client, "research");
 ```
 
 The recording lifecycle is fully automatic:

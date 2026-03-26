@@ -954,6 +954,21 @@ type LocatorStrategy =
   | { type: "label"; text: string | RegExp; exact?: boolean }
   | { type: "placeholder"; text: string | RegExp; exact?: boolean };
 
+/**
+ * Build a JS `.filter()` predicate for text matching against a property accessor.
+ * @param varName - the filter callback variable name (e.g. "el")
+ * @param accessor - JS expression for the text value (e.g. "el.textContent || ''")
+ * @param text - string or RegExp to match against
+ * @param exact - if true, use strict equality instead of includes
+ */
+function textFilterExpr(varName: string, accessor: string, text: string | RegExp, exact?: boolean): string {
+  if (text instanceof RegExp) {
+    return `new RegExp(${JSON.stringify(text.source)}, ${JSON.stringify(text.flags)}).test(${accessor})`;
+  }
+  const str = JSON.stringify(text);
+  return exact ? `${accessor}.trim() === ${str}` : `${accessor}.includes(${str})`;
+}
+
 export class CDPLocator implements Locator {
   private page: CDPPage;
   private strategy: LocatorStrategy;
@@ -974,9 +989,8 @@ export class CDPLocator implements Locator {
       case "css": {
         const sel = JSON.stringify(s.selector);
         if (s.testIdPattern) {
-          const pattern = s.testIdPattern.source;
-          const flags = s.testIdPattern.flags;
-          return `Array.from(document.querySelectorAll('[data-testid]')).filter(el => new RegExp(${JSON.stringify(pattern)}, ${JSON.stringify(flags)}).test(el.getAttribute('data-testid') || ''))`;
+          const pred = textFilterExpr("el", "el.getAttribute('data-testid') || ''", s.testIdPattern);
+          return `Array.from(document.querySelectorAll('[data-testid]')).filter(el => ${pred})`;
         }
         return `Array.from(document.querySelectorAll(${sel}))`;
       }
@@ -985,52 +999,20 @@ export class CDPLocator implements Locator {
         if (!s.name) {
           return `Array.from(document.querySelectorAll(${roleSel}))`;
         }
-        if (s.name instanceof RegExp) {
-          const pattern = s.name.source;
-          const flags = s.name.flags;
-          return `Array.from(document.querySelectorAll(${roleSel})).filter(el => new RegExp(${JSON.stringify(pattern)}, ${JSON.stringify(flags)}).test((el.getAttribute('aria-label') || el.textContent || '').trim()))`;
-        }
-        const name = JSON.stringify(s.name);
-        if (s.exact) {
-          return `Array.from(document.querySelectorAll(${roleSel})).filter(el => (el.getAttribute('aria-label') || el.textContent || '').trim() === ${name})`;
-        }
-        return `Array.from(document.querySelectorAll(${roleSel})).filter(el => (el.getAttribute('aria-label') || el.textContent || '').trim().includes(${name}))`;
+        const pred = textFilterExpr("el", "(el.getAttribute('aria-label') || el.textContent || '').trim()", s.name, s.exact);
+        return `Array.from(document.querySelectorAll(${roleSel})).filter(el => ${pred})`;
       }
       case "text": {
-        if (s.text instanceof RegExp) {
-          const pattern = s.text.source;
-          const flags = s.text.flags;
-          return `Array.from(document.querySelectorAll('*')).filter(el => el.children.length === 0 && new RegExp(${JSON.stringify(pattern)}, ${JSON.stringify(flags)}).test(el.textContent || ''))`;
-        }
-        const text = JSON.stringify(s.text);
-        if (s.exact) {
-          return `Array.from(document.querySelectorAll('*')).filter(el => el.children.length === 0 && (el.textContent || '').trim() === ${text})`;
-        }
-        return `Array.from(document.querySelectorAll('*')).filter(el => el.children.length === 0 && (el.textContent || '').includes(${text}))`;
+        const pred = textFilterExpr("el", "el.textContent || ''", s.text, s.exact);
+        return `Array.from(document.querySelectorAll('*')).filter(el => el.children.length === 0 && ${pred})`;
       }
       case "label": {
-        if (s.text instanceof RegExp) {
-          const pattern = s.text.source;
-          const flags = s.text.flags;
-          return `Array.from(document.querySelectorAll('label')).filter(l => new RegExp(${JSON.stringify(pattern)}, ${JSON.stringify(flags)}).test(l.textContent || '')).map(l => l.htmlFor ? document.getElementById(l.htmlFor) : l.querySelector('input,textarea,select')).filter(Boolean)`;
-        }
-        const text = JSON.stringify(s.text);
-        const cmp = s.exact
-          ? `(l.textContent || '').trim() === ${text}`
-          : `(l.textContent || '').includes(${text})`;
-        return `Array.from(document.querySelectorAll('label')).filter(l => ${cmp}).map(l => l.htmlFor ? document.getElementById(l.htmlFor) : l.querySelector('input,textarea,select')).filter(Boolean)`;
+        const pred = textFilterExpr("l", "l.textContent || ''", s.text, s.exact);
+        return `Array.from(document.querySelectorAll('label')).filter(l => ${pred}).map(l => l.htmlFor ? document.getElementById(l.htmlFor) : l.querySelector('input,textarea,select')).filter(Boolean)`;
       }
       case "placeholder": {
-        if (s.text instanceof RegExp) {
-          const pattern = s.text.source;
-          const flags = s.text.flags;
-          return `Array.from(document.querySelectorAll('[placeholder]')).filter(el => new RegExp(${JSON.stringify(pattern)}, ${JSON.stringify(flags)}).test(el.getAttribute('placeholder') || ''))`;
-        }
-        const text = JSON.stringify(s.text);
-        const cmp = s.exact
-          ? `(el.getAttribute('placeholder') || '') === ${text}`
-          : `(el.getAttribute('placeholder') || '').includes(${text})`;
-        return `Array.from(document.querySelectorAll('[placeholder]')).filter(el => ${cmp})`;
+        const pred = textFilterExpr("el", "el.getAttribute('placeholder') || ''", s.text, s.exact);
+        return `Array.from(document.querySelectorAll('[placeholder]')).filter(el => ${pred})`;
       }
     }
   }
@@ -1056,133 +1038,97 @@ export class CDPLocator implements Locator {
     return null;
   }
 
+  // ---- Internal: evaluate on the resolved element ----
+
+  /** Evaluate a JS snippet with `el` bound to the resolved element. Returns the expression result. */
+  private evalOnElement<T = any>(returnExpr: string): Promise<T> {
+    return this.page.evaluate(`(() => { const el = ${this.elementExpression()}; ${returnExpr} })()`);
+  }
+
+  /** Scroll element to center and return its center coordinates. */
+  private async elementCenter(): Promise<{ x: number; y: number }> {
+    return this.evalOnElement(
+      `el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' }); const rect = el.getBoundingClientRect(); return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };`
+    );
+  }
+
   // ---- Interaction ----
 
   async click(_options?: { timeout?: number }): Promise<void> {
     const sel = this.resolveSelector();
-    if (sel) {
-      await this.page.click(sel);
-      return;
-    }
-    const elemExpr = this.elementExpression();
-    const { x, y } = await this.page.evaluate(
-      `(() => { const el = ${elemExpr}; el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' }); const rect = el.getBoundingClientRect(); return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 }; })()`
-    );
+    if (sel) { await this.page.click(sel); return; }
+    const { x, y } = await this.elementCenter();
     await this.page.mouse.click(x, y);
   }
 
   async fill(value: string, _options?: { timeout?: number }): Promise<void> {
     const sel = this.resolveSelector();
-    if (sel) {
-      await this.page.fill(sel, value);
-      return;
-    }
+    if (sel) { await this.page.fill(sel, value); return; }
     const val = JSON.stringify(value);
-    await this.page.evaluate(
-      `(() => { const el = ${this.elementExpression()}; el.focus(); el.value = ''; el.value = ${val}; el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); })()`
-    );
+    await this.evalOnElement(`el.focus(); el.value = ''; el.value = ${val}; el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true }));`);
   }
 
-  async type(
-    text: string,
-    options?: { delay?: number; timeout?: number }
-  ): Promise<void> {
-    // Focus the element first
-    await this.page.evaluate(
-      `(() => { const el = ${this.elementExpression()}; el.focus(); })()`
-    );
+  async type(text: string, options?: { delay?: number; timeout?: number }): Promise<void> {
+    await this.evalOnElement(`el.focus();`);
     await this.page.keyboard.type(text, { delay: options?.delay });
   }
 
   async hover(_options?: { timeout?: number }): Promise<void> {
-    const center = await this.page.evaluate(
-      `(() => { const el = ${this.elementExpression()}; el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' }); const rect = el.getBoundingClientRect(); return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 }; })()`
-    );
-    await this.page.mouse.move(center.x, center.y);
+    const { x, y } = await this.elementCenter();
+    await this.page.mouse.move(x, y);
   }
 
   async check(_options?: { timeout?: number }): Promise<void> {
-    await this.page.evaluate(
-      `(() => { const el = ${this.elementExpression()}; if (!el.checked) el.click(); })()`
-    );
+    await this.evalOnElement(`if (!el.checked) el.click();`);
   }
 
   async uncheck(_options?: { timeout?: number }): Promise<void> {
-    await this.page.evaluate(
-      `(() => { const el = ${this.elementExpression()}; if (el.checked) el.click(); })()`
-    );
+    await this.evalOnElement(`if (el.checked) el.click();`);
   }
 
-  async selectOption(
-    values: any,
-    _options?: { timeout?: number }
-  ): Promise<string[]> {
+  async selectOption(values: any, _options?: { timeout?: number }): Promise<string[]> {
     const vals = JSON.stringify(Array.isArray(values) ? values : [values]);
-    return this.page.evaluate(
-      `(() => {
-        const el = ${this.elementExpression()};
-        const valuesToSelect = ${vals};
-        const selected = [];
-        for (const opt of el.options) {
-          opt.selected = valuesToSelect.some(v =>
-            typeof v === 'string' ? opt.value === v :
-            (v.value != null && opt.value === v.value) ||
-            (v.label != null && opt.label === v.label) ||
-            (v.index != null && opt.index === v.index)
-          );
-          if (opt.selected) selected.push(opt.value);
-        }
-        el.dispatchEvent(new Event('input', { bubbles: true }));
-        el.dispatchEvent(new Event('change', { bubbles: true }));
-        return selected;
-      })()`
+    return this.evalOnElement(
+      `const valuesToSelect = ${vals}; const selected = [];
+       for (const opt of el.options) {
+         opt.selected = valuesToSelect.some(v =>
+           typeof v === 'string' ? opt.value === v :
+           (v.value != null && opt.value === v.value) ||
+           (v.label != null && opt.label === v.label) ||
+           (v.index != null && opt.index === v.index));
+         if (opt.selected) selected.push(opt.value);
+       }
+       el.dispatchEvent(new Event('input', { bubbles: true }));
+       el.dispatchEvent(new Event('change', { bubbles: true }));
+       return selected;`
     );
   }
 
-  async press(
-    key: string,
-    options?: { delay?: number; timeout?: number }
-  ): Promise<void> {
-    await this.page.evaluate(
-      `(() => { const el = ${this.elementExpression()}; el.focus(); })()`
-    );
+  async press(key: string, options?: { delay?: number; timeout?: number }): Promise<void> {
+    await this.evalOnElement(`el.focus();`);
     await this.page.keyboard.press(key, { delay: options?.delay });
   }
 
   async focus(_options?: { timeout?: number }): Promise<void> {
-    await this.page.evaluate(
-      `(() => { const el = ${this.elementExpression()}; el.focus(); })()`
-    );
+    await this.evalOnElement(`el.focus();`);
   }
 
   // ---- Content ----
 
   async textContent(_options?: { timeout?: number }): Promise<string | null> {
-    return this.page.evaluate(
-      `(() => { const el = ${this.elementExpression()}; return el.textContent; })()`
-    );
+    return this.evalOnElement(`return el.textContent;`);
   }
 
   async innerText(_options?: { timeout?: number }): Promise<string> {
-    return this.page.evaluate(
-      `(() => { const el = ${this.elementExpression()}; return el.innerText; })()`
-    );
+    return this.evalOnElement(`return el.innerText;`);
   }
 
   async innerHTML(_options?: { timeout?: number }): Promise<string> {
-    return this.page.evaluate(
-      `(() => { const el = ${this.elementExpression()}; return el.innerHTML; })()`
-    );
+    return this.evalOnElement(`return el.innerHTML;`);
   }
 
-  async getAttribute(
-    name: string,
-    _options?: { timeout?: number }
-  ): Promise<string | null> {
-    const attr = JSON.stringify(name);
-    return this.page.evaluate(
-      `(() => { const el = ${this.elementExpression()}; return el.getAttribute(${attr}); })()`
-    );
+  async getAttribute(name: string, _options?: { timeout?: number }): Promise<string | null> {
+    return this.evalOnElement(`return el.getAttribute(${JSON.stringify(name)});`);
   }
 
   async isVisible(_options?: { timeout?: number }): Promise<boolean> {
@@ -1196,15 +1142,11 @@ export class CDPLocator implements Locator {
   }
 
   async isChecked(_options?: { timeout?: number }): Promise<boolean> {
-    return this.page.evaluate(
-      `(() => { const el = ${this.elementExpression()}; return !!el.checked; })()`
-    );
+    return this.evalOnElement(`return !!el.checked;`);
   }
 
   async inputValue(_options?: { timeout?: number }): Promise<string> {
-    return this.page.evaluate(
-      `(() => { const el = ${this.elementExpression()}; return el.value ?? ''; })()`
-    );
+    return this.evalOnElement(`return el.value ?? '';`);
   }
 
   async count(): Promise<number> {

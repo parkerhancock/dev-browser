@@ -1,7 +1,7 @@
 import { chromium } from "playwright";
 import type { Browser, BrowserContext, Page, CDPSession } from "playwright";
 import { beforeAll, afterAll, beforeEach, afterEach, describe, test, expect } from "vitest";
-import type { HarLog, HarEntry, HarCookie, PageOptions, DevBrowserClient } from "../client";
+import type { HarLog, HarEntry, HarCookie, PageOptions } from "../client";
 import { navigateTo } from "../client";
 import { createWaczFromHar } from "../wacz";
 import { existsSync, mkdtempSync, rmSync, createWriteStream } from "node:fs";
@@ -432,45 +432,15 @@ describe("PageOptions interface", () => {
   });
 });
 
-describe("DevBrowserClient interface", () => {
-  test("saveWacz is defined on DevBrowserClient type", () => {
-    // Type-level check: ensure saveWacz exists with correct signature
-    const _check = (client: DevBrowserClient) => {
-      // This ensures the type has saveWacz
-      const fn: (name: string, options?: {
-        outputPath?: string;
-        title?: string;
-        description?: string;
-      }) => Promise<string> = client.saveWacz;
-      return fn;
-    };
-    expect(_check).toBeDefined();
+describe("Standalone archive functions", () => {
+  test("saveWacz is an exported function", async () => {
+    const { saveWacz } = await import("../client.js");
+    expect(typeof saveWacz).toBe("function");
   });
 
-  test("saveAsWacz is still available for backward compat", () => {
-    const _check = (client: DevBrowserClient) => {
-      const fn: (
-        har: HarLog,
-        outputPath: string,
-        options?: { title?: string; description?: string }
-      ) => Promise<void> = client.saveAsWacz;
-      return fn;
-    };
-    expect(_check).toBeDefined();
-  });
-
-  test("saveArchive is defined with correct signature", () => {
-    const _check = (client: DevBrowserClient) => {
-      const fn: (name: string, options?: {
-        outputPath?: string;
-        title?: string;
-        description?: string;
-        skipPdf?: boolean;
-        skipHtml?: boolean;
-      }) => Promise<string> = client.saveArchive;
-      return fn;
-    };
-    expect(_check).toBeDefined();
+  test("saveArchive is an exported function", async () => {
+    const { saveArchive } = await import("../client.js");
+    expect(typeof saveArchive).toBe("function");
   });
 });
 

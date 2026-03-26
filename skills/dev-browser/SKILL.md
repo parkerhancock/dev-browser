@@ -139,12 +139,19 @@ When you ask Claude to fetch a URL, it routes to the `webfetch` agent which:
 ### Direct CLI Usage
 
 ```bash
-cd ~/.claude/skills/dev-browser && npx tsx scripts/fetch.ts "https://example.com"
-```
+cd skills/dev-browser && npx tsx <<'EOF'
+import { connect, navigateTo } from "@/client.js";
+import TurndownService from "turndown";
 
-Options:
-- `--timeout=N`: Max wait time in ms (default: 30000)
-- `--mode=extension|standalone`: Browser mode (default: extension)
+const client = await connect({ ephemeral: true });
+const page = await client.page("fetch");
+await navigateTo(page, "https://example.com");
+const html = await page.evaluate(() => document.body.innerHTML);
+const md = new TurndownService().turndown(html);
+console.log(md);
+await client.disconnect();
+EOF
+```
 
 ## Session Types
 
@@ -267,14 +274,14 @@ await client.closeTarget(tabId); // Close a specific tab by tabId
 const result = await client.cleanup("^about:blank$"); // Close tabs matching URL pattern
 
 // ARIA Snapshot methods
-const snapshot = await client.getAISnapshot("name"); // Get accessibility tree (10s timeout)
-const snapshot = await client.getAISnapshot("name", { timeout: 5000 }); // Custom timeout
+const snapshot = await client.getAISnapshot("name"); // Get accessibility tree
 const element = await client.selectSnapshotRef("name", "e5"); // Get element by ref
 
 // Archiving (HAR recording auto-starts on page())
-const archivePath = await client.saveArchive("name"); // .zip with WACZ + HTML + PDF
-const waczPath = await client.saveWacz("name");        // WACZ only
-client.isRecordingHar("name");                          // Check if recording
+import { saveArchive, saveWacz } from "@/client.js";
+const archivePath = await saveArchive(client, "name"); // .zip with WACZ + HTML + PDF
+const waczPath = await saveWacz(client, "name");        // WACZ only
+client.isRecordingHar("name");                           // Check if recording
 ```
 
 The `page` object implements the unified `Page` interface — a Playwright-compatible subset with ~45 methods + keyboard/mouse/locators. In standalone mode it's a real Playwright Page; in extension mode it's a `CDPPage` (same interface, different transport). **Use `navigateTo(page, url)` instead of `page.goto(url)` in standalone mode** — it never hangs on problematic sites. In extension mode, `page.goto()` works fine.
@@ -495,17 +502,19 @@ The recommended way to capture a page. Produces a `.zip` bundle with three files
 | `<name>.pdf` | PDF rendering (Letter) | Human-readable reference |
 
 ```typescript
+import { saveArchive } from "@/client.js";
+
 const page = await client.page("research");
 await navigateTo(page, "https://example.com");
 
 // One call — stops recording, captures HTML + PDF, bundles into .zip
-const archivePath = await client.saveArchive("research");
+const archivePath = await saveArchive(client, "research");
 // => ~/.dev-browser/archives/research-2026-02-05T13-30-00-000Z.zip
 ```
 
 Options:
 ```typescript
-await client.saveArchive("research", {
+await saveArchive(client, "research", {
   outputPath: "tmp/my-archive.zip",  // Custom path
   title: "Research on topic X",       // WACZ metadata
   skipPdf: true,                      // Skip PDF (e.g., headed mode)
@@ -518,7 +527,9 @@ await client.saveArchive("research", {
 For just the network archive without HTML/PDF:
 
 ```typescript
-const waczPath = await client.saveWacz("research");
+import { saveWacz } from "@/client.js";
+
+const waczPath = await saveWacz(client, "research");
 ```
 
 ### Manual PDF Generation
@@ -532,7 +543,6 @@ await navigateTo(page, "https://example.com/report");
 const pdfBuffer = await page.pdf({
   format: "Letter",
   printBackground: true,
-  margin: { top: "1cm", bottom: "1cm" }
 });
 
 import { writeFileSync } from "fs";

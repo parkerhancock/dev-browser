@@ -6,6 +6,7 @@
  */
 
 import { connect } from "@/client.js";
+import { createWaczFromHar } from "@/wacz.js";
 import { existsSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { execSync } from "node:child_process";
@@ -36,7 +37,7 @@ async function main() {
     console.log(`✓ Captured ${har.log.entries.length} entries`);
 
     // Convert to WACZ
-    await client.saveAsWacz(har, WACZ_PATH, {
+    await createWaczFromHar(har, WACZ_PATH, {
       title: "Test Archive",
       description: "Test WACZ creation from dev-browser",
     });

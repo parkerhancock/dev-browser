@@ -1,8 +1,15 @@
-import express, { type Express, type Request, type Response } from "express";
+import { Hono } from "hono";
+import { serve as honoServe } from "@hono/node-server";
 import { chromium, type BrowserContext, type Page } from "playwright";
 import { mkdirSync } from "fs";
 import { join } from "path";
-import type { Socket } from "net";
+import {
+  getAgentSession,
+  validatePageName,
+  withTimeout,
+  TAB_WARNING_THRESHOLD,
+  TAB_LIMIT,
+} from "./types";
 import type {
   ServeOptions,
   GetPageRequest,
@@ -13,6 +20,7 @@ import type {
 import { createLogger } from "./logging.js";
 
 export type { ServeOptions, GetPageResponse, ListPagesResponse, ServerInfoResponse };
+
 
 export interface DevBrowserServer {
   wsEndpoint: string;
@@ -42,16 +50,6 @@ async function fetchWithRetry(
   throw new Error(`Failed after ${maxRetries} retries: ${lastError?.message}`);
 }
 
-// Helper to add timeout to promises
-function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
-  return Promise.race([
-    promise,
-    new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error(`Timeout: ${message}`)), ms)
-    ),
-  ]);
-}
-
 export async function serve(options: ServeOptions = {}): Promise<DevBrowserServer> {
   const port = options.port ?? 9222;
   const headless = options.headless ?? true;
@@ -74,16 +72,12 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
     ? join(profileDir, "browser-data")
     : join(process.cwd(), ".browser-data");
 
-  // Create directory if it doesn't exist
   mkdirSync(userDataDir, { recursive: true });
   console.log(`Using persistent browser profile: ${userDataDir}`);
-
   console.log("Launching browser with persistent context...");
 
-  // Launch persistent context - this persists cookies, localStorage, cache, etc.
+  // Launch persistent context - preserves cookies, localStorage, cache
   const launchArgs = [`--remote-debugging-port=${cdpPort}`];
-
-  // When running headed, prevent the browser from stealing focus on launch
   if (!headless) {
     launchArgs.push("--silent-launch", "--no-startup-window");
   }
@@ -94,35 +88,27 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
   });
   console.log("Browser launched with persistent profile...");
 
-  // Get the CDP WebSocket endpoint from Chrome's JSON API (with retry for slow startup)
+  // Get the CDP WebSocket endpoint from Chrome's JSON API
   const cdpResponse = await fetchWithRetry(`http://127.0.0.1:${cdpPort}/json/version`);
   const cdpInfo = (await cdpResponse.json()) as { webSocketDebuggerUrl: string };
   const wsEndpoint = cdpInfo.webSocketDebuggerUrl;
   console.log(`CDP WebSocket endpoint: ${wsEndpoint}`);
 
-  // Registry entry type for page tracking
+  // Registry types
   interface PageEntry {
     page: Page;
     targetId: string;
   }
 
-  // Session state for agent isolation
   interface SessionState {
     pageNames: Set<string>;
   }
 
-  // Registry: namespaced key (session:name) -> PageEntry
   const registry = new Map<string, PageEntry>();
   const sessions = new Map<string, SessionState>();
 
-  // Tab limits
-  const TAB_WARNING_THRESHOLD = 3;
-  const TAB_LIMIT = 5;
-
-  // Logging
   const { log, logFile } = createLogger("server", { stdout: true });
 
-  // Helper to get or create session state
   function getOrCreateSession(sessionId: string): SessionState {
     let session = sessions.get(sessionId);
     if (!session) {
@@ -132,13 +118,10 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
     return session;
   }
 
-  // Helper to count pages for a session
   function getSessionPageCount(sessionId: string): number {
-    const session = sessions.get(sessionId);
-    return session ? session.pageNames.size : 0;
+    return sessions.get(sessionId)?.pageNames.size ?? 0;
   }
 
-  // Helper to get CDP targetId for a page
   async function getTargetId(page: Page): Promise<string> {
     const cdpSession = await context.newCDPSession(page);
     try {
@@ -149,79 +132,57 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
     }
   }
 
-  // Express server for page management
-  const app: Express = express();
-  app.use(express.json());
+  // Hono app
+  const app = new Hono();
 
   // GET / - server info
-  app.get("/", (_req: Request, res: Response) => {
-    const response: ServerInfoResponse = { wsEndpoint };
-    res.json(response);
+  app.get("/", (c) => {
+    return c.json({ wsEndpoint } satisfies ServerInfoResponse);
   });
 
   // GET /pages - list pages for this session
-  app.get("/pages", (req: Request, res: Response) => {
-    const agentSession = req.get("X-DevBrowser-Session") ?? "default";
+  app.get("/pages", (c) => {
+    const agentSession = getAgentSession(c);
     const session = sessions.get(agentSession);
-    const response: ListPagesResponse = {
+    return c.json({
       pages: session ? Array.from(session.pageNames) : [],
-    };
-    res.json(response);
+    } satisfies ListPagesResponse);
   });
 
   // POST /pages - get or create page (namespaced by session)
-  app.post("/pages", async (req: Request, res: Response) => {
-    const agentSession = req.get("X-DevBrowser-Session") ?? "default";
-    const body = req.body as GetPageRequest;
+  app.post("/pages", async (c) => {
+    const agentSession = getAgentSession(c);
+    const body = (await c.req.json()) as GetPageRequest;
     const { name, viewport } = body;
 
-    if (!name || typeof name !== "string") {
-      res.status(400).json({ error: "name is required and must be a string" });
-      return;
-    }
+    const nameError = validatePageName(name);
+    if (nameError) return c.json({ error: nameError }, 400);
 
-    if (name.length === 0) {
-      res.status(400).json({ error: "name cannot be empty" });
-      return;
-    }
-
-    if (name.length > 256) {
-      res.status(400).json({ error: "name must be 256 characters or less" });
-      return;
-    }
-
-    // Internal key includes session prefix for isolation
     const pageKey = `${agentSession}:${name}`;
     const sessionState = getOrCreateSession(agentSession);
     const sessionPageCount = getSessionPageCount(agentSession);
 
-    // Check if page already exists for THIS session
     let entry = registry.get(pageKey);
     let warning: string | undefined;
 
     if (entry) {
       log(`POST /pages session=${agentSession} name=${name} action=reused total=${registry.size} sessionTotal=${sessionPageCount}`);
     } else {
-      // Check tab limits before creating
       if (sessionPageCount >= TAB_LIMIT) {
         log(`POST /pages session=${agentSession} name=${name} action=rejected-limit total=${registry.size} sessionTotal=${sessionPageCount}`);
-        res.status(429).json({
+        return c.json({
           error: `Tab limit exceeded. Session "${agentSession}" already has ${sessionPageCount} tabs (limit: ${TAB_LIMIT}). Close some tabs before opening new ones.`,
-        });
-        return;
+        }, 429);
       }
 
-      // Warn if approaching limit
       if (sessionPageCount >= TAB_WARNING_THRESHOLD) {
         warning = `Warning: Session "${agentSession}" has ${sessionPageCount} tabs. Limit is ${TAB_LIMIT}. Consider closing unused tabs.`;
         log(`POST /pages session=${agentSession} name=${name} warning=approaching-limit sessionTotal=${sessionPageCount}`);
       }
 
-      // Create new page in the persistent context (with timeout to prevent hangs)
       const page = await withTimeout(context.newPage(), 30000, "Page creation timed out after 30s");
 
-      // Inject stealth overrides before any navigation occurs.
-      // Sites like X.com detect CDP/automation and degrade functionality.
+      // Inject stealth overrides before any navigation
       await page.addInitScript(() => {
         Object.defineProperty(navigator, "webdriver", {
           configurable: true,
@@ -229,7 +190,6 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
         });
       });
 
-      // Apply viewport if provided
       if (viewport) {
         await page.setViewportSize(viewport);
       }
@@ -239,7 +199,6 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
       registry.set(pageKey, entry);
       sessionState.pageNames.add(name);
 
-      // Clean up registry when page is closed (e.g., user clicks X)
       page.on("close", () => {
         log(`PAGE_CLOSED session=${agentSession} name=${name} total=${registry.size}`);
         registry.delete(pageKey);
@@ -251,19 +210,19 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
 
     const response: GetPageResponse & { warning?: string } = {
       wsEndpoint,
-      name, // Return without session prefix
+      name,
       targetId: entry.targetId,
     };
     if (warning) {
       response.warning = warning;
     }
-    res.json(response);
+    return c.json(response);
   });
 
   // DELETE /pages/:name - close a page (filtered by session)
-  app.delete("/pages/:name", async (req: Request<{ name: string }>, res: Response) => {
-    const agentSession = req.get("X-DevBrowser-Session") ?? "default";
-    const name = decodeURIComponent(req.params.name);
+  app.delete("/pages/:name", async (c) => {
+    const agentSession = getAgentSession(c);
+    const name = decodeURIComponent(c.req.param("name"));
     const pageKey = `${agentSession}:${name}`;
     const entry = registry.get(pageKey);
 
@@ -275,17 +234,15 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
         sessionState.pageNames.delete(name);
       }
       log(`DELETE /pages session=${agentSession} name=${name} action=deleted total=${registry.size}`);
-      res.json({ success: true });
-      return;
+      return c.json({ success: true });
     }
 
     log(`DELETE /pages session=${agentSession} name=${name} action=not-found`);
-    res.status(404).json({ error: "page not found" });
+    return c.json({ error: "page not found" }, 404);
   });
 
   // GET /stats - server stats for debugging
-  app.get("/stats", (_req: Request, res: Response) => {
-    // Group pages by session
+  app.get("/stats", (c) => {
     const bySession: Record<string, Array<{ name: string; url: string }>> = {};
     for (const [pageKey, entry] of registry) {
       const parts = pageKey.split(":");
@@ -297,7 +254,7 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
       bySession[session].push({ name, url: entry.page.url() });
     }
 
-    res.json({
+    return c.json({
       totalPages: registry.size,
       totalSessions: sessions.size,
       tabLimit: TAB_LIMIT,
@@ -307,35 +264,20 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
   });
 
   // Start the server
-  const server = app.listen(port, () => {
+  const server = honoServe({ fetch: app.fetch, port }, () => {
     log(`HTTP API server running on port ${port}`);
     log(`Log file: ${logFile}`);
-  });
-
-  // Track active connections for clean shutdown
-  const connections = new Set<Socket>();
-  server.on("connection", (socket: Socket) => {
-    connections.add(socket);
-    socket.on("close", () => connections.delete(socket));
   });
 
   // Track if cleanup has been called to avoid double cleanup
   let cleaningUp = false;
 
-  // Cleanup function
   const cleanup = async () => {
     if (cleaningUp) return;
     cleaningUp = true;
 
     console.log("\nShutting down...");
 
-    // Close all active HTTP connections
-    for (const socket of connections) {
-      socket.destroy();
-    }
-    connections.clear();
-
-    // Close all pages
     for (const entry of registry.values()) {
       try {
         await entry.page.close();
@@ -345,7 +287,6 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
     }
     registry.clear();
 
-    // Close context (this also closes the browser)
     try {
       await context.close();
     } catch {
@@ -356,7 +297,6 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
     console.log("Server stopped.");
   };
 
-  // Synchronous cleanup for forced exits
   const syncCleanup = () => {
     try {
       context.close();
@@ -365,7 +305,6 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
     }
   };
 
-  // Signal handlers (consolidated to reduce duplication)
   const signals = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
 
   const signalHandler = async () => {
@@ -379,13 +318,11 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
     process.exit(1);
   };
 
-  // Register handlers
   signals.forEach((sig) => process.on(sig, signalHandler));
   process.on("uncaughtException", errorHandler);
   process.on("unhandledRejection", errorHandler);
   process.on("exit", syncCleanup);
 
-  // Helper to remove all handlers
   const removeHandlers = () => {
     signals.forEach((sig) => process.off(sig, signalHandler));
     process.off("uncaughtException", errorHandler);
