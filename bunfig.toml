@@ -1,0 +1,4 @@
+[install]
+# Supply chain hardening — see CISO/audits/2026-05-12-tanstack-supply-chain.md
+minimumReleaseAge = 604800
+minimumReleaseAgeExcludes = ["@bakerbotts/*", "@sanctionedcodelist/*"]
