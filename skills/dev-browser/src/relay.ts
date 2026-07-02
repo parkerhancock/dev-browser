@@ -108,14 +108,16 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
   // Logging
   const { log, logFile } = createLogger("relay", { stdout: true });
 
-  // Idle timeout: close pages with no CDP activity after 60 seconds.
-  // Page state (cookies, localStorage) persists in Chrome, so agents can
-  // re-open named pages cheaply. 60s spans the gap between sequential
-  // `npx tsx` script runs (startup overhead + human think time) while still
-  // capping tab accumulation. Override via DEV_BROWSER_IDLE_TIMEOUT_MS env var.
+  // Idle timeout: close ANONYMOUS targets (tabs with no named page) after
+  // 60 seconds of no CDP activity. Named pages are never idle-closed — the
+  // tool's core promise is that a named page survives between script runs,
+  // and named tabs are already capped by the per-session TAB_LIMIT and
+  // cleaned up explicitly (close/closeAll/session end). Override via
+  // DEV_BROWSER_IDLE_TIMEOUT_MS env var.
   const IDLE_TIMEOUT_MS =
     parseInt(process.env.DEV_BROWSER_IDLE_TIMEOUT_MS ?? "", 10) || 60 * 1000;
-  const IDLE_CHECK_INTERVAL_MS = 5 * 1000; // Check every 5 seconds
+  // Check every 5 seconds (or faster when the timeout itself is shorter, e.g. in tests)
+  const IDLE_CHECK_INTERVAL_MS = Math.min(5 * 1000, IDLE_TIMEOUT_MS);
 
   // PDF storage for large printToPDF responses
   const pdfDir = join(homedir(), ".dev-browser", "pdfs");
@@ -191,17 +193,18 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
     );
   }
 
-  // Idle page cleanup - close pages with no activity
+  // Idle page cleanup — close ANONYMOUS targets with no activity.
+  // Named pages are never idle-closed (see IDLE_TIMEOUT_MS comment above);
+  // pinned targets are also exempt (human collaboration).
   async function cleanupIdlePages(): Promise<void> {
     const now = Date.now();
     const idleThreshold = now - IDLE_TIMEOUT_MS;
 
     for (const [cdpSessionId, target] of connectedTargets) {
       if (target.pinned) continue; // Pinned pages are exempt (human collaboration)
+      if (registry.getPageKeyByTargetId(target.targetId)) continue; // Named pages are exempt
       if (target.lastActivity < idleThreshold) {
-        // Find the page key for logging
-        const pageKey = registry.getPageKeyByTargetId(target.targetId);
-        log(`Idle timeout: closing ${pageKey ?? target.targetId} (inactive for ${Math.round((now - target.lastActivity) / 1000)}s)`);
+        log(`Idle timeout: closing anonymous target ${target.targetId} (inactive for ${Math.round((now - target.lastActivity) / 1000)}s)`);
 
         // Close the tab via extension
         if (extensionWs) {
@@ -216,16 +219,8 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
           }
         }
 
-        // Clean up mappings atomically (the Target.detachedFromTarget event will also fire)
-        if (pageKey) {
-          registry.removeNamedPage(pageKey);
-
-          // Remove from persistence
-          persistedPages = persistedPages.filter((p) => p.key !== pageKey);
-          debouncedSave();
-        } else {
-          registry.removeUnnamedTarget(cdpSessionId);
-        }
+        // Clean up mapping (the Target.detachedFromTarget event will also fire)
+        registry.removeUnnamedTarget(cdpSessionId);
       }
     }
   }
@@ -287,9 +282,15 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
 
     log(`Found ${availableTargets.length} available targets`);
 
-    // Build lookup by targetId and URL for matching
+    // Build lookups for matching. tabId is the reliable key — Chrome tab IDs
+    // are stable across debugger detach/reattach and relay restarts (the
+    // extension's getAvailableTargets only reports placeholder targetIds).
+    // URL is the fallback, but never match on about:blank — any blank tab
+    // would bind, which is exactly the rebind-to-blank bug.
+    const targetsByTabId = new Map<number, (typeof availableTargets)[0]>();
     const targetsByUrl = new Map<string, (typeof availableTargets)[0]>();
     for (const target of availableTargets) {
+      targetsByTabId.set(target.tabId, target);
       targetsByUrl.set(target.url, target);
     }
 
@@ -297,8 +298,12 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
     const stale: string[] = [];
 
     for (const persisted of persistedPages) {
-      // Try to find matching tab by URL
-      const matchingTarget = targetsByUrl.get(persisted.url);
+      // Match by tabId first, then by last-known URL
+      const matchingTarget =
+        targetsByTabId.get(persisted.tabId) ??
+        (persisted.url && persisted.url !== "about:blank"
+          ? targetsByUrl.get(persisted.url)
+          : undefined);
 
       if (matchingTarget) {
         try {
@@ -310,13 +315,13 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
 
           const cdpSessionId = attachResult.sessionId;
 
-          // Rebuild in-memory mappings
+          // Rebuild in-memory mappings (preserve the persisted pinned flag)
           registry.addTarget(cdpSessionId, {
             sessionId: cdpSessionId,
             targetId: attachResult.targetInfo.targetId,
             targetInfo: attachResult.targetInfo,
             lastActivity: Date.now(),
-            pinned: false,
+            pinned: persisted.pinned ?? false,
             state: "attached",
           });
 
@@ -327,9 +332,10 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
 
           registry.nameTarget(persisted.key, pageName, cdpSessionId, attachResult.targetInfo.targetId, agentSession);
 
-          // Update persisted entry with new targetId
+          // Update persisted entry with new targetId and current URL
           persisted.targetId = attachResult.targetInfo.targetId;
           persisted.tabId = matchingTarget.tabId;
+          persisted.url = attachResult.targetInfo.url || persisted.url;
           persisted.lastSeen = Date.now();
 
           recovered.push(persisted.key);
@@ -685,6 +691,11 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
         // Update pinned flag if explicitly set on reuse
         if (pinned && !target.pinned) {
           target.pinned = true;
+          const persistedEntry = persistedPages.find((p) => p.key === pageKey);
+          if (persistedEntry) {
+            persistedEntry.pinned = true;
+            debouncedSave();
+          }
         }
         // Return existing page without activating (use page.bringToFront() if needed)
         log(`POST /pages session=${agentSession} name=${name} action=reused pinned=${target.pinned} total=${namedPages.size} sessionTotal=${sessionPageCount}`);
@@ -719,11 +730,82 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
       log(`POST /pages session=${agentSession} name=${name} warning=approaching-limit sessionTotal=${sessionPageCount}`);
     }
 
-    // Create a new tab
     if (!extensionWs) {
       return c.json({ error: "Extension not connected" }, 503);
     }
 
+    // Before creating a fresh blank tab, try to rebind to a surviving Chrome
+    // tab recorded in persistence (e.g. the CDP session died or the extension
+    // reconnected, but the tab itself is still open). This prevents orphan
+    // tabs from accumulating and preserves the page's navigation state.
+    const persistedEntry = persistedPages.find((p) => p.key === pageKey);
+    if (persistedEntry) {
+      try {
+        const avail = (await sendToExtension({
+          method: "getAvailableTargets",
+          params: {},
+        })) as { targets: Array<{ tabId: number; targetId: string; url: string }> };
+
+        // Match by tabId first, then by last-known URL (never about:blank)
+        const match =
+          avail.targets.find((t) => t.tabId === persistedEntry.tabId) ??
+          (persistedEntry.url && persistedEntry.url !== "about:blank"
+            ? avail.targets.find((t) => t.url === persistedEntry.url)
+            : undefined);
+
+        if (match) {
+          const attachResult = (await sendToExtension({
+            method: "attachToTab",
+            params: { tabId: match.tabId },
+          })) as { sessionId: string; targetInfo: TargetInfo };
+
+          const cdpSessionId = attachResult.sessionId;
+          const rebindPinned = pinned || (persistedEntry.pinned ?? false);
+
+          registry.addTarget(cdpSessionId, {
+            sessionId: cdpSessionId,
+            targetId: attachResult.targetInfo.targetId,
+            targetInfo: attachResult.targetInfo,
+            lastActivity: Date.now(),
+            pinned: rebindPinned,
+            state: "attached",
+          });
+          registry.nameTarget(pageKey, name, cdpSessionId, attachResult.targetInfo.targetId, agentSession);
+
+          persistedEntry.targetId = attachResult.targetInfo.targetId;
+          persistedEntry.tabId = match.tabId;
+          persistedEntry.url = attachResult.targetInfo.url || persistedEntry.url;
+          persistedEntry.pinned = rebindPinned;
+          persistedEntry.lastSeen = Date.now();
+          savePersistedPages(persistedPages);
+
+          log(`POST /pages session=${agentSession} name=${name} action=rebound tabId=${match.tabId} url=${persistedEntry.url} pinned=${rebindPinned}`);
+
+          const response: {
+            wsEndpoint: string;
+            name: string;
+            targetId: string;
+            url: string;
+            pinned: boolean;
+            warning?: string;
+          } = {
+            wsEndpoint: `ws://${host}:${port}/cdp`,
+            name,
+            targetId: attachResult.targetInfo.targetId,
+            url: attachResult.targetInfo.url,
+            pinned: rebindPinned,
+          };
+          if (warning) {
+            response.warning = warning;
+          }
+          return c.json(response);
+        }
+      } catch (err) {
+        log(`Rebind failed for ${pageKey}, falling back to new tab: ${err}`);
+      }
+    }
+
+    // Create a new tab
     try {
       const result = (await sendToExtension({
         method: "forwardCDPCommand",
@@ -774,6 +856,7 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
             tabId: result.tabId,
             url: target.targetInfo.url,
             lastSeen: Date.now(),
+            pinned,
           });
           savePersistedPages(persistedPages);
 
@@ -858,6 +941,12 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
     const body = await c.req.json();
     if (typeof body.pinned === "boolean") {
       target.pinned = body.pinned;
+      // Persist so pinning survives extension reconnects and relay restarts
+      const persistedEntry = persistedPages.find((p) => p.key === pageKey);
+      if (persistedEntry) {
+        persistedEntry.pinned = target.pinned;
+        debouncedSave();
+      }
       log(`PATCH /pages session=${agentSession} name=${name} pinned=${target.pinned}`);
     }
 

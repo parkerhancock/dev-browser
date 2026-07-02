@@ -9,8 +9,13 @@ import { readFileSync, writeFileSync, renameSync, existsSync, mkdirSync } from "
 import { join } from "node:path";
 import { homedir } from "node:os";
 
-const DEV_BROWSER_DIR = join(homedir(), ".dev-browser");
-const PAGES_FILE = join(DEV_BROWSER_DIR, "pages.json");
+// Resolved lazily so tests can override via DEV_BROWSER_DIR before first use.
+function devBrowserDir(): string {
+  return process.env.DEV_BROWSER_DIR ?? join(homedir(), ".dev-browser");
+}
+function pagesFile(): string {
+  return join(devBrowserDir(), "pages.json");
+}
 const MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
 export interface PersistedPage {
@@ -24,6 +29,8 @@ export interface PersistedPage {
   url: string;
   /** Unix timestamp for cleanup of stale entries */
   lastSeen: number;
+  /** Pinned pages are exempt from idle cleanup; must survive recovery */
+  pinned?: boolean;
 }
 
 interface PersistenceFile {
@@ -36,14 +43,14 @@ interface PersistenceFile {
  * Filters out entries older than MAX_AGE_MS.
  */
 export function loadPersistedPages(): PersistedPage[] {
-  mkdirSync(DEV_BROWSER_DIR, { recursive: true });
+  mkdirSync(devBrowserDir(), { recursive: true });
 
-  if (!existsSync(PAGES_FILE)) {
+  if (!existsSync(pagesFile())) {
     return [];
   }
 
   try {
-    const data = JSON.parse(readFileSync(PAGES_FILE, "utf-8")) as PersistenceFile;
+    const data = JSON.parse(readFileSync(pagesFile(), "utf-8")) as PersistenceFile;
     const now = Date.now();
 
     // Filter out stale entries
@@ -57,7 +64,7 @@ export function loadPersistedPages(): PersistedPage[] {
  * Save page mappings to disk.
  */
 export function savePersistedPages(pages: PersistedPage[]): void {
-  mkdirSync(DEV_BROWSER_DIR, { recursive: true });
+  mkdirSync(devBrowserDir(), { recursive: true });
 
   const data: PersistenceFile = {
     version: 1,
@@ -65,9 +72,10 @@ export function savePersistedPages(pages: PersistedPage[]): void {
   };
 
   // Atomic write: write to temp file then rename (rename is atomic on POSIX)
-  const tmpFile = `${PAGES_FILE}.tmp`;
+  const target = pagesFile();
+  const tmpFile = `${target}.tmp`;
   writeFileSync(tmpFile, JSON.stringify(data, null, 2));
-  renameSync(tmpFile, PAGES_FILE);
+  renameSync(tmpFile, target);
 }
 
 /**

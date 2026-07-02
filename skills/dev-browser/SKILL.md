@@ -590,9 +590,9 @@ Pages are cleaned up through multiple mechanisms to prevent accumulating thousan
 
 ### Automatic Cleanup
 
-**Idle timeout (15 seconds):** Pages with no CDP activity are automatically closed after 15 seconds. Activity includes any navigation, clicks, evaluations, or events. This keeps tab count minimal — Chrome's persistent profile preserves cookies and localStorage, so re-opening a page by name is cheap.
+**Idle timeout (60 seconds):** Anonymous tabs — targets not bound to a named page — are automatically closed after 60 seconds with no CDP activity (override with `DEV_BROWSER_IDLE_TIMEOUT_MS`). Named pages are never closed by the idle timer: they survive between script runs and are capped by the 5-tab session limit, so close them explicitly when done.
 
-**Pinned pages** are exempt from idle cleanup. Use pinning when a human needs to interact with a tab (the idle timer can't detect human activity since it doesn't generate CDP commands):
+**Pinned pages** are also exempt from idle cleanup, and pinning is persisted so it survives extension reconnects and relay restarts. Use pinning when a human needs to interact with a tab:
 
 ```typescript
 // Pin at creation — tab stays open until explicitly closed or unpinned
