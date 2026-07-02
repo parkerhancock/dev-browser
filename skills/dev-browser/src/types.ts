@@ -7,9 +7,9 @@ export const SESSION_HEADER = "X-DevBrowser-Session";
 export const TAB_WARNING_THRESHOLD = 3;
 export const TAB_LIMIT = 5;
 
-/** Extract the agent session ID from a Hono request context. */
+/** Extract the agent session ID from a Hono request context (header first, then `session` query param). */
 export function getAgentSession(c: Context): string {
-  return c.req.header(SESSION_HEADER) ?? "default";
+  return c.req.header(SESSION_HEADER) ?? c.req.query("session") ?? "default";
 }
 
 /** Validate a page name. Returns an error string or null if valid. */

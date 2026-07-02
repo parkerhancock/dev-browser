@@ -26,7 +26,7 @@ async function main() {
     console.log("✓ Started HAR recording");
 
     // Check recording status
-    if (!client.isRecordingHar("har-test")) {
+    if (!(await client.isRecordingHar("har-test"))) {
       throw new Error("Expected recording to be active");
     }
     console.log("✓ Recording status confirmed");
@@ -41,7 +41,7 @@ async function main() {
     console.log("✓ Stopped HAR recording");
 
     // Verify recording status cleared
-    if (client.isRecordingHar("har-test")) {
+    if (await client.isRecordingHar("har-test")) {
       throw new Error("Recording should be stopped");
     }
     console.log("✓ Recording status cleared");

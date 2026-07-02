@@ -1204,7 +1204,11 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
       return c.json({ error: "page query param required" }, 400);
     }
     const pageKey = `${agentSession}:${pageName}`;
-    return c.json({ recording: harRecorders.has(pageKey) });
+    const state = harRecorders.get(pageKey);
+    if (state) {
+      return c.json({ recording: true, entries: state.completed.length });
+    }
+    return c.json({ recording: false });
   });
 
   // ============================================================================

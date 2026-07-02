@@ -7,6 +7,9 @@
 
 import { describe, test, expect, beforeAll, afterAll, beforeEach, afterEach } from "vitest";
 import { serveRelay, type RelayServer } from "../relay.js";
+import { connect } from "../client.js";
+import { getAgentSession } from "../types.js";
+import type { Context } from "hono";
 import WebSocket from "ws";
 
 // ============================================================================
@@ -574,6 +577,120 @@ describe("Relay Server", () => {
   });
 
   // --------------------------------------------------------------------------
+  // HAR Recording
+  // --------------------------------------------------------------------------
+
+  describe("HAR recording", () => {
+    /** Create a page for a session so /har/start has a target */
+    async function createPage(name: string, session: string): Promise<void> {
+      const { status } = await fetchJson(port, "/pages", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name }),
+        session,
+      });
+      expect(status).toBe(200);
+    }
+
+    test("POST /har/start twice on the same page returns 409", async () => {
+      const session = "har-409-session";
+      await createPage("har-409-page", session);
+
+      const first = await fetchJson(port, "/har/start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ page: "har-409-page" }),
+        session,
+      });
+      expect(first.status).toBe(200);
+
+      const second = await fetchJson(port, "/har/start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ page: "har-409-page" }),
+        session,
+      });
+      expect(second.status).toBe(409);
+    });
+
+    test("GET /har/status reports recording state with entry count", async () => {
+      const session = "har-status-session";
+      await createPage("har-status-page", session);
+
+      const before = await fetchJson(port, "/har/status?page=har-status-page", { session });
+      expect(before.body.recording).toBe(false);
+      expect(before.body.entries).toBeUndefined();
+
+      await fetchJson(port, "/har/start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ page: "har-status-page" }),
+        session,
+      });
+
+      const during = await fetchJson(port, "/har/status?page=har-status-page", { session });
+      expect(during.body.recording).toBe(true);
+      expect(during.body.entries).toBe(0);
+    });
+
+    test("GET /har/status resolves session from query param when header absent", async () => {
+      const session = "har-query-session";
+      await createPage("har-query-page", session);
+      await fetchJson(port, "/har/start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ page: "har-query-page" }),
+        session,
+      });
+
+      // No session header — query param must select the right session
+      const viaQuery = await fetchJson(
+        port,
+        `/har/status?page=har-query-page&session=${session}`
+      );
+      expect(viaQuery.body.recording).toBe(true);
+
+      // Without header or query param it falls back to "default" (not recording)
+      const noSession = await fetchJson(port, "/har/status?page=har-query-page");
+      expect(noSession.body.recording).toBe(false);
+    });
+
+    test("fresh client sees, no-ops start, and drains a recorder started by a previous client", async () => {
+      const session = "har-cross-session";
+
+      // First client: page() auto-starts a server-side HAR recorder
+      const client1 = await connect(`http://127.0.0.1:${port}`, {
+        mode: "extension",
+        session,
+      });
+      await client1.page("cross-page");
+      expect(await client1.isRecordingHar("cross-page")).toBe(true);
+      await client1.disconnect();
+
+      // Second client (fresh connect, same session): server is source of truth
+      const client2 = await connect(`http://127.0.0.1:${port}`, {
+        mode: "extension",
+        session,
+      });
+      expect(await client2.isRecordingHar("cross-page")).toBe(true);
+
+      // Starting again is a no-op, not an error
+      await expect(client2.startHarRecording("cross-page")).resolves.toBeUndefined();
+
+      // Stopping drains the recorder started by client1
+      const har = await client2.stopHarRecording("cross-page");
+      expect(har.log.entries).toEqual([]);
+      expect(await client2.isRecordingHar("cross-page")).toBe(false);
+
+      // Stopping again surfaces the server's 404 message
+      await expect(client2.stopHarRecording("cross-page")).rejects.toThrow(
+        /No HAR recording active/
+      );
+      await client2.disconnect();
+    });
+  });
+
+  // --------------------------------------------------------------------------
   // Stats
   // --------------------------------------------------------------------------
 
@@ -754,5 +871,37 @@ describe("Relay Server - Event-driven Target Waiting", () => {
     expect(body.targetId).toBe("delayed-target");
     // Should have waited ~500ms for the event, not the old fixed 200ms
     expect(elapsed).toBeGreaterThanOrEqual(400);
+  });
+});
+
+// ============================================================================
+// getAgentSession unit tests
+// ============================================================================
+
+describe("getAgentSession", () => {
+  function mockContext(header?: string, query?: string): Context {
+    return {
+      req: {
+        header: (name: string) =>
+          name === "X-DevBrowser-Session" ? header : undefined,
+        query: (name: string) => (name === "session" ? query : undefined),
+      },
+    } as unknown as Context;
+  }
+
+  test("prefers the header when present", () => {
+    expect(getAgentSession(mockContext("header-session", "query-session"))).toBe(
+      "header-session"
+    );
+  });
+
+  test("falls back to the session query param when header is absent", () => {
+    expect(getAgentSession(mockContext(undefined, "query-session"))).toBe(
+      "query-session"
+    );
+  });
+
+  test("defaults to \"default\" when neither is present", () => {
+    expect(getAgentSession(mockContext())).toBe("default");
   });
 });
