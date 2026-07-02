@@ -119,3 +119,15 @@ EOF
 4. Consider having `GET /har/status` accept the session via query param as an
    alternative to the header, so the endpoints are usable as a manual escape
    hatch.
+
+## Resolution (2026-07-02)
+
+Fixed in commit 8b114b9. The relay is now the source of truth for
+extension-mode HAR state and the client is stateless: `isRecordingHar()` is
+async and queries `GET /har/status`, `stopHarRecording()` always POSTs
+`/har/stop` and surfaces the server's response, and `startHarRecording()`
+(including the `page()` auto-start) treats an already-active recording as a
+no-op success instead of a 409. Recorders started by one script run are
+therefore visible and drainable from later runs. The relay HAR endpoints also
+accept the session as a `?session=<id>` query param as an alternative to the
+`X-DevBrowser-Session` header, so `curl` works as a manual escape hatch.

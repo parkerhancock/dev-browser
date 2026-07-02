@@ -238,7 +238,7 @@ const text = await page.evaluate(() => {
 
 ## Scraping Data
 
-For scraping large datasets, intercept and replay network requests rather than scrolling the DOM. See [references/scraping.md](references/scraping.md) for the complete guide covering request capture, schema discovery, and paginated API replay.
+For scraping large datasets, capture and replay network requests rather than scrolling the DOM. Capture is mode-specific: standalone pages support `page.on("request"/"response")`; in extension mode `page.on()` throws — use HAR recording and `client.getHarEntries()` instead. See [references/scraping.md](references/scraping.md) for the complete guide covering request capture in both modes, schema discovery, and paginated API replay.
 
 ## Client API
 
@@ -277,11 +277,15 @@ const result = await client.cleanup("^about:blank$"); // Close tabs matching URL
 const snapshot = await client.getAISnapshot("name"); // Get accessibility tree
 const element = await client.selectSnapshotRef("name", "e5"); // Get element by ref
 
-// Archiving (HAR recording auto-starts on page())
+// Archiving & HAR (recording auto-starts on page(); pass { record: false } to skip)
 import { saveArchive, saveWacz } from "@/client.js";
 const archivePath = await saveArchive(client, "name"); // .zip with WACZ + HTML + PDF
 const waczPath = await saveWacz(client, "name");        // WACZ only
-client.isRecordingHar("name");                           // Check if recording
+await client.isRecordingHar("name");                     // Check if recording (async)
+const { entries, total } = await client.getHarEntries("name"); // Peek at entries without stopping
+const newer = await client.getHarEntries("name", { since: total }); // Only entries after `total`
+const har = await client.stopHarRecording("name");       // Stop, return full HAR, reset
+await client.startHarRecording("name");                  // Start (no-op if already recording in extension mode)
 ```
 
 The `page` object implements the unified `Page` interface — a Playwright-compatible subset with ~45 methods + keyboard/mouse/locators. In standalone mode it's a real Playwright Page; in extension mode it's a `CDPPage` (same interface, different transport). **Use `navigateTo(page, url)` instead of `page.goto(url)` in standalone mode** — it never hangs on problematic sites. In extension mode, `page.goto()` works fine.
@@ -489,7 +493,9 @@ await client.closeTarget(tabs[0].tabId);
 
 ## Archiving & PDF
 
-**Works in both standalone and extension mode.** HAR recording auto-starts when you call `client.page()`. In standalone mode it opens a CDP session via Playwright; in extension mode the relay server captures network events server-side. The client API is identical — no mode-specific code needed.
+**Works in both standalone and extension mode.** HAR recording auto-starts when you call `client.page()` (pass `{ record: false }` to skip). In standalone mode it opens a CDP session via Playwright; in extension mode the relay server captures network events server-side. The client API is identical — no mode-specific code needed.
+
+In extension mode the relay owns recording state, so a recording started by one script run stays active for later runs: a fresh `client.page()` re-attaches instead of erroring, and `await client.isRecordingHar(name)` reports the true state. To inspect captured traffic without stopping the recording, use `client.getHarEntries(name)` — see [references/scraping.md](references/scraping.md).
 
 ### saveArchive — Full Page Archive
 

@@ -81,3 +81,16 @@ Inject a `fetch` + `XMLHttpRequest` interceptor into the page via
 read the global back. This works but is fragile: the interceptor is wiped on
 every navigation, so injection and interaction must happen in one script with no
 `goto` in between.
+
+## Resolution (2026-07-02)
+
+`CDPPage.on()` now throws with guidance instead of silently not existing:
+`page.on() is not supported in extension mode. Network traffic is captured
+automatically via HAR recording — use client.getHarEntries(name) to inspect it
+live, or client.stopHarRecording(name) to collect the full HAR.` The supported
+capture path is the relay-side HAR recorder (state desync fixed separately, see
+`extension-mode-har-state-desync.md`), plus a new live-peek API:
+`client.getHarEntries(name, { since })` returns buffered entries without
+stopping the recording, backed by a new `GET /har/entries?page=<name>&since=<n>`
+relay endpoint. `references/scraping.md` was rewritten to be mode-aware, with
+the extension-mode HAR workflow as the recommended path for API discovery.
