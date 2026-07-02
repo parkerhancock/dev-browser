@@ -659,6 +659,18 @@ export class CDPPage implements Page {
   // Extension-mode extras (not on Page interface)
   // ======================================================================
 
+  /**
+   * Playwright-style event listeners are not available over the relay's
+   * HTTP RPC — always throws with pointers to the HAR-based alternatives.
+   */
+  on(event: string, listener?: unknown): never {
+    throw new Error(
+      "page.on() is not supported in extension mode. Network traffic is captured " +
+        "automatically via HAR recording — use client.getHarEntries(name) to inspect " +
+        "it live, or client.stopHarRecording(name) to collect the full HAR."
+    );
+  }
+
   /** Get ARIA snapshot via the relay's /snapshot endpoint. */
   async snapshot(): Promise<string> {
     const res = await fetch(`${this.relayUrl}/snapshot`, {

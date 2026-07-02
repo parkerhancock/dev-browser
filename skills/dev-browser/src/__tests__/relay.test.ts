@@ -581,15 +581,76 @@ describe("Relay Server", () => {
   // --------------------------------------------------------------------------
 
   describe("HAR recording", () => {
-    /** Create a page for a session so /har/start has a target */
-    async function createPage(name: string, session: string): Promise<void> {
-      const { status } = await fetchJson(port, "/pages", {
+    /** Create a page for a session so /har/start has a target. Returns its targetId. */
+    async function createPage(name: string, session: string): Promise<string> {
+      const { status, body } = await fetchJson(port, "/pages", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name }),
         session,
       });
       expect(status).toBe(200);
+      return body.targetId as string;
+    }
+
+    /**
+     * Simulate a completed network exchange for a page's CDP session by
+     * sending the Network.* events the extension would forward. Uses a
+     * non-text mimeType so no response body fetch is triggered.
+     */
+    function sendNetworkExchange(
+      targetId: string,
+      requestId: string,
+      url: string
+    ): void {
+      const sessionId = `pw-session-${targetId}`;
+      const send = (method: string, params: Record<string, unknown>) => {
+        ext.ws.send(
+          JSON.stringify({
+            method: "forwardCDPEvent",
+            params: { method, params, sessionId },
+          })
+        );
+      };
+      const now = Date.now() / 1000;
+      send("Network.requestWillBeSent", {
+        requestId,
+        timestamp: now,
+        wallTime: now,
+        request: { method: "GET", url, headers: {} },
+      });
+      send("Network.responseReceived", {
+        requestId,
+        response: {
+          status: 200,
+          statusText: "OK",
+          headers: {},
+          mimeType: "application/octet-stream",
+          encodedDataLength: 3,
+        },
+      });
+      send("Network.loadingFinished", {
+        requestId,
+        timestamp: now + 0.1,
+        encodedDataLength: 3,
+      });
+    }
+
+    /** Poll /har/entries until the recorder has buffered `count` entries */
+    async function waitForEntryCount(
+      pageName: string,
+      session: string,
+      count: number
+    ): Promise<void> {
+      const start = Date.now();
+      while (Date.now() - start < 2000) {
+        const { body } = await fetchJson(port, `/har/entries?page=${pageName}`, {
+          session,
+        });
+        if (((body.total as number) ?? 0) >= count) return;
+        await new Promise((r) => setTimeout(r, 20));
+      }
+      throw new Error(`Timed out waiting for ${count} HAR entries`);
     }
 
     test("POST /har/start twice on the same page returns 409", async () => {
@@ -687,6 +748,126 @@ describe("Relay Server", () => {
         /No HAR recording active/
       );
       await client2.disconnect();
+    });
+
+    test("GET /har/entries returns 400 without page param", async () => {
+      const { status, body } = await fetchJson(port, "/har/entries", {
+        session: "har-entries-400-session",
+      });
+      expect(status).toBe(400);
+      expect(body.error).toBe("page query param required");
+    });
+
+    test("GET /har/entries returns 404 when not recording", async () => {
+      const session = "har-entries-404-session";
+      await createPage("har-entries-404-page", session);
+
+      const { status, body } = await fetchJson(
+        port,
+        "/har/entries?page=har-entries-404-page",
+        { session }
+      );
+      expect(status).toBe(404);
+      expect(body.error).toBe('No HAR recording active for "har-entries-404-page"');
+    });
+
+    test("GET /har/entries peeks at entries without stopping the recorder", async () => {
+      const session = "har-entries-peek-session";
+      const targetId = await createPage("har-entries-peek-page", session);
+
+      await fetchJson(port, "/har/start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ page: "har-entries-peek-page" }),
+        session,
+      });
+
+      sendNetworkExchange(targetId, "req-1", "https://example.com/a");
+      sendNetworkExchange(targetId, "req-2", "https://example.com/b");
+      await waitForEntryCount("har-entries-peek-page", session, 2);
+
+      // Full peek
+      const full = await fetchJson(port, "/har/entries?page=har-entries-peek-page", {
+        session,
+      });
+      expect(full.status).toBe(200);
+      expect(full.body.recording).toBe(true);
+      expect(full.body.total).toBe(2);
+      const entries = full.body.entries as Array<{ request: { url: string } }>;
+      expect(entries.map((e) => e.request.url)).toEqual([
+        "https://example.com/a",
+        "https://example.com/b",
+      ]);
+
+      // since slices correctly
+      const sliced = await fetchJson(
+        port,
+        "/har/entries?page=har-entries-peek-page&since=1",
+        { session }
+      );
+      expect(sliced.body.total).toBe(2);
+      const slicedEntries = sliced.body.entries as Array<{ request: { url: string } }>;
+      expect(slicedEntries).toHaveLength(1);
+      expect(slicedEntries[0]!.request.url).toBe("https://example.com/b");
+
+      // Recorder is untouched: status still recording, stop still drains
+      const status = await fetchJson(
+        port,
+        "/har/status?page=har-entries-peek-page",
+        { session }
+      );
+      expect(status.body.recording).toBe(true);
+      expect(status.body.entries).toBe(2);
+
+      const stopped = await fetchJson(port, "/har/stop", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ page: "har-entries-peek-page" }),
+        session,
+      });
+      expect(stopped.status).toBe(200);
+      expect((stopped.body.log as { entries: unknown[] }).entries).toHaveLength(2);
+    });
+
+    test("client.getHarEntries peeks live in extension mode with since polling", async () => {
+      const session = "har-entries-client-session";
+      const targetId = await createPage("har-entries-client-page", session);
+
+      const client = await connect(`http://127.0.0.1:${port}`, {
+        mode: "extension",
+        session,
+      });
+      // page() auto-starts the server-side recorder for the existing page
+      await client.page("har-entries-client-page");
+
+      sendNetworkExchange(targetId, "client-req-1", "https://example.com/first");
+      await waitForEntryCount("har-entries-client-page", session, 1);
+
+      const first = await client.getHarEntries("har-entries-client-page");
+      expect(first.total).toBe(1);
+      expect(first.entries).toHaveLength(1);
+      expect(first.entries[0]!.request.url).toBe("https://example.com/first");
+
+      // Incremental poll: pass previous total as since
+      sendNetworkExchange(targetId, "client-req-2", "https://example.com/second");
+      await waitForEntryCount("har-entries-client-page", session, 2);
+
+      const next = await client.getHarEntries("har-entries-client-page", {
+        since: first.total,
+      });
+      expect(next.total).toBe(2);
+      expect(next.entries).toHaveLength(1);
+      expect(next.entries[0]!.request.url).toBe("https://example.com/second");
+
+      // Recorder still active after peeking
+      expect(await client.isRecordingHar("har-entries-client-page")).toBe(true);
+
+      // 404 path surfaces the server's message
+      await expect(client.getHarEntries("no-such-page")).rejects.toThrow(
+        'No HAR recording active for "no-such-page"'
+      );
+
+      await client.disconnect();
     });
   });
 

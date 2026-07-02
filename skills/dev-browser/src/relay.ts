@@ -1195,6 +1195,34 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
   });
 
   /**
+   * GET /har/entries — Peek at completed HAR entries without stopping the recorder.
+   * Query: page (required), since (optional non-negative entry index, default 0).
+   */
+  app.get("/har/entries", (c) => {
+    const agentSession = getAgentSession(c);
+    const pageName = c.req.query("page");
+    if (!pageName) {
+      return c.json({ error: "page query param required" }, 400);
+    }
+    const pageKey = `${agentSession}:${pageName}`;
+    const state = harRecorders.get(pageKey);
+
+    if (!state) {
+      return c.json({ error: `No HAR recording active for "${pageName}"` }, 404);
+    }
+
+    const sinceRaw = c.req.query("since");
+    const parsed = sinceRaw ? Number(sinceRaw) : 0;
+    const since = Number.isInteger(parsed) && parsed > 0 ? parsed : 0;
+
+    return c.json({
+      recording: true,
+      total: state.completed.length,
+      entries: state.completed.slice(since),
+    });
+  });
+
+  /**
    * GET /har/status — Check if HAR recording is active for a page.
    */
   app.get("/har/status", (c) => {

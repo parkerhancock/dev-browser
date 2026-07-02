@@ -522,6 +522,25 @@ export interface DevBrowserClient {
    * mode, reflects this client's local recorders.
    */
   isRecordingHar: (name: string) => Promise<boolean>;
+  /**
+   * Peek at the HAR entries captured so far without stopping the recorder.
+   * Useful for inspecting a SPA's network traffic live, across separate
+   * script runs.
+   *
+   * For incremental polling, pass the `total` from a previous call as
+   * `options.since`: only entries at index >= since are returned, while
+   * `total` always reflects the full completed count.
+   *
+   * Entries become visible once their response finishes loading; requests
+   * still in flight are not included until they complete.
+   *
+   * @param name - Page name
+   * @throws Error if no recording is active for this page
+   */
+  getHarEntries: (
+    name: string,
+    options?: { since?: number }
+  ) => Promise<{ entries: HarEntry[]; total: number }>;
 }
 
 // ============================================================================
@@ -936,6 +955,35 @@ async function connectExtensionMode(
       }
       const data = (await res.json()) as { recording: boolean };
       return data.recording;
+    },
+
+    async getHarEntries(
+      name: string,
+      options?: { since?: number }
+    ): Promise<{ entries: HarEntry[]; total: number }> {
+      const params = new URLSearchParams({ page: name });
+      if (options?.since !== undefined) {
+        params.set("since", String(options.since));
+      }
+      const res = await fetch(`${serverUrl}/har/entries?${params}`, {
+        headers: sessionHeaders,
+      });
+      if (res.status === 404) {
+        // Surface the server's message (e.g. `No HAR recording active for "x"`)
+        const text = await res.text();
+        let message = text;
+        try {
+          message = (JSON.parse(text) as { error?: string }).error ?? text;
+        } catch {
+          // Not JSON — use the raw text
+        }
+        throw new Error(message);
+      }
+      if (!res.ok) {
+        throw new Error(`Failed to get HAR entries: ${await res.text()}`);
+      }
+      const data = (await res.json()) as { entries: HarEntry[]; total: number };
+      return { entries: data.entries, total: data.total };
     },
   };
 }
@@ -1446,5 +1494,19 @@ export async function connect(
     // Standalone recording is genuinely client-local (CDPSession-based),
     // so the local map is the source of truth here.
     isRecordingHar: async (name: string) => harRecorders.has(name),
+
+    async getHarEntries(
+      name: string,
+      options?: { since?: number }
+    ): Promise<{ entries: HarEntry[]; total: number }> {
+      const state = harRecorders.get(name);
+      if (!state) {
+        throw new Error(`No HAR recording active for page "${name}"`);
+      }
+      return {
+        entries: state.completed.slice(options?.since ?? 0),
+        total: state.completed.length,
+      };
+    },
   }, "client");
 }

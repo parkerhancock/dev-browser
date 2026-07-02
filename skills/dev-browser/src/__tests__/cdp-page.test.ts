@@ -757,6 +757,14 @@ describe("CDPPage", () => {
       );
       expect(result.root.nodeId).toBe(1);
     });
+
+    it("on() throws loudly pointing at getHarEntries", () => {
+      expect(() => page.on("request", () => {})).toThrow(
+        /not supported in extension mode/
+      );
+      expect(() => page.on("response")).toThrow(/client\.getHarEntries\(name\)/);
+      expect(() => page.on("request")).toThrow(/stopHarRecording/);
+    });
   });
 
   // ==========================================================================
