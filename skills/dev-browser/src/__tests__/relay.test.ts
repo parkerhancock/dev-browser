@@ -116,12 +116,15 @@ describe("Relay Server", () => {
     });
 
     test("DELETE /pages/:name removes a page", async () => {
-      await fetchJson(port, "/pages", {
+      const created = await fetchJson(port, "/pages", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name: "del-page" }),
         session: "del-session",
       });
+      expect(created.body.targetId).toBeTruthy();
+
+      const commandsBeforeClose = ext.received.length;
 
       const { status } = await fetchJson(port, `/pages/del-page`, {
         method: "DELETE",
@@ -129,9 +132,44 @@ describe("Relay Server", () => {
       });
       expect(status).toBe(200);
 
+      expect(ext.received.slice(commandsBeforeClose)).toContainEqual(
+        expect.objectContaining({
+          method: "closeTab",
+          params: { tabId: expect.any(Number) },
+        })
+      );
+
       // Page should no longer be listed
       const { body } = await fetchJson(port, "/pages", { session: "del-session" });
       expect((body.pages as string[]).includes("del-page")).toBe(false);
+    });
+
+    test("DELETE /pages/:name keeps the page registered when Chrome cannot close it", async () => {
+      await fetchJson(port, "/pages", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: "failed-close-page" }),
+        session: "failed-close-session",
+      });
+
+      let failNextClose = true;
+      ext.onCommand((message) => {
+        if (failNextClose && message.method === "closeTab") {
+          failNextClose = false;
+          return { success: false };
+        }
+        return undefined;
+      });
+
+      const { status, body } = await fetchJson(port, "/pages/failed-close-page", {
+        method: "DELETE",
+        session: "failed-close-session",
+      });
+      expect(status).toBe(502);
+      expect(body.error).toContain("Chrome did not close");
+
+      const list = await fetchJson(port, "/pages", { session: "failed-close-session" });
+      expect(list.body.pages).toContain("failed-close-page");
     });
 
     test("DELETE /pages/:name returns 404 for unknown page", async () => {

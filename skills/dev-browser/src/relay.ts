@@ -900,7 +900,7 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
   });
 
   // Delete a named page (filtered by session)
-  app.delete("/pages/:name", (c) => {
+  app.delete("/pages/:name", async (c) => {
     const agentSession = getAgentSession(c);
     const name = c.req.param("name");
     const pageKey = `${agentSession}:${name}`;
@@ -909,6 +909,32 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
     if (!cdpSessionId) {
       log(`DELETE /pages session=${agentSession} name=${name} action=not-found`);
       return c.json({ error: "Page not found" }, 404);
+    }
+
+    if (!extensionWs) {
+      return c.json({ error: "Extension not connected" }, 503);
+    }
+
+    const persistedEntry = persistedPages.find((p) => p.key === pageKey);
+    if (!persistedEntry) {
+      return c.json({ error: "Page tab mapping not found" }, 409);
+    }
+
+    try {
+      const result = (await sendToExtension({
+        method: "closeTab",
+        params: { tabId: persistedEntry.tabId },
+        timeout: 5000,
+      })) as { success?: boolean };
+
+      if (result.success !== true) {
+        throw new Error(`Chrome did not close tab ${persistedEntry.tabId}`);
+      }
+    } catch (err) {
+      log(
+        `DELETE /pages session=${agentSession} name=${name} action=close-failed error=${err}`
+      );
+      return c.json({ error: String(err) }, 502);
     }
 
     // Clean up mappings (atomic across all Maps)
