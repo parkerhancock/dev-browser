@@ -7,9 +7,26 @@ import type { ExtensionCommandMessage } from "../utils/types";
 
 // Mock chrome.debugger since fakeBrowser doesn't include it
 const mockDebuggerSendCommand = vi.fn();
+const mockTabsGet = vi.fn();
+const mockTabsGroup = vi.fn();
+const mockTabsQuery = vi.fn();
+const mockTabGroupsGet = vi.fn();
+const mockTabGroupsQuery = vi.fn();
+const mockTabGroupsUpdate = vi.fn();
 
 vi.stubGlobal("chrome", {
   ...fakeBrowser,
+  tabs: {
+    ...fakeBrowser.tabs,
+    get: mockTabsGet,
+    group: mockTabsGroup,
+    query: mockTabsQuery,
+  },
+  tabGroups: {
+    get: mockTabGroupsGet,
+    query: mockTabGroupsQuery,
+    update: mockTabGroupsUpdate,
+  },
   debugger: {
     sendCommand: mockDebuggerSendCommand,
     attach: vi.fn(),
@@ -29,6 +46,12 @@ describe("CDPRouter", () => {
   beforeEach(() => {
     fakeBrowser.reset();
     mockDebuggerSendCommand.mockReset();
+    mockTabsGet.mockReset();
+    mockTabsGroup.mockReset();
+    mockTabsQuery.mockReset();
+    mockTabGroupsGet.mockReset();
+    mockTabGroupsQuery.mockReset();
+    mockTabGroupsUpdate.mockReset();
 
     mockLogger = {
       log: vi.fn(),
@@ -46,6 +69,64 @@ describe("CDPRouter", () => {
     cdpRouter = new CDPRouter({
       logger: mockLogger,
       tabManager,
+    });
+  });
+
+  describe("Dev Browser tab groups", () => {
+    it("serializes concurrent group creation in the same window", async () => {
+      let groupExists = false;
+
+      mockTabsGet.mockImplementation(async (tabId: number) => ({ id: tabId, windowId: 1 }));
+      mockTabGroupsQuery.mockImplementation(async () => {
+        const existsAtQueryStart = groupExists;
+        await Promise.resolve();
+        return existsAtQueryStart
+          ? [{ id: 10, windowId: 1, title: "Dev Browser", color: "blue", collapsed: false }]
+          : [];
+      });
+      mockTabsGroup.mockImplementation(async ({ groupId }: { groupId?: number }) => {
+        if (groupId === undefined) {
+          groupExists = true;
+          return 10;
+        }
+        return groupId;
+      });
+
+      const groupTab = (tabId: number) =>
+        (
+          cdpRouter as unknown as {
+            getOrCreateDevBrowserGroup(id: number): Promise<number>;
+          }
+        ).getOrCreateDevBrowserGroup(tabId);
+
+      await expect(Promise.all([groupTab(1), groupTab(2)])).resolves.toEqual([10, 10]);
+
+      expect(mockTabsGroup).toHaveBeenCalledTimes(2);
+      expect(mockTabsGroup).toHaveBeenNthCalledWith(1, { tabIds: [1] });
+      expect(mockTabsGroup).toHaveBeenNthCalledWith(2, { tabIds: [2], groupId: 10 });
+    });
+
+    it("merges duplicate groups within each window", async () => {
+      const groups = [
+        { id: 10, windowId: 1, title: "Dev Browser", color: "blue", collapsed: false },
+        { id: 11, windowId: 1, title: "Dev Browser", color: "blue", collapsed: true },
+        { id: 20, windowId: 2, title: "Dev Browser", color: "blue", collapsed: false },
+      ];
+
+      mockTabGroupsQuery.mockImplementation(
+        async ({ windowId }: { windowId?: number }) =>
+          windowId === undefined ? groups : groups.filter((group) => group.windowId === windowId)
+      );
+      mockTabsQuery.mockImplementation(async ({ groupId }: { groupId: number }) =>
+        groupId === 11 ? [{ id: 2 }, { id: 3 }] : []
+      );
+
+      await cdpRouter.reconcileDevBrowserGroups();
+
+      expect(mockTabsQuery).toHaveBeenCalledOnce();
+      expect(mockTabsQuery).toHaveBeenCalledWith({ groupId: 11 });
+      expect(mockTabsGroup).toHaveBeenCalledOnce();
+      expect(mockTabsGroup).toHaveBeenCalledWith({ tabIds: [2, 3], groupId: 10 });
     });
   });
 

@@ -14,47 +14,102 @@ export interface CDPRouterDeps {
 export class CDPRouter {
   private logger: Logger;
   private tabManager: TabManager;
-  private devBrowserGroupId: number | null = null;
+  private devBrowserGroupIds = new Map<number, number>();
+  private groupOperations = new Map<number, Promise<void>>();
 
   constructor(deps: CDPRouterDeps) {
     this.logger = deps.logger;
     this.tabManager = deps.tabManager;
   }
 
-  /**
-   * Gets or creates the "Dev Browser" tab group, returning its ID.
-   * Searches all existing tab groups first to avoid creating duplicates
-   * (the in-memory cache is lost when the service worker restarts).
-   */
-  private async getOrCreateDevBrowserGroup(tabId: number): Promise<number> {
-    // If we have a cached group ID, verify it still exists
-    if (this.devBrowserGroupId !== null) {
-      try {
-        await chrome.tabGroups.get(this.devBrowserGroupId);
-        await chrome.tabs.group({ tabIds: [tabId], groupId: this.devBrowserGroupId });
-        return this.devBrowserGroupId;
-      } catch {
-        this.devBrowserGroupId = null;
+  private async runGroupOperation<T>(windowId: number, operation: () => Promise<T>): Promise<T> {
+    const previous = this.groupOperations.get(windowId) ?? Promise.resolve();
+    const current = previous.catch(() => {}).then(operation);
+    const settled = current.then(
+      () => undefined,
+      () => undefined
+    );
+
+    this.groupOperations.set(windowId, settled);
+    settled.finally(() => {
+      if (this.groupOperations.get(windowId) === settled) {
+        this.groupOperations.delete(windowId);
+      }
+    });
+
+    return current;
+  }
+
+  private async mergeDevBrowserGroups(windowId: number): Promise<number | undefined> {
+    const groups = await chrome.tabGroups.query({ title: "Dev Browser", windowId });
+    const primary = groups[0];
+    if (!primary) return undefined;
+
+    for (const duplicate of groups.slice(1)) {
+      const tabs = await chrome.tabs.query({ groupId: duplicate.id });
+      const tabIds = tabs.flatMap((tab) => (tab.id === undefined ? [] : [tab.id]));
+      const [firstTabId, ...remainingTabIds] = tabIds;
+      if (firstTabId !== undefined) {
+        await chrome.tabs.group({
+          tabIds: [firstTabId, ...remainingTabIds],
+          groupId: primary.id,
+        });
       }
     }
 
-    // Cache miss — search for an existing "Dev Browser" group before creating one
-    const allGroups = await chrome.tabGroups.query({ title: "Dev Browser" });
-    if (allGroups.length > 0) {
-      const existing = allGroups[0];
-      await chrome.tabs.group({ tabIds: [tabId], groupId: existing.id });
-      this.devBrowserGroupId = existing.id;
-      return existing.id;
+    this.devBrowserGroupIds.set(windowId, primary.id);
+    return primary.id;
+  }
+
+  /** Merge duplicate groups left by service-worker restarts or earlier races. */
+  async reconcileDevBrowserGroups(): Promise<void> {
+    const groups = await chrome.tabGroups.query({ title: "Dev Browser" });
+    const windowIds = new Set(groups.map((group) => group.windowId));
+    await Promise.all(
+      Array.from(windowIds, (windowId) =>
+        this.runGroupOperation(windowId, async () => {
+          await this.mergeDevBrowserGroups(windowId);
+        })
+      )
+    );
+  }
+
+  /** Gets or creates the window's "Dev Browser" tab group. */
+  private async getOrCreateDevBrowserGroup(tabId: number): Promise<number> {
+    const tab = await chrome.tabs.get(tabId);
+    if (tab.windowId === undefined) {
+      throw new Error(`Tab ${tabId} has no window`);
     }
 
-    // No existing group found — create a new one
-    const groupId = await chrome.tabs.group({ tabIds: [tabId] });
-    await chrome.tabGroups.update(groupId, {
-      title: "Dev Browser",
-      color: "blue",
+    return this.runGroupOperation(tab.windowId, async () => {
+      const cachedGroupId = this.devBrowserGroupIds.get(tab.windowId);
+      if (cachedGroupId !== undefined) {
+        try {
+          const group = await chrome.tabGroups.get(cachedGroupId);
+          if (group.windowId === tab.windowId) {
+            await chrome.tabs.group({ tabIds: [tabId], groupId: cachedGroupId });
+            return cachedGroupId;
+          }
+        } catch {
+          // The group disappeared while the service worker was suspended.
+        }
+        this.devBrowserGroupIds.delete(tab.windowId);
+      }
+
+      const existingGroupId = await this.mergeDevBrowserGroups(tab.windowId);
+      if (existingGroupId !== undefined) {
+        await chrome.tabs.group({ tabIds: [tabId], groupId: existingGroupId });
+        return existingGroupId;
+      }
+
+      const groupId = await chrome.tabs.group({ tabIds: [tabId] });
+      await chrome.tabGroups.update(groupId, {
+        title: "Dev Browser",
+        color: "blue",
+      });
+      this.devBrowserGroupIds.set(tab.windowId, groupId);
+      return groupId;
     });
-    this.devBrowserGroupId = groupId;
-    return groupId;
   }
 
   /**
