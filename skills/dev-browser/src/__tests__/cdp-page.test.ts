@@ -14,6 +14,7 @@ const SESSION = "test-session";
 interface CdpCall {
   method: string;
   params?: Record<string, any>;
+  targetId?: string;
 }
 
 function runtimeResult(value: any) {
@@ -78,7 +79,11 @@ function createMockRelay() {
 
       // CDP endpoint
       if (url === `${RELAY_URL}/cdp` && body) {
-        cdpCalls.push({ method: body.method, params: body.params });
+        cdpCalls.push({
+          method: body.method,
+          params: body.params,
+          targetId: body.targetId,
+        });
         const handler = cdpHandlers.get(body.method);
         if (!handler) {
           return new Response(
@@ -302,6 +307,81 @@ describe("CDPPage", () => {
 
       const text = await page.textContent(".nonexistent");
       expect(text).toBeNull();
+    });
+  });
+
+  describe("frames", () => {
+    it("discovers OOPIF targets and routes evaluation to the child session", async () => {
+      relay.onCdp("Target.setAutoAttach", () => ({}));
+      relay.onCdp("Page.getFrameTree", () => ({
+        frameTree: {
+          frame: { id: "main-frame", url: "https://host.test", name: "" },
+          childFrames: [
+            {
+              frame: {
+                id: "oopif-frame",
+                parentId: "main-frame",
+                url: "https://child.test/app",
+                name: "transactions",
+              },
+            },
+          ],
+        },
+      }));
+      relay.onCdp("DevBrowser.getChildTargets", () => ({
+        targetInfos: [
+          {
+            targetId: "oopif-frame",
+            type: "iframe",
+            title: "",
+            url: "https://child.test/app",
+            attached: true,
+          },
+        ],
+      }));
+      relay.onCdp("Runtime.evaluate", () => runtimeResult("Transactions"));
+
+      const frames = await page.frames();
+      expect(frames).toHaveLength(2);
+
+      const child = frames.find((frame) => frame.url().includes("child.test"));
+      expect(child?.isOopif()).toBe(true);
+      await expect(child?.title()).resolves.toBe("Transactions");
+
+      expect(relay.lastCall("Runtime.evaluate")?.targetId).toBe("oopif-frame");
+    });
+
+    it("uses an isolated execution context for a same-process child frame", async () => {
+      relay.onCdp("Target.setAutoAttach", () => ({}));
+      relay.onCdp("Page.getFrameTree", () => ({
+        frameTree: {
+          frame: { id: "main-frame", url: "https://host.test", name: "" },
+          childFrames: [
+            {
+              frame: {
+                id: "local-frame",
+                parentId: "main-frame",
+                url: "https://host.test/embedded",
+                name: "embedded",
+              },
+            },
+          ],
+        },
+      }));
+      relay.onCdp("DevBrowser.getChildTargets", () => ({ targetInfos: [] }));
+      relay.onCdp("Page.createIsolatedWorld", () => ({ executionContextId: 42 }));
+      relay.onCdp("Runtime.evaluate", () => runtimeResult("Embedded"));
+
+      const child = (await page.frames()).find(
+        (frame) => frame.frameId() === "local-frame"
+      );
+      await expect(child?.title()).resolves.toBe("Embedded");
+
+      expect(relay.lastCall("Page.createIsolatedWorld")?.params).toMatchObject({
+        frameId: "local-frame",
+      });
+      expect(relay.lastCall("Runtime.evaluate")?.params?.contextId).toBe(42);
+      expect(relay.lastCall("Runtime.evaluate")?.targetId).toBeUndefined();
     });
   });
 

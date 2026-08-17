@@ -94,10 +94,21 @@ export class MockExtension {
   }
 
   /** CDP commands forwarded to this mock, in arrival order */
-  forwardedCdpCommands(): Array<{ method: string; params?: Record<string, unknown> }> {
+  forwardedCdpCommands(): Array<{
+    method: string;
+    params?: Record<string, unknown>;
+    sessionId?: string;
+  }> {
     return this.received
       .filter((m) => m.method === "forwardCDPCommand")
-      .map((m) => m.params as { method: string; params?: Record<string, unknown> });
+      .map(
+        (m) =>
+          m.params as {
+            method: string;
+            params?: Record<string, unknown>;
+            sessionId?: string;
+          }
+      );
   }
 
   private handleCommand(msg: { id: number; method: string; params?: Record<string, unknown> }): void {
@@ -192,6 +203,35 @@ export class MockExtension {
             targetInfo: {
               targetId,
               type: "page",
+              title: "",
+              url,
+              attached: true,
+            },
+          },
+        },
+      })
+    );
+  }
+
+  /** Send a child target attachment from an existing page session. */
+  sendChildAttachedToTarget(
+    parentSessionId: string,
+    childSessionId: string,
+    targetId: string,
+    url: string,
+    type = "iframe"
+  ): void {
+    this.ws.send(
+      JSON.stringify({
+        method: "forwardCDPEvent",
+        params: {
+          sessionId: parentSessionId,
+          method: "Target.attachedToTarget",
+          params: {
+            sessionId: childSessionId,
+            targetInfo: {
+              targetId,
+              type,
               title: "",
               url,
               attached: true,

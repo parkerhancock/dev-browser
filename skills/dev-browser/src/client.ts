@@ -34,7 +34,8 @@ const logger = createLogger("client");
 
 // Re-export for consumers
 export type { Page, Locator, Keyboard, Mouse } from "./page.js";
-export { CDPPage } from "./cdp-page.js";
+export { CDPPage, CDPFrame } from "./cdp-page.js";
+export type { CDPCommandOptions } from "./cdp-page.js";
 export type { HarCookie, HarPostData, HarContent, HarEntry, HarLog } from "./har.js";
 
 // State for an active HAR recording (client-specific: has CDPSession and body fetch tracking)

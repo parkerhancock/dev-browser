@@ -423,8 +423,22 @@ const page = await client.page("mypage") as CDPPage;
 | `page.snapshot()` | ARIA accessibility tree (same as `client.getAISnapshot()`) |
 | `page.clickRef(ref)` | Click element by ARIA snapshot ref |
 | `page.fillRef(ref, value)` | Fill input by ARIA snapshot ref |
+| `await page.frames()` | Discover main, same-process, and out-of-process frames |
 | `page.syncUrl()` | Refresh cached URL from actual page |
-| `page.cdp(method, params?)` | Raw CDP command escape hatch |
+| `page.cdp(method, params?, options?)` | Raw CDP command escape hatch |
+
+For controls inside cross-origin frames, select the frame and use its DOM helpers:
+
+```typescript
+const frames = await page.frames();
+const transactions = frames.find((frame) =>
+  frame.url().includes("transactions")
+);
+if (!transactions) throw new Error("Transactions frame not found");
+
+console.log(await transactions.title());
+await transactions.click("button[data-testid='export']");
+```
 
 **Raw CDP escape hatch** — for anything not covered by the Page interface:
 

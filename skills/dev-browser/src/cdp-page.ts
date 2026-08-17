@@ -34,6 +34,31 @@ interface RuntimeEvaluateResult {
   };
 }
 
+interface CdpFrame {
+  id: string;
+  parentId?: string;
+  url: string;
+  name?: string;
+}
+
+interface CdpFrameTree {
+  frame: CdpFrame;
+  childFrames?: CdpFrameTree[];
+}
+
+interface CdpTargetInfo {
+  targetId: string;
+  type: string;
+  title: string;
+  url: string;
+  attached: boolean;
+}
+
+export interface CDPCommandOptions {
+  /** Route the command to an owned child target, such as an OOPIF. */
+  targetId?: string;
+}
+
 // ============================================================================
 // CDPPage
 // ============================================================================
@@ -67,7 +92,8 @@ export class CDPPage implements Page {
 
   async cdp<T = unknown>(
     method: string,
-    params?: Record<string, unknown>
+    params?: Record<string, unknown>,
+    options?: CDPCommandOptions
   ): Promise<T> {
     if (this._closed) throw new Error(`Page "${this.pageName}" is closed`);
 
@@ -77,7 +103,12 @@ export class CDPPage implements Page {
         "Content-Type": "application/json",
         "X-DevBrowser-Session": this.session,
       },
-      body: JSON.stringify({ page: this.pageName, method, params }),
+      body: JSON.stringify({
+        page: this.pageName,
+        method,
+        params,
+        targetId: options?.targetId,
+      }),
     });
 
     const data = (await res.json()) as {
@@ -660,6 +691,44 @@ export class CDPPage implements Page {
   // ======================================================================
 
   /**
+   * Discover the page's frame tree, including out-of-process iframes.
+   *
+   * This method is async because extension mode must first attach to child
+   * CDP targets. Standalone mode uses Playwright's native page.frames() API.
+   */
+  async frames(): Promise<CDPFrame[]> {
+    await this.cdp("Target.setAutoAttach", {
+      autoAttach: true,
+      waitForDebuggerOnStart: false,
+      flatten: true,
+      filter: [{ type: "iframe" }, { exclude: true }],
+    });
+
+    const [{ frameTree }, { targetInfos }] = await Promise.all([
+      this.cdp<{ frameTree: CdpFrameTree }>("Page.getFrameTree"),
+      this.cdp<{ targetInfos: CdpTargetInfo[] }>(
+        "DevBrowser.getChildTargets"
+      ),
+    ]);
+    const targetsById = new Map(
+      targetInfos.map((target) => [target.targetId, target])
+    );
+    const frames: CDPFrame[] = [];
+
+    const visit = (tree: CdpFrameTree, isMainFrame: boolean): void => {
+      frames.push(
+        new CDPFrame(this, tree.frame, {
+          isMainFrame,
+          targetId: targetsById.get(tree.frame.id)?.targetId,
+        })
+      );
+      for (const child of tree.childFrames ?? []) visit(child, false);
+    };
+    visit(frameTree, true);
+    return frames;
+  }
+
+  /**
    * Playwright-style event listeners are not available over the relay's
    * HTTP RPC — always throws with pointers to the HAR-based alternatives.
    */
@@ -750,6 +819,123 @@ export class CDPPage implements Page {
     return this.evalValue<{ x: number; y: number }>(
       elementCenterExpression(selector)
     );
+  }
+}
+
+// ============================================================================
+// CDPFrame
+// ============================================================================
+
+/** A frame handle for extension mode, including OOPIF child targets. */
+export class CDPFrame {
+  private executionContextId?: number;
+
+  constructor(
+    private readonly page: CDPPage,
+    private readonly frame: CdpFrame,
+    private readonly options: { isMainFrame: boolean; targetId?: string }
+  ) {}
+
+  frameId(): string {
+    return this.frame.id;
+  }
+
+  parentFrameId(): string | undefined {
+    return this.frame.parentId;
+  }
+
+  url(): string {
+    return this.frame.url;
+  }
+
+  name(): string {
+    return this.frame.name ?? "";
+  }
+
+  isOopif(): boolean {
+    return this.options.targetId !== undefined;
+  }
+
+  async title(): Promise<string> {
+    return this.evaluate<string>("document.title");
+  }
+
+  async content(): Promise<string> {
+    return this.evaluate<string>("document.documentElement.outerHTML");
+  }
+
+  async textContent(selector: string): Promise<string | null> {
+    return this.evaluate<string | null>(
+      `(selector => document.querySelector(selector)?.textContent ?? null)(${JSON.stringify(selector)})`
+    );
+  }
+
+  async click(selector: string): Promise<void> {
+    await this.evaluate(
+      `(selector => {
+        const element = document.querySelector(selector);
+        if (!element) throw new Error('Element not found: ' + selector);
+        element.scrollIntoView({ block: 'center', inline: 'center' });
+        element.click();
+      })(${JSON.stringify(selector)})`
+    );
+  }
+
+  async fill(selector: string, value: string): Promise<void> {
+    await this.evaluate(
+      `((selector, value) => {
+        const element = document.querySelector(selector);
+        if (!element) throw new Error('Element not found: ' + selector);
+        element.focus();
+        element.value = value;
+        element.dispatchEvent(new Event('input', { bubbles: true }));
+        element.dispatchEvent(new Event('change', { bubbles: true }));
+      })(${JSON.stringify(selector)}, ${JSON.stringify(value)})`
+    );
+  }
+
+  async evaluate<R = any>(
+    pageFunction: string | ((...args: any[]) => R | Promise<R>),
+    ...args: any[]
+  ): Promise<R> {
+    const expression =
+      typeof pageFunction === "string"
+        ? pageFunction
+        : `(${pageFunction.toString()})(${args
+            .map((arg) => JSON.stringify(arg))
+            .join(", ")})`;
+    const params: Record<string, unknown> = {
+      expression,
+      returnByValue: true,
+      awaitPromise: true,
+    };
+
+    if (!this.options.isMainFrame && !this.options.targetId) {
+      if (this.executionContextId === undefined) {
+        const world = await this.page.cdp<{ executionContextId: number }>(
+          "Page.createIsolatedWorld",
+          {
+            frameId: this.frame.id,
+            worldName: "dev-browser-frame",
+          }
+        );
+        this.executionContextId = world.executionContextId;
+      }
+      params.contextId = this.executionContextId;
+    }
+
+    const result = await this.page.cdp<RuntimeEvaluateResult>(
+      "Runtime.evaluate",
+      params,
+      { targetId: this.options.targetId }
+    );
+    if (result.exceptionDetails) {
+      const description =
+        result.exceptionDetails.exception?.description ??
+        result.exceptionDetails.text;
+      throw new Error(`Evaluation failed: ${description}`);
+    }
+    return result.result.value as R;
   }
 }
 

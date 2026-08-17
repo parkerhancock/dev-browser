@@ -83,6 +83,12 @@ interface ExtensionEventMessage {
   };
 }
 
+interface ChildTarget {
+  sessionId: string;
+  parentSessionId: string;
+  targetInfo: TargetInfo;
+}
+
 type ExtensionMessage =
   | ExtensionResponseMessage
   | ExtensionEventMessage
@@ -100,6 +106,7 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
   const registry = createTargetRegistry();
   // Read-only Map references for lookups (mutations go through registry methods)
   const { targets: connectedTargets, namedPages, sessions } = registry;
+  const childTargets = new Map<string, ChildTarget>();
   // Waiters for target attachment (event-driven replacement for sleep after createTarget)
   const pendingTargetWaiters = new Map<string, { resolve: () => void }>();
   let extensionWs: WSContext | null = null;
@@ -250,6 +257,26 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
   const getOrCreateSession = registry.getOrCreateSession;
   const isTargetOwnedBySession = registry.isOwnedBySession;
   const getSessionTargets = registry.getSessionTargetIds;
+
+  function isChildOf(child: ChildTarget, rootSessionId: string): boolean {
+    let current: ChildTarget | undefined = child;
+    const visited = new Set<string>();
+    while (current && !visited.has(current.sessionId)) {
+      if (current.parentSessionId === rootSessionId) return true;
+      visited.add(current.sessionId);
+      current = childTargets.get(current.parentSessionId);
+    }
+    return false;
+  }
+
+  function removeChildTargetTree(parentSessionId: string): void {
+    for (const child of Array.from(childTargets.values())) {
+      if (child.parentSessionId === parentSessionId) {
+        removeChildTargetTree(child.sessionId);
+        childTargets.delete(child.sessionId);
+      }
+    }
+  }
 
   // Recover persisted pages by re-attaching to existing tabs
   async function recoverPersistedPages(): Promise<void> {
@@ -433,6 +460,15 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
 
       case "Target.setDiscoverTargets":
         return {};
+
+      case "DevBrowser.getChildTargets": {
+        if (!sessionId) return { targetInfos: [] };
+        return {
+          targetInfos: Array.from(childTargets.values())
+            .filter((child) => isChildOf(child, sessionId))
+            .map((child) => child.targetInfo),
+        };
+      }
 
       case "Target.attachToBrowserTarget":
         // Browser-level session - return a fake session since we only proxy tabs
@@ -1194,10 +1230,11 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
 
     const agentSession = getAgentSession(c);
     const body = await c.req.json();
-    const { page: pageName, method, params } = body as {
+    const { page: pageName, method, params, targetId } = body as {
       page: string;
       method: string;
       params?: Record<string, unknown>;
+      targetId?: string;
     };
 
     if (!pageName || !method) {
@@ -1218,11 +1255,29 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
       );
     }
 
+    let routedSessionId = cdpSessionId;
+    if (targetId) {
+      const child = Array.from(childTargets.values()).find(
+        (candidate) => candidate.targetInfo.targetId === targetId
+      );
+      if (!child || !isChildOf(child, cdpSessionId)) {
+        return c.json(
+          {
+            error: {
+              message: `Child target "${targetId}" is not owned by page "${pageName}"`,
+            },
+          },
+          403
+        );
+      }
+      routedSessionId = child.sessionId;
+    }
+
     try {
       const result = await routeCdpCommand({
         method,
         params,
-        sessionId: cdpSessionId,
+        sessionId: routedSessionId,
         agentSession,
       });
 
@@ -1490,6 +1545,7 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
 
             // Clear CDP session state but preserve namedPages/sessions for recovery
             registry.clearTargetsOnly();
+            childTargets.clear();
             isRecovering = true;
             for (const pending of extensionPendingRequests.values()) {
               pending.reject(new Error("Extension reconnecting, please retry"));
@@ -1555,11 +1611,20 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
                 targetInfo: TargetInfo;
               };
 
-              // Only track page targets - ignore service workers, iframes, etc.
-              // Service workers (like x.com/sw.js) can interfere with CDP routing
+              // Page targets belong to the normal registry. OOPIF targets keep
+              // their parent relationship so /cdp can enforce page ownership.
               const targetType = targetParams.targetInfo.type;
               if (targetType !== "page") {
-                log(`Ignoring non-page target: ${targetType} ${targetParams.targetInfo.url}`);
+                if (targetType === "iframe" && sessionId) {
+                  childTargets.set(targetParams.sessionId, {
+                    sessionId: targetParams.sessionId,
+                    parentSessionId: sessionId,
+                    targetInfo: targetParams.targetInfo,
+                  });
+                  log(`Child target attached: ${targetParams.targetInfo.url} (${targetParams.sessionId})`);
+                } else {
+                  log(`Ignoring non-page target: ${targetType} ${targetParams.targetInfo.url}`);
+                }
                 return;
               }
 
@@ -1607,6 +1672,15 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
             } else if (method === "Target.detachedFromTarget") {
               const detachParams = params as { sessionId: string };
               const cdpSessionId = detachParams.sessionId;
+
+              if (childTargets.has(cdpSessionId)) {
+                removeChildTargetTree(cdpSessionId);
+                childTargets.delete(cdpSessionId);
+                log(`Child target detached: ${cdpSessionId}`);
+                return;
+              }
+
+              removeChildTargetTree(cdpSessionId);
 
               // Get target info BEFORE cleanup (needed to check for reattachment)
               const target = connectedTargets.get(cdpSessionId);
@@ -1734,6 +1808,7 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
 
           // Clear in-memory state but PRESERVE persistedPages for recovery
           registry.clear();
+          childTargets.clear();
           harRecorders.clear();
         },
 

@@ -363,6 +363,91 @@ describe("Relay Server", () => {
     });
   });
 
+  describe("child frame routing", () => {
+    test("routes an owned OOPIF command to its child CDP session", async () => {
+      const session = "frame-routing-session";
+      const pageName = "frame-routing-page";
+      const created = await fetchJson(port, "/pages", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: pageName }),
+        session,
+      });
+      const targetId = created.body.targetId as string;
+      const parentSessionId = `pw-session-${targetId}`;
+
+      ext.sendChildAttachedToTarget(
+        parentSessionId,
+        "child-frame-session",
+        "child-frame-target",
+        "https://child.test/transactions"
+      );
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      const response = await fetchJson(port, "/cdp", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          page: pageName,
+          targetId: "child-frame-target",
+          method: "Runtime.evaluate",
+          params: { expression: "document.title" },
+        }),
+        session,
+      });
+
+      expect(response.status).toBe(200);
+      expect(ext.forwardedCdpCommands()).toContainEqual(
+        expect.objectContaining({
+          method: "Runtime.evaluate",
+          sessionId: "child-frame-session",
+        })
+      );
+    });
+
+    test("does not route a child target through an unrelated page", async () => {
+      const ownerSession = "frame-owner-session";
+      const ownerPage = "frame-owner-page";
+      const owner = await fetchJson(port, "/pages", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: ownerPage }),
+        session: ownerSession,
+      });
+      const ownerTargetId = owner.body.targetId as string;
+      ext.sendChildAttachedToTarget(
+        `pw-session-${ownerTargetId}`,
+        "private-child-session",
+        "private-child-target",
+        "https://child.test/private"
+      );
+
+      const otherSession = "frame-other-session";
+      const otherPage = "frame-other-page";
+      await fetchJson(port, "/pages", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: otherPage }),
+        session: otherSession,
+      });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      const response = await fetchJson(port, "/cdp", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          page: otherPage,
+          targetId: "private-child-target",
+          method: "Runtime.evaluate",
+          params: { expression: "document.title" },
+        }),
+        session: otherSession,
+      });
+
+      expect(response.status).toBe(403);
+    });
+  });
+
   // --------------------------------------------------------------------------
   // Extension Connection
   // --------------------------------------------------------------------------
