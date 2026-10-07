@@ -49,6 +49,8 @@ export interface GetPageRequest {
   viewport?: ViewportSize;
   /** Pin this page to exempt it from idle cleanup (for human collaboration) */
   pinned?: boolean;
+  /** Extension mode: bind the name to this existing Chrome tab instead of creating one */
+  tabId?: number;
 }
 
 export interface GetPageResponse {

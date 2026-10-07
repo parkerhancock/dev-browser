@@ -375,6 +375,9 @@ export interface PageOptions {
   /** Pin this page to exempt it from idle cleanup (default: false).
    *  Use for human collaboration — pinned pages stay open until explicitly closed. */
   pinned?: boolean;
+  /** Extension mode only: bind the name to an existing tab (a tabId from allTargets()),
+   *  e.g. a tab the user signed in on. Rebinds the name if it points at another tab. */
+  tabId?: number;
 }
 
 /** Default ports for each server mode */
@@ -817,6 +820,7 @@ async function connectExtensionMode(
           name,
           viewport: options?.viewport,
           pinned: options?.pinned,
+          tabId: options?.tabId,
         } satisfies GetPageRequest),
       });
 

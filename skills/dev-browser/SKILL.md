@@ -256,6 +256,7 @@ const client = await connect({ ephemeral: true });
 const page = await client.page("name");
 const pageWithSize = await client.page("name", { viewport: { width: 1920, height: 1080 } });
 const pinnedPage = await client.page("form", { pinned: true }); // Exempt from idle cleanup
+const adopted = await client.page("bank", { tabId: 123 }); // Extension: bind a name to an open tab (tabId from allTargets())
 
 const pages = await client.list(); // List all page names
 await client.close("name"); // Close a single page

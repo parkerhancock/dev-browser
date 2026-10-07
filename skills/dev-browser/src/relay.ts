@@ -699,6 +699,7 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
     const body = await c.req.json();
     const name = body.name as string;
     const pinned = body.pinned === true; // Pinned pages are exempt from idle cleanup
+    const adoptTabId = typeof body.tabId === "number" ? (body.tabId as number) : undefined;
 
     const nameError = validatePageName(name);
     if (nameError) return c.json({ error: nameError }, 400);
@@ -723,7 +724,13 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
     const existingCdpSessionId = namedPages.get(pageKey);
     if (existingCdpSessionId) {
       const target = connectedTargets.get(existingCdpSessionId);
-      if (target) {
+      const boundTabId = persistedPages.find((p) => p.key === pageKey)?.tabId;
+      if (target && adoptTabId !== undefined && boundTabId !== adoptTabId) {
+        // Explicit adoption of a different tab: drop the old binding (that tab
+        // stays open, unnamed) and fall through to attach the requested tab.
+        log(`POST /pages session=${agentSession} name=${name} action=unbind-for-adopt tabId=${adoptTabId}`);
+        registry.removeStalePageName(pageKey, name, agentSession);
+      } else if (target) {
         // Update pinned flag if explicitly set on reuse
         if (pinned && !target.pinned) {
           target.pinned = true;
@@ -742,10 +749,11 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
           url: target.targetInfo.url,
           pinned: target.pinned,
         });
+      } else {
+        // CDP session no longer valid, clean up
+        log(`POST /pages session=${agentSession} name=${name} action=stale-cleanup`);
+        registry.removeStalePageName(pageKey, name, agentSession);
       }
-      // CDP session no longer valid, clean up
-      log(`POST /pages session=${agentSession} name=${name} action=stale-cleanup`);
-      registry.removeStalePageName(pageKey, name, agentSession);
     }
 
     // Check tab limits before creating
@@ -775,19 +783,26 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
     // reconnected, but the tab itself is still open). This prevents orphan
     // tabs from accumulating and preserves the page's navigation state.
     const persistedEntry = persistedPages.find((p) => p.key === pageKey);
-    if (persistedEntry) {
+    if (persistedEntry || adoptTabId !== undefined) {
       try {
         const avail = (await sendToExtension({
           method: "getAvailableTargets",
           params: {},
         })) as { targets: Array<{ tabId: number; targetId: string; url: string }> };
 
-        // Match by tabId first, then by last-known URL (never about:blank)
+        // An explicit tabId must match exactly. Otherwise match the persisted
+        // tabId first, then the last-known URL (never about:blank).
         const match =
-          avail.targets.find((t) => t.tabId === persistedEntry.tabId) ??
-          (persistedEntry.url && persistedEntry.url !== "about:blank"
-            ? avail.targets.find((t) => t.url === persistedEntry.url)
-            : undefined);
+          adoptTabId !== undefined
+            ? avail.targets.find((t) => t.tabId === adoptTabId)
+            : avail.targets.find((t) => t.tabId === persistedEntry!.tabId) ??
+              (persistedEntry!.url && persistedEntry!.url !== "about:blank"
+                ? avail.targets.find((t) => t.url === persistedEntry!.url)
+                : undefined);
+
+        if (!match && adoptTabId !== undefined) {
+          return c.json({ error: `No open tab with tabId ${adoptTabId}` }, 404);
+        }
 
         if (match) {
           const attachResult = (await sendToExtension({
@@ -796,7 +811,7 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
           })) as { sessionId: string; targetInfo: TargetInfo };
 
           const cdpSessionId = attachResult.sessionId;
-          const rebindPinned = pinned || (persistedEntry.pinned ?? false);
+          const rebindPinned = pinned || (persistedEntry?.pinned ?? false);
 
           registry.addTarget(cdpSessionId, {
             sessionId: cdpSessionId,
@@ -808,14 +823,21 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
           });
           registry.nameTarget(pageKey, name, cdpSessionId, attachResult.targetInfo.targetId, agentSession);
 
-          persistedEntry.targetId = attachResult.targetInfo.targetId;
-          persistedEntry.tabId = match.tabId;
-          persistedEntry.url = attachResult.targetInfo.url || persistedEntry.url;
-          persistedEntry.pinned = rebindPinned;
-          persistedEntry.lastSeen = Date.now();
+          const entry =
+            persistedEntry ??
+            (() => {
+              const fresh = { key: pageKey, targetId: "", tabId: match.tabId, url: "", lastSeen: 0, pinned: false };
+              persistedPages.push(fresh);
+              return fresh;
+            })();
+          entry.targetId = attachResult.targetInfo.targetId;
+          entry.tabId = match.tabId;
+          entry.url = attachResult.targetInfo.url || entry.url;
+          entry.pinned = rebindPinned;
+          entry.lastSeen = Date.now();
           savePersistedPages(persistedPages);
 
-          log(`POST /pages session=${agentSession} name=${name} action=rebound tabId=${match.tabId} url=${persistedEntry.url} pinned=${rebindPinned}`);
+          log(`POST /pages session=${agentSession} name=${name} action=${adoptTabId !== undefined ? "adopted" : "rebound"} tabId=${match.tabId} url=${entry.url} pinned=${rebindPinned}`);
 
           const response: {
             wsEndpoint: string;
@@ -837,6 +859,10 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
           return c.json(response);
         }
       } catch (err) {
+        if (adoptTabId !== undefined) {
+          log(`Adopt failed for ${pageKey} tabId=${adoptTabId}: ${err}`);
+          return c.json({ error: `Could not attach to tab ${adoptTabId}: ${(err as Error).message}` }, 500);
+        }
         log(`Rebind failed for ${pageKey}, falling back to new tab: ${err}`);
       }
     }

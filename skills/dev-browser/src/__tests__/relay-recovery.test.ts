@@ -326,4 +326,64 @@ describe("Relay Server - Rebind Instead of Orphan", () => {
     const { body: listAfter } = await fetchJson(port, "/pages", { session });
     expect(listAfter.pages as string[]).toContain("rebind-page");
   });
+
+  test("POST /pages with tabId adopts an existing tab instead of creating one", async () => {
+    const session = "adopt-session";
+    const before = createTargetCount(ext);
+
+    ext.clearCommandHandlers();
+    ext.onCommand((msg) => {
+      if (msg.method === "getAvailableTargets") {
+        return {
+          targets: [{ tabId: 200, targetId: "tab-200", url: "https://bank.example/home", title: "Home" }],
+        };
+      }
+      if (msg.method === "attachToTab") {
+        expect((msg.params as { tabId: number }).tabId).toBe(200);
+        return {
+          sessionId: "pw-adopt-1",
+          targetInfo: {
+            targetId: "tab-200",
+            type: "page",
+            title: "Home",
+            url: "https://bank.example/home",
+            attached: true,
+          },
+        };
+      }
+      return undefined;
+    });
+
+    const adopted = await fetchJson(port, "/pages", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "bank", tabId: 200, pinned: true }),
+      session,
+    });
+    expect(adopted.status).toBe(200);
+    expect(adopted.body.targetId).toBe("tab-200");
+    expect(adopted.body.url).toBe("https://bank.example/home");
+    expect(createTargetCount(ext)).toBe(before);
+
+    const { body: list } = await fetchJson(port, "/pages", { session });
+    expect(list.pages as string[]).toContain("bank");
+  });
+
+  test("POST /pages with an unknown tabId fails instead of opening a blank tab", async () => {
+    const before = createTargetCount(ext);
+    ext.clearCommandHandlers();
+    ext.onCommand((msg) => {
+      if (msg.method === "getAvailableTargets") return { targets: [] };
+      return undefined;
+    });
+
+    const res = await fetchJson(port, "/pages", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "missing", tabId: 999 }),
+      session: "adopt-missing",
+    });
+    expect(res.status).toBe(404);
+    expect(createTargetCount(ext)).toBe(before);
+  });
 });

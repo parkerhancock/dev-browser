@@ -93,6 +93,11 @@ export class MockExtension {
     this.onCommandHandlers.push(handler);
   }
 
+  /** Drop handlers registered by earlier tests */
+  clearCommandHandlers(): void {
+    this.onCommandHandlers = [];
+  }
+
   /** CDP commands forwarded to this mock, in arrival order */
   forwardedCdpCommands(): Array<{
     method: string;
