@@ -287,6 +287,33 @@ const { entries, total } = await client.getHarEntries("name"); // Peek at entrie
 const newer = await client.getHarEntries("name", { since: total }); // Only entries after `total`
 const har = await client.stopHarRecording("name");       // Stop, return full HAR, reset
 await client.startHarRecording("name");                  // Start (no-op if already recording in extension mode)
+
+// Console & network (capture starts with recording — i.e. on page() by default)
+const { messages } = await client.getConsoleMessages("name", { pattern: "error" });
+const { requests, total: nTotal } = await client.getNetworkRequests("name", { pattern: "/api/" });
+
+// Find elements by snapshot text (refs work with clickRef/fillRef/selectSnapshotRef)
+const matches = await client.find("name", "Sign in"); // [{ ref: "e12", line: "- button \"Sign in\" [ref=e12]" }]
+
+// Bulk form fill + file upload
+await client.fillForm("name", { "#email": "x@y.com", "#password": "..." });
+await page.setInputFiles("input[type=file]", ["/abs/path/file.pdf"]);
+
+// Page content as text or Markdown
+const text = await client.text("name");
+const md = await client.markdown("name");
+
+// Batched CDP commands (one round trip; stops on first error)
+const { results } = await client.batch("name", [
+  { method: "Emulation.setDeviceMetricsOverride", params: { width: 390, height: 844, deviceScaleFactor: 2, mobile: true } },
+  { method: "Page.captureScreenshot" },
+]);
+
+// Permissions, browsing data, per-origin state
+await client.grantPermissions("name", "https://example.com", ["geolocation"]);
+await client.clearBrowsingData("name", { origin: "https://example.com" }); // or no origin: all cookies + cache
+const state = await client.exportOriginState("name", "https://example.com"); // cookies + localStorage (page must be on that origin for localStorage)
+await client.importOriginState("name", state);
 ```
 
 The `page` object implements the unified `Page` interface — a Playwright-compatible subset with ~45 methods + keyboard/mouse/locators. In standalone mode it's a real Playwright Page; in extension mode it's a `CDPPage` (same interface, different transport). **Use `navigateTo(page, url)` instead of `page.goto(url)` in standalone mode** — it never hangs on problematic sites. In extension mode, `page.goto()` works fine.
@@ -319,6 +346,47 @@ await page.keyboard.press("Control+a");
 await page.mouse.click(100, 200);
 await page.mouse.wheel(0, 300); // Scroll down
 ```
+
+## MCP Server & CLI
+
+`mcp-server/` (repo root) packages the client as model-facing MCP tools and a single CLI:
+
+```bash
+dev-browser serve     # standalone Chromium server on :9222 (--headed, --profile NAME, --browser chrome|msedge, --port)
+dev-browser relay     # Chrome-extension relay on :9224 (--port)
+dev-browser mcp       # MCP server on stdio (--http PORT for streamable HTTP, --mode, --session)
+dev-browser browsers  # show which servers are reachable
+```
+
+Run it from `mcp-server/` with `node bin/dev-browser.mjs <cmd>` (or install the package to get the `dev-browser` bin). The MCP server auto-detects the mode: extension relay first (if its extension is connected), standalone otherwise; `switch_browser` changes it at runtime. The session defaults to `CLAUDE_SESSION_ID` for per-conversation isolation.
+
+Vendor tool → dev-browser mapping (every MCP tool is a thin wrapper over the client API, which stays the engine):
+
+| MCP tool | Backed by |
+|---|---|
+| `tabs_context` | `client.list()` + `client.allTargets()` + `getServerInfo()` |
+| `navigate` | `client.page(name)` + `page.goto()` / `goBack()` / `goForward()` |
+| `read_page` | `client.getAISnapshot(name)` |
+| `get_page_text` | `client.text(name)` / `client.markdown(name)` |
+| `find` | `client.find(name, query)` |
+| `ref_action` | `page.clickRef/fillRef` (extension) / `selectSnapshotRef` (standalone) |
+| `form_input` | `client.fillForm(name, fields)` |
+| `browser_batch` | sequential dispatch of this server's own tools |
+| `cdp_batch` | `client.batch(name, ops)` (`POST /batch` on the relay) |
+| `javascript` | `page.evaluate(code)` |
+| `screenshot` | `page.screenshot()` (also saved under `~/.dev-browser/screenshots`) |
+| `resize_window` | `page.setViewportSize()` |
+| `file_upload` | `page.setInputFiles()` (`DOM.setFileInputFiles` in extension mode) |
+| `tabs_create` / `tabs_close` | `client.page(name)` / `client.close(name)` |
+| `read_console_messages` | `client.getConsoleMessages(name, { pattern, since })` |
+| `read_network_requests` | `client.getNetworkRequests(name, { pattern, since })` |
+| `switch_browser` / `list_connected_browsers` | `/health` probes on :9222 and :9224 |
+
+## Security & Policy
+
+- **Token auth**: the relay generates `~/.dev-browser/token` (0600) on first start and requires it (`X-DevBrowser-Token` header or `?token=`) on every HTTP request and WS upgrade. The client reads the same file automatically — nothing to configure on the same machine. `/extension` upgrades also accept a `chrome-extension://` Origin in place of the token and always reject http(s) Origins.
+- **Policy**: `~/.dev-browser/policy.json` (optional) is enforced at the relay before any CDP command is routed. `{"defaultMode": "strict", "allowedDomains": ["example.com"], "blockedDomains": [...], "cdpMethodAllowlist": [...], "fullCdpAccessOrigins": [...], "sessions": {"<id>": {...}}}`. Strict mode fails closed: navigation only to allowlisted domains, raw CDP limited to the safe set unless the page's origin has full access. No file means permissive (plus the blocklist still applies if present); a malformed file fails closed.
+- **JS dialogs** are auto-dismissed at the relay (`DEV_BROWSER_DIALOG_POLICY=dismiss|accept|ignore`).
 
 ## Navigation & Waiting
 
