@@ -71,6 +71,8 @@ export interface Page {
     type?: "png" | "jpeg";
     path?: string;
     clip?: { x: number; y: number; width: number; height: number };
+    /** "css" makes one image pixel equal one CSS pixel on HiDPI displays. */
+    scale?: "css" | "device";
   }): Promise<Buffer>;
   pdf(options?: {
     format?: string;

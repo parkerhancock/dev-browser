@@ -390,6 +390,7 @@ Vendor tool → dev-browser mapping (every MCP tool is a thin wrapper over the c
 | `cdp_batch` | `client.batch(name, ops)` (`POST /batch` on the relay) |
 | `javascript` | `page.evaluate(code)` |
 | `screenshot` | `page.screenshot()` (also saved under `~/.dev-browser/screenshots`) |
+| `computer` | `computerAction(page, input)` over `page.mouse` / `page.keyboard` / `page.screenshot()`: clicks, type, key, scroll, drag, hover, zoom, wait. Coordinates are CSS pixels and match its screenshots, including on HiDPI displays |
 | `resize_window` | `page.setViewportSize()` |
 | `file_upload` | `page.setInputFiles()` (`DOM.setFileInputFiles` in extension mode) |
 | `tabs_create` / `tabs_close` | `client.page(name)` / `client.close(name)` |

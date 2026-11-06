@@ -21,6 +21,11 @@ import {
   type BatchOp,
 } from "../../skills/dev-browser/src/client.js";
 import { authHeaders } from "../../skills/dev-browser/src/auth.js";
+import {
+  COMPUTER_ACTIONS,
+  computerAction,
+  type ComputerInput,
+} from "../../skills/dev-browser/src/computer.js";
 
 export type BrowserMode = "standalone" | "extension";
 
@@ -122,6 +127,20 @@ function textResult(value: unknown): ToolResult {
   const text =
     typeof value === "string" ? value : JSON.stringify(value, null, 2);
   return { content: [{ type: "text", text }] };
+}
+
+/** Return a PNG to the model and keep a copy under ~/.dev-browser/screenshots. */
+function imageResult(page: string, buffer: Buffer, message?: string): ToolResult {
+  const dir = join(homedir(), ".dev-browser", "screenshots");
+  mkdirSync(dir, { recursive: true });
+  const path = join(dir, `${page}-${new Date().toISOString().replace(/[:.]/g, "-")}.png`);
+  writeFileSync(path, buffer);
+  return {
+    content: [
+      { type: "image", data: buffer.toString("base64"), mimeType: "image/png" },
+      { type: "text", text: [message, `Saved to ${path}`].filter(Boolean).join("\n") },
+    ],
+  };
 }
 
 function errorResult(err: unknown): ToolResult {
@@ -334,19 +353,46 @@ export function buildServer(state: BrowserState): McpServer {
       const client = await getClient(state);
       const p = await client.page(pageName(args));
       const buffer = await p.screenshot({ fullPage: args.full_page === true });
-      const dir = join(homedir(), ".dev-browser", "screenshots");
-      mkdirSync(dir, { recursive: true });
-      const path = join(
-        dir,
-        `${pageName(args)}-${new Date().toISOString().replace(/[:.]/g, "-")}.png`
-      );
-      writeFileSync(path, buffer);
-      return {
-        content: [
-          { type: "image", data: buffer.toString("base64"), mimeType: "image/png" },
-          { type: "text", text: `Saved to ${path}` },
-        ],
-      };
+      return imageResult(pageName(args), buffer);
+    }
+  );
+
+  tool(
+    "computer",
+    "Use the mouse and keyboard on the page, or look at it. Coordinates are viewport " +
+      "pixels and match this tool's screenshots. Click actions and hover take `coordinate` " +
+      "or a `ref` from read_page/find.",
+    {
+      action: z.enum(COMPUTER_ACTIONS),
+      coordinate: z.array(z.number()).optional().describe("[x, y] target"),
+      ref: z.string().optional().describe("Ref id like e12; required for scroll_to"),
+      start_coordinate: z
+        .array(z.number())
+        .optional()
+        .describe("[x, y] drag start for left_click_drag"),
+      text: z
+        .string()
+        .optional()
+        .describe('Text for type; space-separated keys for key, e.g. "cmd+a Backspace"'),
+      repeat: z.number().optional().describe("Times to repeat the keys for key (1-100)"),
+      modifiers: z
+        .string()
+        .optional()
+        .describe('Keys held during a click, e.g. "shift" or "cmd+shift"'),
+      scroll_direction: z.enum(["up", "down", "left", "right"]).optional(),
+      scroll_amount: z.number().optional().describe("Wheel ticks for scroll (default 3)"),
+      duration: z.number().optional().describe("Seconds for wait (0-10)"),
+      region: z
+        .array(z.number())
+        .optional()
+        .describe("[x0, y0, x1, y1] viewport region for zoom"),
+      page: pageParam,
+    },
+    async (args) => {
+      const client = await getClient(state);
+      const p = await client.page(pageName(args));
+      const { message, image } = await computerAction(p, args as unknown as ComputerInput);
+      return image ? imageResult(pageName(args), image, message) : textResult(message);
     }
   );
 
@@ -466,6 +512,7 @@ export function buildServer(state: BrowserState): McpServer {
         input?: Record<string, unknown>;
       }>;
       const results: Array<{ tool: string; result?: unknown; error?: string }> = [];
+      const images: ToolResult["content"] = [];
       for (const action of actions) {
         if (action.tool === "browser_batch") {
           results.push({ tool: action.tool, error: "browser_batch cannot be nested" });
@@ -477,6 +524,7 @@ export function buildServer(state: BrowserState): McpServer {
           break;
         }
         const result = await handler(action.input ?? {});
+        images.push(...result.content.filter((c) => c.type === "image"));
         const text = result.content
           .map((c) => (c.type === "text" ? c.text : "[image]"))
           .join("\n");
@@ -486,7 +534,7 @@ export function buildServer(state: BrowserState): McpServer {
         }
         results.push({ tool: action.tool, result: text });
       }
-      return textResult(results);
+      return { content: [...textResult(results).content, ...images] };
     }
   );
 

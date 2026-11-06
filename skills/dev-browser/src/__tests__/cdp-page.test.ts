@@ -711,11 +711,15 @@ describe("CDPPage", () => {
       });
     });
 
-    it("screenshot with clip passes clip directly", async () => {
+    it("screenshot clip is relative to the viewport, like Playwright's", async () => {
+      relay.onCdp("Runtime.evaluate", () =>
+        runtimeResult(JSON.stringify({ scrollX: 5, scrollY: 100, width: 800, height: 600 }))
+      );
+
       await page.screenshot({ clip: { x: 10, y: 20, width: 300, height: 400 } });
 
       const call = relay.lastCall("Page.captureScreenshot");
-      expect(call?.params?.clip).toMatchObject({ x: 10, y: 20, width: 300, height: 400 });
+      expect(call?.params?.clip).toMatchObject({ x: 15, y: 120, width: 300, height: 400 });
     });
 
     it("pdf sends Page.printToPDF and returns Buffer", async () => {

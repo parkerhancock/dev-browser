@@ -35,6 +35,7 @@ describe("dev-browser MCP server", () => {
       "cdp_batch",
       "javascript",
       "screenshot",
+      "computer",
       "resize_window",
       "file_upload",
       "tabs_create",

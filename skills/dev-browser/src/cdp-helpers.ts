@@ -101,6 +101,10 @@ export function parseKeyCombo(combo: string): {
   modifiers: string[];
   key: string;
 } {
+  // A trailing "+" is the plus key itself, as in "+" or "Control++".
+  if (combo.endsWith("+")) {
+    return { modifiers: combo.slice(0, -1).split("+").filter(Boolean), key: "+" };
+  }
   const parts = combo.split("+");
   const key = parts.pop()!;
   return { modifiers: parts, key };

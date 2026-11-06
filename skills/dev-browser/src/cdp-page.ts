@@ -65,6 +65,17 @@ export interface CDPCommandOptions {
 // CDPPage
 // ============================================================================
 
+const META_MODIFIER = 4;
+const SHIFT_MODIFIER = 8;
+const META_COMMANDS: Record<string, string[]> = {
+  a: ["selectAll"],
+  c: ["copy"],
+  v: ["paste"],
+  x: ["cut"],
+  z: ["undo"],
+};
+const MOUSE_BUTTON_MASK = { left: 1, right: 2, middle: 4 } as const;
+
 export class CDPPage implements Page {
   private relayUrl: string;
   private pageName: string;
@@ -633,13 +644,25 @@ export class CDPPage implements Page {
     type?: "png" | "jpeg";
     path?: string;
     clip?: { x: number; y: number; width: number; height: number };
+    scale?: "css" | "device";
   }): Promise<Buffer> {
     const captureParams: Record<string, unknown> = {
       format: options?.type === "jpeg" ? "jpeg" : "png",
     };
+    const scale = options?.scale === "css" ? await this.cssPixelScale() : 1;
 
     if (options?.clip) {
-      captureParams.clip = { ...options.clip, scale: 1 };
+      // CDP clips are document-relative; Playwright's are viewport-relative.
+      const { scrollX, scrollY } = await this.viewportMetrics();
+      captureParams.clip = {
+        ...options.clip,
+        x: options.clip.x + scrollX,
+        y: options.clip.y + scrollY,
+        scale,
+      };
+    } else if (scale !== 1 && !options?.fullPage) {
+      const { scrollX, scrollY, width, height } = await this.viewportMetrics();
+      captureParams.clip = { x: scrollX, y: scrollY, width, height, scale };
     } else if (options?.fullPage) {
       const dims = await this.evalValue<{ width: number; height: number }>(
         `JSON.stringify({ width: Math.max(document.documentElement.scrollWidth, document.body.scrollWidth), height: Math.max(document.documentElement.scrollHeight, document.body.scrollHeight) })`
@@ -650,7 +673,7 @@ export class CDPPage implements Page {
         y: 0,
         width: parsed.width,
         height: parsed.height,
-        scale: 1,
+        scale,
       };
     }
 
@@ -659,6 +682,33 @@ export class CDPPage implements Page {
       captureParams
     );
     return Buffer.from(result.data, "base64");
+  }
+
+  private async viewportMetrics(): Promise<{
+    scrollX: number;
+    scrollY: number;
+    width: number;
+    height: number;
+  }> {
+    const metrics = await this.evalValue<string>(
+      `JSON.stringify({ scrollX: window.scrollX, scrollY: window.scrollY, width: window.innerWidth, height: window.innerHeight })`
+    );
+    return JSON.parse(metrics);
+  }
+
+  /**
+   * The clip scale that yields one image pixel per CSS pixel. Measured rather
+   * than taken from devicePixelRatio: Chrome multiplies by the display's scale
+   * but not by an emulated one, so the ratio alone is wrong under emulation.
+   */
+  private async cssPixelScale(): Promise<number> {
+    const probeSize = 10;
+    const probe = await this.cdp<{ data: string }>("Page.captureScreenshot", {
+      format: "png",
+      clip: { x: 0, y: 0, width: probeSize, height: probeSize, scale: 1 },
+    });
+    // PNG stores the image width as a big-endian uint32 at byte 16.
+    return probeSize / Buffer.from(probe.data, "base64").readUInt32BE(16);
   }
 
   async pdf(options?: {
@@ -978,6 +1028,11 @@ export class CDPKeyboard implements Keyboard {
     this.page = page;
   }
 
+  /** CDP bitmask of held modifier keys; mouse events must carry it too. */
+  get heldModifiers(): number {
+    return this.modifiers;
+  }
+
   async down(key: string): Promise<void> {
     const def = resolveKey(key);
     this.modifiers |=
@@ -1016,24 +1071,19 @@ export class CDPKeyboard implements Keyboard {
     }
 
     const def = resolveKey(mainKey);
+    // keyDown alone inserts `text`; a separate char event would insert it twice.
+    // Anything but Shift makes this a shortcut, which inserts nothing.
+    const isShortcut = (this.modifiers & ~SHIFT_MODIFIER) !== 0;
     await this.page.cdp("Input.dispatchKeyEvent", {
       type: "keyDown",
       modifiers: this.modifiers,
       key: def.key,
       code: def.code,
       windowsVirtualKeyCode: def.keyCode,
-      text: def.text,
+      text: isShortcut ? "" : def.text,
+      // Raw key events don't trigger the Mac editing shortcuts; these do.
+      commands: this.modifiers === META_MODIFIER ? META_COMMANDS[def.key] : undefined,
     });
-
-    if (def.text) {
-      await this.page.cdp("Input.dispatchKeyEvent", {
-        type: "char",
-        modifiers: this.modifiers,
-        key: def.key,
-        code: def.code,
-        text: def.text,
-      });
-    }
 
     if (options?.delay) await delay(options.delay);
 
@@ -1053,7 +1103,9 @@ export class CDPKeyboard implements Keyboard {
 
   async type(text: string, options?: { delay?: number }): Promise<void> {
     for (const char of text) {
-      await this.press(char);
+      if (char === "\n" || char === "\r") await this.press("Enter");
+      else if (char.length === 1) await this.press(char);
+      else await this.insertText(char); // Outside the BMP: no key produces it
       if (options?.delay) await delay(options.delay);
     }
   }
@@ -1071,9 +1123,15 @@ export class CDPMouse implements Mouse {
   private page: CDPPage;
   private x = 0;
   private y = 0;
+  private pressed: "left" | "right" | "middle" | null = null;
 
   constructor(page: CDPPage) {
     this.page = page;
+  }
+
+  /** The DOM `buttons` bitmask for the button held down, if any. */
+  private get buttons(): number {
+    return this.pressed ? MOUSE_BUTTON_MASK[this.pressed] : 0;
   }
 
   async click(
@@ -1120,7 +1178,9 @@ export class CDPMouse implements Mouse {
         type: "mouseMoved",
         x: stepX,
         y: stepY,
-        button: "none",
+        button: this.pressed ?? "none",
+        buttons: this.buttons,
+        modifiers: this.page.keyboard.heldModifiers,
       });
     }
 
@@ -1132,13 +1192,15 @@ export class CDPMouse implements Mouse {
     button?: "left" | "right" | "middle";
     clickCount?: number;
   }): Promise<void> {
+    this.pressed = options?.button ?? "left";
     await this.page.cdp("Input.dispatchMouseEvent", {
       type: "mousePressed",
       x: this.x,
       y: this.y,
-      button: options?.button ?? "left",
-      buttons: 1,
+      button: this.pressed,
+      buttons: this.buttons,
       clickCount: options?.clickCount ?? 1,
+      modifiers: this.page.keyboard.heldModifiers,
     });
   }
 
@@ -1146,6 +1208,7 @@ export class CDPMouse implements Mouse {
     button?: "left" | "right" | "middle";
     clickCount?: number;
   }): Promise<void> {
+    this.pressed = null;
     await this.page.cdp("Input.dispatchMouseEvent", {
       type: "mouseReleased",
       x: this.x,
@@ -1153,6 +1216,7 @@ export class CDPMouse implements Mouse {
       button: options?.button ?? "left",
       buttons: 0,
       clickCount: options?.clickCount ?? 1,
+      modifiers: this.page.keyboard.heldModifiers,
     });
   }
 
@@ -1163,6 +1227,7 @@ export class CDPMouse implements Mouse {
       y: this.y,
       deltaX,
       deltaY,
+      modifiers: this.page.keyboard.heldModifiers,
     });
   }
 }
