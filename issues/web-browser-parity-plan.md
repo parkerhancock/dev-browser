@@ -11,10 +11,16 @@ P1 #1-7, #9, #10a (standalone `serve({browser})`), #11 (client side), #12,
 per-origin full access (`src/policy.ts`, enforced in `/cdp` and `/batch`)
 and per-origin state export/import; P3 `dev-browser` CLI + SKILL.md.
 
-**Deferred** (needs Chrome-extension-side work or a product decision):
-- P1 #8 downloads in extension mode (chrome.downloads integration)
-- P1 #10b labeling extension WS connections per browser
-  (`extension/services/ConnectionManager.ts`)
+**Landed** (extension-side follow-up, same date): P1 #8 downloads
+(`extension/services/DownloadManager.ts` forwards chrome.downloads events;
+relay `GET /downloads` + `GET /download/:id`; `client.getDownloads()` /
+`waitForDownload()` in both modes — standalone rides Playwright's
+`download` event) and P1 #10b browser labeling
+(`extension/utils/browser-info.ts` + `browserInfo` WS message; relay
+`GET /browsers` and `browser` in `/health`; `client.listBrowsers()` and
+`connect({ browser })`).
+
+**Deferred** (needs a product decision):
 - §4(3) native-messaging host in place of the `debugger` permission
 - P2 strict-by-default: shipped as permissive when no
   `~/.dev-browser/policy.json` exists (strict with no allowlist would

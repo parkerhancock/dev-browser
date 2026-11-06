@@ -76,10 +76,41 @@ export interface ExtensionLogMessage {
   };
 }
 
+// Browser identification sent once per connection (parity P1 #10b)
+export interface ExtensionBrowserInfoMessage {
+  method: "browserInfo";
+  params: {
+    browser: string;
+    version?: string;
+    userAgent?: string;
+  };
+}
+
+// Download lifecycle event (parity P1 #8)
+export interface DownloadEventParams {
+  /** chrome.downloads item id */
+  id: number;
+  url: string;
+  /** Absolute path on disk, once Chrome has determined it */
+  filename?: string;
+  state: "inProgress" | "completed" | "interrupted";
+  fileSize?: number;
+  mime?: string;
+  /** ISO 8601 start time from chrome.downloads */
+  startTime?: string;
+}
+
+export interface ExtensionDownloadEventMessage {
+  method: "downloadEvent";
+  params: DownloadEventParams;
+}
+
 export type ExtensionMessage =
   | ExtensionResponseMessage
   | ExtensionEventMessage
-  | ExtensionLogMessage;
+  | ExtensionLogMessage
+  | ExtensionBrowserInfoMessage
+  | ExtensionDownloadEventMessage;
 
 // Chrome debugger target info
 export interface TargetInfo {

@@ -18,7 +18,7 @@ import {
 } from "./persistence.js";
 import { createLogger } from "./logging.js";
 import { getSnapshotScript } from "./snapshot/browser-script.js";
-import { mkdirSync, writeFileSync, unlinkSync, readdirSync, statSync } from "fs";
+import { mkdirSync, writeFileSync, unlinkSync, readdirSync, statSync, readFileSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
 import { randomUUID } from "crypto";
@@ -64,6 +64,30 @@ export interface RelayOptions {
   dialogPolicy?: DialogPolicy;
   /** Override the policy (default: load ~/.dev-browser/policy.json). */
   policy?: RelayPolicy;
+}
+
+/** A download tracked by the relay (reported by the extension's chrome.downloads listeners). */
+export interface DownloadRecord {
+  /** chrome.downloads item id */
+  id: number;
+  url: string;
+  /** Absolute path on disk, once Chrome has determined it */
+  path?: string;
+  /** Filename the page suggested (standalone mode only) */
+  suggestedFilename?: string;
+  state: "inProgress" | "completed" | "interrupted";
+  startedAt: number;
+  updatedAt: number;
+  fileSize?: number;
+  mime?: string;
+}
+
+/** Browser identification sent by the extension on connect. */
+export interface ExtensionBrowserInfo {
+  /** "chrome" | "msedge" | "brave" | "opera" | "vivaldi" | "chromium" | "unknown" */
+  browser: string;
+  version?: string;
+  userAgent?: string;
 }
 
 /** A console message captured from a page. */
@@ -118,10 +142,22 @@ interface ChildTarget {
   targetInfo: TargetInfo;
 }
 
+interface ExtensionDownloadEventParams {
+  id: number;
+  url: string;
+  filename?: string;
+  state: "inProgress" | "completed" | "interrupted";
+  fileSize?: number;
+  mime?: string;
+  startTime?: string;
+}
+
 type ExtensionMessage =
   | ExtensionResponseMessage
   | ExtensionEventMessage
-  | { method: "log"; params: { level: string; args: string[] } };
+  | { method: "log"; params: { level: string; args: string[] } }
+  | { method: "browserInfo"; params: ExtensionBrowserInfo }
+  | { method: "downloadEvent"; params: ExtensionDownloadEventParams };
 
 // ============================================================================
 // Relay Server Implementation
@@ -147,6 +183,12 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
   const pendingTargetWaiters = new Map<string, { resolve: () => void }>();
   let extensionWs: WSContext | null = null;
   let isRecovering = false; // True during extension reconnect recovery
+  // Which browser the connected extension runs in (parity P1 #10b)
+  let extensionBrowser: ExtensionBrowserInfo | null = null;
+  // Downloads reported by the extension, newest-insertion-last (parity P1 #8).
+  // Metadata survives extension reconnects — the files live on disk regardless.
+  const downloads = new Map<number, DownloadRecord>();
+  const DOWNLOADS_MAX = 100;
 
   // Logging
   const { log, logFile } = createLogger("relay", { stdout: true });
@@ -777,11 +819,69 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
       ok: true,
       mode: "extension",
       extensionConnected: extensionWs !== null,
+      browser: extensionBrowser?.browser ?? null,
       uptimeSeconds: Math.round((Date.now() - startedAt) / 1000),
       namedPages: namedPages.size,
       sessions: sessions.size,
       permissionMode: policy.defaultMode,
     });
+  });
+
+  // Which browser is connected via the extension (parity P1 #10b).
+  // The relay holds one extension connection at a time, so this lists 0 or 1.
+  app.get("/browsers", (c) => {
+    if (!extensionWs) {
+      return c.json({ browsers: [] });
+    }
+    return c.json({
+      browsers: [
+        {
+          browser: extensionBrowser?.browser ?? "unknown",
+          version: extensionBrowser?.version,
+          userAgent: extensionBrowser?.userAgent,
+          connected: true,
+        },
+      ],
+    });
+  });
+
+  // Downloads reported by the extension (parity P1 #8)
+  app.get("/downloads", (c) => {
+    const sinceRaw = c.req.query("since");
+    const since = sinceRaw === undefined ? NaN : parseInt(sinceRaw, 10);
+    let list = Array.from(downloads.values());
+    if (!Number.isNaN(since)) {
+      list = list.filter((d) => d.startedAt >= since);
+    }
+    return c.json({ downloads: list });
+  });
+
+  // Serve a completed download's bytes. The file stays in place — it belongs
+  // to the user's Downloads folder, so the relay never deletes it.
+  app.get("/download/:id", (c) => {
+    const id = parseInt(c.req.param("id"), 10);
+    const record = downloads.get(id);
+    if (!record) {
+      return c.json({ error: "Download not found" }, 404);
+    }
+    if (record.state !== "completed" || !record.path) {
+      return c.json(
+        { error: `Download not complete (state: ${record.state})` },
+        409
+      );
+    }
+    try {
+      const data = readFileSync(record.path);
+      const basename = record.path.split("/").pop() ?? `download-${id}`;
+      return new Response(new Uint8Array(data), {
+        headers: {
+          "Content-Type": record.mime ?? "application/octet-stream",
+          "Content-Disposition": `attachment; filename="${basename}"`,
+        },
+      });
+    } catch {
+      return c.json({ error: "Download file not found on disk" }, 404);
+    }
   });
 
   // List named pages (filtered by session)
@@ -1858,6 +1958,7 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
             childTargets.clear();
             consoleBuffers.clear();
             consoleEnabled.clear();
+            extensionBrowser = null; // The new connection sends its own browserInfo
             isRecovering = true;
             for (const pending of extensionPendingRequests.values()) {
               pending.reject(new Error("Extension reconnecting, please retry"));
@@ -1908,6 +2009,42 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
           if ("method" in message && message.method === "log") {
             const { level, args } = message.params;
             console.log(`[extension:${level}]`, ...args);
+            return;
+          }
+
+          // Browser identification (sent once after connect)
+          if ("method" in message && message.method === "browserInfo") {
+            extensionBrowser = message.params;
+            log(
+              `Extension browser: ${extensionBrowser.browser}${extensionBrowser.version ? ` ${extensionBrowser.version}` : ""}`
+            );
+            return;
+          }
+
+          // Download lifecycle events from chrome.downloads
+          if ("method" in message && message.method === "downloadEvent") {
+            const p = message.params;
+            const existing = downloads.get(p.id);
+            const parsedStart = p.startTime ? Date.parse(p.startTime) : NaN;
+            const startedAt =
+              existing?.startedAt ??
+              (Number.isNaN(parsedStart) ? Date.now() : parsedStart);
+            downloads.set(p.id, {
+              id: p.id,
+              url: p.url,
+              path: p.filename ?? existing?.path,
+              state: p.state,
+              startedAt,
+              updatedAt: Date.now(),
+              fileSize: p.fileSize ?? existing?.fileSize,
+              mime: p.mime ?? existing?.mime,
+            });
+            // Cap: drop the oldest-inserted record
+            if (downloads.size > DOWNLOADS_MAX) {
+              const oldest = downloads.keys().next().value;
+              if (oldest !== undefined) downloads.delete(oldest);
+            }
+            log(`Download ${p.id} ${p.state}: ${p.filename ?? p.url}`);
             return;
           }
 
@@ -2194,8 +2331,10 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
           extensionPendingRequests.clear();
 
           extensionWs = null;
+          extensionBrowser = null;
 
           // Clear in-memory state but PRESERVE persistedPages for recovery
+          // (downloads metadata also survives — the files live on disk)
           registry.clear();
           childTargets.clear();
           harRecorders.clear();

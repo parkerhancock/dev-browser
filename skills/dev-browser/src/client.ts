@@ -25,7 +25,7 @@ import { createLogger } from "./logging.js";
 import { wrapWithCleanErrors } from "./errors.js";
 import { authHeaders } from "./auth.js";
 import TurndownService from "turndown";
-import type { ConsoleMessage } from "./relay.js";
+import type { ConsoleMessage, DownloadRecord } from "./relay.js";
 import {
   type HarEntry,
   type HarLog,
@@ -55,7 +55,16 @@ interface HarRecorderState {
 const CONSOLE_BUFFER_MAX = 1000;
 
 // Re-export so consumers can type console results without importing relay
-export type { ConsoleMessage } from "./relay.js";
+export type { ConsoleMessage, DownloadRecord } from "./relay.js";
+
+/** A connected browser, as reported by listBrowsers(). */
+export interface BrowserInfo {
+  /** "chrome" | "msedge" | "brave" | "chromium" | ... */
+  browser: string;
+  version?: string;
+  userAgent?: string;
+  connected: boolean;
+}
 
 /** A single CDP operation for client.batch(). */
 export interface BatchOp {
@@ -476,6 +485,13 @@ export interface ConnectOptions {
    * ```
    */
   ephemeral?: boolean;
+  /**
+   * Require the connected browser to match this label (e.g. "chrome",
+   * "msedge", "brave"). Throws at connect time when the server or relay is
+   * driving a different browser, or (extension mode) when no browser is
+   * connected. Omit to accept whatever is running.
+   */
+  browser?: string;
 }
 
 /**
@@ -663,6 +679,29 @@ export interface DevBrowserClient {
    * localStorage can only be written when the page is currently on that origin.
    */
   importOriginState: (name: string, state: OriginState) => Promise<void>;
+  /**
+   * Downloads observed since connecting (standalone) or tracked by the relay
+   * (extension mode; reported by chrome.downloads, browser-wide). `since` is
+   * an epoch-ms floor on each download's start time.
+   */
+  getDownloads: (options?: { since?: number }) => Promise<DownloadRecord[]>;
+  /**
+   * Wait for a download to complete and return its record (with `path` on
+   * this machine). By default matches downloads started up to 60s before the
+   * call, so it works whether you call it before or after triggering the
+   * download; pass `since` (epoch ms) to narrow the window. Throws on
+   * interrupted downloads and after `timeoutMs` (default 30s).
+   */
+  waitForDownload: (options?: {
+    since?: number;
+    timeoutMs?: number;
+  }) => Promise<DownloadRecord>;
+  /**
+   * List connected browsers. Extension mode reports the browser the extension
+   * runs in (chrome/msedge/brave/...); standalone mode reports the launched
+   * browser. The relay holds one extension connection, so expect 0 or 1.
+   */
+  listBrowsers: () => Promise<BrowserInfo[]>;
 }
 
 // ============================================================================
@@ -914,6 +953,33 @@ async function importOriginStateImpl(
 }
 
 /** Clear browsing data via raw CDP. */
+/**
+ * Poll a download source until a matching download completes.
+ * Shared by both modes; `fetchSince` returns downloads with startedAt >= since.
+ */
+async function pollForDownload(
+  fetchSince: (since: number) => Promise<DownloadRecord[]>,
+  options?: { since?: number; timeoutMs?: number }
+): Promise<DownloadRecord> {
+  // Default window reaches 60s back so the call works after the triggering click
+  const since = options?.since ?? Date.now() - 60_000;
+  const timeoutMs = options?.timeoutMs ?? 30_000;
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const records = await fetchSince(since);
+    const done = records.find((d) => d.state === "completed");
+    if (done) return done;
+    const failed = records.find((d) => d.state === "interrupted");
+    if (failed) {
+      throw new Error(`Download interrupted: ${failed.url}`);
+    }
+    if (Date.now() >= deadline) {
+      throw new Error(`Timed out waiting for a download after ${timeoutMs}ms`);
+    }
+    await new Promise((r) => setTimeout(r, 250));
+  }
+}
+
 async function clearBrowsingDataImpl(
   sendCdp: (method: string, params?: Record<string, unknown>) => Promise<unknown>,
   options?: { origin?: string }
@@ -1144,6 +1210,19 @@ async function connectExtensionMode(
     if (!res.ok) {
       throw new Error(`Failed to enable console capture: ${await res.text()}`);
     }
+  }
+
+  async function fetchDownloads(since?: number): Promise<DownloadRecord[]> {
+    const params = new URLSearchParams();
+    if (since !== undefined) params.set("since", String(since));
+    const res = await fetch(`${serverUrl}/downloads?${params}`, {
+      headers: sessionHeaders,
+    });
+    if (!res.ok) {
+      throw new Error(`Failed to get downloads: ${await res.text()}`);
+    }
+    const data = (await res.json()) as { downloads: DownloadRecord[] };
+    return data.downloads;
   }
 
   return {
@@ -1438,6 +1517,28 @@ async function connectExtensionMode(
         state
       );
     },
+
+    async getDownloads(options?: { since?: number }): Promise<DownloadRecord[]> {
+      return fetchDownloads(options?.since);
+    },
+
+    async waitForDownload(options?: {
+      since?: number;
+      timeoutMs?: number;
+    }): Promise<DownloadRecord> {
+      return pollForDownload((since) => fetchDownloads(since), options);
+    },
+
+    async listBrowsers(): Promise<BrowserInfo[]> {
+      const res = await fetch(`${serverUrl}/browsers`, {
+        headers: sessionHeaders,
+      });
+      if (!res.ok) {
+        throw new Error(`Failed to list browsers: ${await res.text()}`);
+      }
+      const data = (await res.json()) as { browsers: BrowserInfo[] };
+      return data.browsers;
+    },
   };
 }
 
@@ -1495,6 +1596,43 @@ export async function connect(
     ...authHeaders(),
   };
 
+  // Verify the connected browser matches the requested one (P1 #10b)
+  if (opts.browser) {
+    const wanted = opts.browser;
+    if (opts.mode === "extension") {
+      const res = await fetch(`${serverUrl}/browsers`, {
+        headers: sessionHeaders,
+      });
+      if (!res.ok) {
+        throw new Error(`Failed to list browsers: ${await res.text()}`);
+      }
+      const { browsers } = (await res.json()) as { browsers: BrowserInfo[] };
+      const current = browsers[0];
+      if (!current) {
+        throw new Error(
+          `No browser is connected to the relay (wanted "${wanted}")`
+        );
+      }
+      if (current.browser !== "unknown" && current.browser !== wanted) {
+        throw new Error(
+          `Connected browser is "${current.browser}", not "${wanted}"`
+        );
+      }
+    } else {
+      const res = await fetch(`${serverUrl}/health`, {
+        headers: sessionHeaders,
+      });
+      if (!res.ok) {
+        throw new Error(`Failed to get server health: ${await res.text()}`);
+      }
+      const health = (await res.json()) as { browser?: string };
+      const current = health.browser ?? "chromium";
+      if (current !== wanted) {
+        throw new Error(`Server browser is "${current}", not "${wanted}"`);
+      }
+    }
+  }
+
   // ---- Extension mode: HTTP RPC via CDPPage (no Playwright) ----
   if (opts.mode === "extension") {
     return wrapWithCleanErrors(
@@ -1511,6 +1649,39 @@ export async function connect(
 
   // Track active HAR recordings: pageName -> recorder state
   const harRecorders = new Map<string, HarRecorderState>();
+
+  // Downloads observed via Playwright's "download" event (this client only)
+  const downloadRecords: DownloadRecord[] = [];
+  let nextDownloadId = 1;
+  const downloadTrackedPages = new WeakSet<PlaywrightPage>();
+
+  function trackDownloads(p: PlaywrightPage): void {
+    if (downloadTrackedPages.has(p)) return;
+    downloadTrackedPages.add(p);
+    p.on("download", (download) => {
+      const record: DownloadRecord = {
+        id: nextDownloadId++,
+        url: download.url(),
+        suggestedFilename: download.suggestedFilename(),
+        state: "inProgress",
+        startedAt: Date.now(),
+        updatedAt: Date.now(),
+      };
+      downloadRecords.push(record);
+      if (downloadRecords.length > 100) downloadRecords.shift();
+      download
+        .path()
+        .then((filePath) => {
+          record.path = filePath;
+          record.state = "completed";
+          record.updatedAt = Date.now();
+        })
+        .catch(() => {
+          record.state = "interrupted";
+          record.updatedAt = Date.now();
+        });
+    });
+  }
 
   // Force reconnect by closing existing connection and starting fresh
   // This is needed in extension mode when new tabs are created after Playwright connected
@@ -1826,6 +1997,7 @@ export async function connect(
   const clientImpl: DevBrowserClient = {
     async page(name: string, options?: PageOptions): Promise<Page> {
       const p = await getPage(name, options);
+      trackDownloads(p);
       // Auto-start HAR recording unless opted out
       if (options?.record !== false && !harRecorders.has(name)) {
         try {
@@ -2149,6 +2321,32 @@ export async function connect(
       } finally {
         await cdpSession.detach().catch(() => {});
       }
+    },
+
+    async getDownloads(options?: { since?: number }): Promise<DownloadRecord[]> {
+      const since = options?.since;
+      return downloadRecords.filter(
+        (d) => since === undefined || d.startedAt >= since
+      );
+    },
+
+    async waitForDownload(options?: {
+      since?: number;
+      timeoutMs?: number;
+    }): Promise<DownloadRecord> {
+      return pollForDownload(
+        async (since) => downloadRecords.filter((d) => d.startedAt >= since),
+        options
+      );
+    },
+
+    async listBrowsers(): Promise<BrowserInfo[]> {
+      const res = await fetch(`${serverUrl}/health`, { headers: authHeaders() });
+      if (!res.ok) {
+        throw new Error(`Failed to get server health: ${await res.text()}`);
+      }
+      const health = (await res.json()) as { browser?: string };
+      return [{ browser: health.browser ?? "chromium", connected: true }];
     },
   };
 

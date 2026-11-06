@@ -4,6 +4,7 @@
 
 import type { Logger } from "../utils/logger";
 import type { ExtensionCommandMessage, ExtensionResponseMessage } from "../utils/types";
+import { detectBrowser } from "../utils/browser-info";
 
 const RELAY_URL = "ws://localhost:9224/extension";
 const RECONNECT_INTERVAL = 3000;
@@ -194,6 +195,9 @@ export class ConnectionManager {
       this.ws = socket;
       this.setupSocketHandlers(socket);
       this.logger.log("Connected to relay server");
+
+      // Identify which browser this connection comes from (parity P1 #10b)
+      this.send({ method: "browserInfo", params: detectBrowser() });
     } finally {
       this.connecting = false;
     }

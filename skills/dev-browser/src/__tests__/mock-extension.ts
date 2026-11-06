@@ -288,6 +288,29 @@ export class MockExtension {
     );
   }
 
+  /** Identify which browser this mock extension pretends to run in */
+  sendBrowserInfo(browser: string, version?: string, userAgent?: string): void {
+    this.ws.send(
+      JSON.stringify({
+        method: "browserInfo",
+        params: { browser, version, userAgent },
+      })
+    );
+  }
+
+  /** Send a chrome.downloads lifecycle event to the relay */
+  sendDownloadEvent(params: {
+    id: number;
+    url: string;
+    filename?: string;
+    state: "inProgress" | "completed" | "interrupted";
+    fileSize?: number;
+    mime?: string;
+    startTime?: string;
+  }): void {
+    this.ws.send(JSON.stringify({ method: "downloadEvent", params }));
+  }
+
   async disconnect(): Promise<void> {
     if (this.ws.readyState === WebSocket.OPEN) {
       this.ws.close();

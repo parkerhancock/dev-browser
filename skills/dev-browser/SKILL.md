@@ -314,6 +314,19 @@ await client.grantPermissions("name", "https://example.com", ["geolocation"]);
 await client.clearBrowsingData("name", { origin: "https://example.com" }); // or no origin: all cookies + cache
 const state = await client.exportOriginState("name", "https://example.com"); // cookies + localStorage (page must be on that origin for localStorage)
 await client.importOriginState("name", state);
+
+// Downloads: trigger, then wait for completion. The record's `path` is the
+// file on this machine (extension mode: the user's Downloads folder, reported
+// browser-wide by chrome.downloads; standalone: Playwright's temp dir).
+await page.click("a.download-link");
+const dl = await client.waitForDownload(); // matches downloads started ≤60s ago; { since?, timeoutMs? }
+console.log(dl.path, dl.fileSize);
+const all = await client.getDownloads({ since: Date.now() - 300_000 });
+
+// Which browser is connected (extension mode: chrome | msedge | brave | ...)
+const browsers = await client.listBrowsers(); // [{ browser: "msedge", version, connected: true }]
+// Or require a specific one at connect time:
+const edgeClient = await connect({ mode: "extension", browser: "msedge" }); // throws if another browser is connected
 ```
 
 The `page` object implements the unified `Page` interface — a Playwright-compatible subset with ~45 methods + keyboard/mouse/locators. In standalone mode it's a real Playwright Page; in extension mode it's a `CDPPage` (same interface, different transport). **Use `navigateTo(page, url)` instead of `page.goto(url)` in standalone mode** — it never hangs on problematic sites. In extension mode, `page.goto()` works fine.
@@ -380,7 +393,9 @@ Vendor tool → dev-browser mapping (every MCP tool is a thin wrapper over the c
 | `tabs_create` / `tabs_close` | `client.page(name)` / `client.close(name)` |
 | `read_console_messages` | `client.getConsoleMessages(name, { pattern, since })` |
 | `read_network_requests` | `client.getNetworkRequests(name, { pattern, since })` |
-| `switch_browser` / `list_connected_browsers` | `/health` probes on :9222 and :9224 |
+| `switch_browser` / `list_connected_browsers` | `/health` probes on :9222 and :9224 (includes the `browser` label) |
+
+Downloads and browser identity are also exposed over HTTP on the relay: `GET /downloads?since=<ms>` lists downloads reported by the extension, `GET /download/:id` serves a completed download's bytes (the file itself is never deleted), and `GET /browsers` reports which browser the extension connection comes from (`chrome`, `msedge`, `brave`, ...). Note that `chrome.downloads` has no tab association, so extension-mode download tracking is browser-wide: downloads the user starts by hand while the extension is active also appear in `getDownloads()`.
 
 ## Security & Policy
 

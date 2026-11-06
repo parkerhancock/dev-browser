@@ -10,6 +10,7 @@ import { TabManager } from "../services/TabManager";
 import { ConnectionManager } from "../services/ConnectionManager";
 import { CDPRouter } from "../services/CDPRouter";
 import { StateManager } from "../services/StateManager";
+import { DownloadManager } from "../services/DownloadManager";
 import type { PopupMessage, StateResponse } from "../utils/types";
 
 export default defineBackground(() => {
@@ -40,6 +41,13 @@ export default defineBackground(() => {
     onMessage: (msg) => cdpRouter.handleCommand(msg),
     onDisconnect: () => tabManager.detachAll(),
   });
+
+  // Forward download lifecycle events to the relay
+  const downloadManager = new DownloadManager({
+    logger,
+    sendMessage: (msg) => connectionManager.send(msg),
+  });
+  downloadManager.start();
 
   // Keep-alive alarm name for Chrome Alarms API
   const KEEPALIVE_ALARM = "keepAlive";
