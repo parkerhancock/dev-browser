@@ -39,14 +39,43 @@ import {
   TAB_WARNING_THRESHOLD,
   TAB_LIMIT,
 } from "./types.js";
+import { TOKEN_HEADER, loadOrCreateToken, tokensMatch } from "./auth.js";
+import {
+  loadPolicy,
+  checkNavigation,
+  checkCdpMethod,
+  type RelayPolicy,
+} from "./policy.js";
 
 // ============================================================================
 // Types
 // ============================================================================
 
+export type DialogPolicy = "dismiss" | "accept" | "ignore";
+
 export interface RelayOptions {
   port?: number;
   host?: string;
+  /** Require the shared token on HTTP requests and WS upgrades (default: true). */
+  requireAuth?: boolean;
+  /** Override the token (default: load/create ~/.dev-browser/token). */
+  token?: string;
+  /** What to do with JS dialogs (alert/confirm/prompt). Default: "dismiss". */
+  dialogPolicy?: DialogPolicy;
+  /** Override the policy (default: load ~/.dev-browser/policy.json). */
+  policy?: RelayPolicy;
+}
+
+/** A console message captured from a page. */
+export interface ConsoleMessage {
+  /** "log" | "info" | "warning" | "error" | "debug" | ... */
+  level: string;
+  text: string;
+  /** Where it came from: console API call, browser log, or thrown exception. */
+  source: "console" | "log" | "exception";
+  timestamp: number;
+  url?: string;
+  line?: number;
 }
 
 export interface RelayServer {
@@ -101,6 +130,13 @@ type ExtensionMessage =
 export async function serveRelay(options: RelayOptions = {}): Promise<RelayServer> {
   const port = options.port ?? 9224;
   const host = options.host ?? "127.0.0.1";
+  const requireAuth = options.requireAuth ?? true;
+  const token = options.token ?? (requireAuth ? loadOrCreateToken() : "");
+  const policy = options.policy ?? loadPolicy();
+  const dialogPolicy: DialogPolicy =
+    options.dialogPolicy ??
+    ((process.env.DEV_BROWSER_DIALOG_POLICY as DialogPolicy | undefined) ?? "dismiss");
+  const startedAt = Date.now();
 
   // State — all page/session/target tracking is in the registry
   const registry = createTargetRegistry();
@@ -173,6 +209,36 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
   }
 
   const harRecorders = new Map<string, RelayHarState>(); // pageKey -> state
+
+  // ---- Server-side console capture ----
+  // Buffers console events per CDP session. Events only flow once the
+  // Runtime/Log domains are enabled (POST /console/enable does that); the
+  // buffer survives across client connections like the HAR recorders do.
+  const CONSOLE_BUFFER_MAX = 1000;
+  const consoleBuffers = new Map<string, ConsoleMessage[]>(); // cdpSessionId -> messages
+  const consoleEnabled = new Set<string>(); // cdpSessionIds with Runtime/Log enabled
+
+  function pushConsoleMessage(cdpSessionId: string, msg: ConsoleMessage): void {
+    let buffer = consoleBuffers.get(cdpSessionId);
+    if (!buffer) {
+      buffer = [];
+      consoleBuffers.set(cdpSessionId, buffer);
+    }
+    buffer.push(msg);
+    if (buffer.length > CONSOLE_BUFFER_MAX) {
+      buffer.splice(0, buffer.length - CONSOLE_BUFFER_MAX);
+    }
+  }
+
+  /** Format a CDP RemoteObject into readable text. */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  function remoteObjectText(obj: any): string {
+    if (obj == null) return "";
+    if (obj.value !== undefined) {
+      return typeof obj.value === "string" ? obj.value : JSON.stringify(obj.value);
+    }
+    return obj.description ?? obj.unserializableValue ?? `[${obj.type}]`;
+  }
 
   /** Handle a CDP Network event for HAR recording */
   function handleHarNetworkEvent(
@@ -629,12 +695,92 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
   const app = new Hono();
   const { injectWebSocket, upgradeWebSocket } = createNodeWebSocket({ app });
 
+  // ---- Auth (§4): shared token on every HTTP request and WS upgrade ----
+  // The /extension WS upgrade additionally accepts a chrome-extension://
+  // Origin in place of the token (browser WebSockets can't set headers, and
+  // web pages can't fake a chrome-extension:// Origin). http(s) Origins are
+  // always rejected — that's a web page attempting a cross-site connection.
+  app.use("*", async (c, next) => {
+    if (!requireAuth) return next();
+
+    const origin = c.req.header("Origin");
+    const candidate = c.req.header(TOKEN_HEADER) ?? c.req.query("token");
+    const hasValidToken = !!candidate && tokensMatch(candidate, token);
+
+    if (c.req.path === "/extension") {
+      if (origin && /^https?:\/\//i.test(origin)) {
+        log(`Rejected /extension upgrade with web Origin: ${origin}`);
+        return c.json({ error: "Forbidden: web origins may not connect" }, 403);
+      }
+      if (hasValidToken || (origin && origin.startsWith("chrome-extension://"))) {
+        return next();
+      }
+      log("Rejected /extension upgrade: no token and no extension Origin");
+      return c.json({ error: "Unauthorized" }, 401);
+    }
+
+    if (hasValidToken) return next();
+    return c.json(
+      {
+        error:
+          "Unauthorized: missing or invalid X-DevBrowser-Token (read it from ~/.dev-browser/token)",
+      },
+      401
+    );
+  });
+
+  /** Resolve the origin of a page's current URL for policy checks. */
+  function originOfSession(cdpSessionId: string): string | undefined {
+    const target = connectedTargets.get(cdpSessionId);
+    if (!target) return undefined;
+    try {
+      return new URL(target.targetInfo.url).origin;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
+   * Policy gate for a CDP command about to be routed for an agent session.
+   * Returns an error string when blocked, null when allowed.
+   */
+  function policyBlocks(
+    agentSession: string,
+    method: string,
+    params: Record<string, unknown> | undefined,
+    cdpSessionId: string | undefined
+  ): string | null {
+    if (method === "Page.navigate") {
+      const url = String(params?.url ?? "");
+      const nav = checkNavigation(policy, agentSession, url);
+      if (!nav.allowed) return nav.reason ?? "navigation blocked by policy";
+      return null;
+    }
+    const origin = cdpSessionId ? originOfSession(cdpSessionId) : undefined;
+    const decision = checkCdpMethod(policy, agentSession, method, origin);
+    if (!decision.allowed) return decision.reason ?? "CDP method blocked by policy";
+    return null;
+  }
+
   // Health check / server info
   app.get("/", (c) => {
     return c.json({
       wsEndpoint: `ws://${host}:${port}/cdp`,
       extensionConnected: extensionWs !== null,
       mode: "extension",
+    });
+  });
+
+  // Health probe — richer than GET / (uptime, counts)
+  app.get("/health", (c) => {
+    return c.json({
+      ok: true,
+      mode: "extension",
+      extensionConnected: extensionWs !== null,
+      uptimeSeconds: Math.round((Date.now() - startedAt) / 1000),
+      namedPages: namedPages.size,
+      sessions: sessions.size,
+      permissionMode: policy.defaultMode,
     });
   });
 
@@ -1299,6 +1445,12 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
       routedSessionId = child.sessionId;
     }
 
+    const blocked = policyBlocks(agentSession, method, params, routedSessionId);
+    if (blocked) {
+      log(`POST /cdp policy-blocked: ${method} for ${pageName}: ${blocked}`);
+      return c.json({ error: { message: `Blocked by policy: ${blocked}` } }, 403);
+    }
+
     try {
       const result = await routeCdpCommand({
         method,
@@ -1313,6 +1465,138 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
       log(`POST /cdp error: ${method} for ${pageName}: ${msg}`);
       return c.json({ error: { message: msg } }, 500);
     }
+  });
+
+  /**
+   * POST /batch — execute several CDP commands sequentially in one call.
+   *
+   * Body: { page: string, ops: Array<{ method: string, params?: object }> }
+   * Response: { results: Array<{ result?: unknown, error?: string }>, completed: number }
+   *
+   * Stops on the first error (remaining ops are not executed), mirroring the
+   * vendor browser_batch semantics.
+   */
+  app.post("/batch", async (c) => {
+    if (!extensionWs) {
+      return c.json({ error: { message: "Extension not connected" } }, 503);
+    }
+
+    const agentSession = getAgentSession(c);
+    const body = await c.req.json();
+    const { page: pageName, ops } = body as {
+      page: string;
+      ops: Array<{ method: string; params?: Record<string, unknown> }>;
+    };
+
+    if (!pageName || !Array.isArray(ops)) {
+      return c.json({ error: { message: "page and ops[] are required" } }, 400);
+    }
+
+    const pageKey = `${agentSession}:${pageName}`;
+    const cdpSessionId = namedPages.get(pageKey);
+    if (!cdpSessionId) {
+      return c.json(
+        { error: { message: `Page "${pageName}" not found in session "${agentSession}"` } },
+        404
+      );
+    }
+
+    const results: Array<{ result?: unknown; error?: string }> = [];
+    for (const op of ops) {
+      if (!op?.method) {
+        results.push({ error: "op.method is required" });
+        break;
+      }
+      // Re-resolve each iteration: a navigate can swap the CDP session
+      const currentSessionId = namedPages.get(pageKey) ?? cdpSessionId;
+      const blocked = policyBlocks(agentSession, op.method, op.params, currentSessionId);
+      if (blocked) {
+        results.push({ error: `Blocked by policy: ${blocked}` });
+        break;
+      }
+      try {
+        const result = await routeCdpCommand({
+          method: op.method,
+          params: op.params,
+          sessionId: currentSessionId,
+          agentSession,
+        });
+        results.push({ result });
+      } catch (err) {
+        results.push({ error: err instanceof Error ? err.message : String(err) });
+        break;
+      }
+    }
+
+    return c.json({ results, completed: results.filter((r) => !r.error).length });
+  });
+
+  // ============================================================================
+  // Console Capture Endpoints
+  // ============================================================================
+
+  /**
+   * POST /console/enable — enable Runtime + Log domains so console events flow.
+   * Body: { page: string }. Idempotent.
+   */
+  app.post("/console/enable", async (c) => {
+    if (!extensionWs) {
+      return c.json({ error: "Extension not connected" }, 503);
+    }
+    const agentSession = getAgentSession(c);
+    const { page: pageName } = (await c.req.json()) as { page: string };
+    const pageKey = `${agentSession}:${pageName}`;
+    const cdpSessionId = namedPages.get(pageKey);
+    if (!cdpSessionId) {
+      return c.json({ error: `Page "${pageName}" not found` }, 404);
+    }
+    if (!consoleEnabled.has(cdpSessionId)) {
+      await sendToExtension({
+        method: "forwardCDPCommand",
+        params: { sessionId: cdpSessionId, method: "Runtime.enable", params: {} },
+      });
+      await sendToExtension({
+        method: "forwardCDPCommand",
+        params: { sessionId: cdpSessionId, method: "Log.enable", params: {} },
+      });
+      consoleEnabled.add(cdpSessionId);
+    }
+    return c.json({ success: true });
+  });
+
+  /**
+   * GET /console — read buffered console messages for a page.
+   * Query: page (required), pattern (optional regex), since (optional index).
+   */
+  app.get("/console", (c) => {
+    const agentSession = getAgentSession(c);
+    const pageName = c.req.query("page");
+    if (!pageName) {
+      return c.json({ error: "page query param required" }, 400);
+    }
+    const pageKey = `${agentSession}:${pageName}`;
+    const cdpSessionId = namedPages.get(pageKey);
+    if (!cdpSessionId) {
+      return c.json({ error: `Page "${pageName}" not found` }, 404);
+    }
+
+    const buffer = consoleBuffers.get(cdpSessionId) ?? [];
+    const sinceRaw = c.req.query("since");
+    const parsed = sinceRaw ? Number(sinceRaw) : 0;
+    const since = Number.isInteger(parsed) && parsed > 0 ? parsed : 0;
+
+    let messages = buffer.slice(since);
+    const pattern = c.req.query("pattern");
+    if (pattern) {
+      try {
+        const regex = new RegExp(pattern);
+        messages = messages.filter((m) => regex.test(m.text));
+      } catch {
+        return c.json({ error: `Invalid pattern: ${pattern}` }, 400);
+      }
+    }
+
+    return c.json({ messages, total: buffer.length });
   });
 
   // ============================================================================
@@ -1572,6 +1856,8 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
             // Clear CDP session state but preserve namedPages/sessions for recovery
             registry.clearTargetsOnly();
             childTargets.clear();
+            consoleBuffers.clear();
+            consoleEnabled.clear();
             isRecovering = true;
             for (const pending of extensionPendingRequests.values()) {
               pending.reject(new Error("Extension reconnecting, please retry"));
@@ -1708,6 +1994,11 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
 
               removeChildTargetTree(cdpSessionId);
 
+              // Console buffers are keyed by CDP session, which is now dead
+              // (a reattachment gets a fresh sessionId and a fresh buffer)
+              consoleBuffers.delete(cdpSessionId);
+              consoleEnabled.delete(cdpSessionId);
+
               // Get target info BEFORE cleanup (needed to check for reattachment)
               const target = connectedTargets.get(cdpSessionId);
               const targetId = target?.targetId;
@@ -1794,6 +2085,78 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
                 }
               }
 
+            } else if (method === "Page.javascriptDialogOpening") {
+              // Auto-handle JS dialogs so they never wedge automation
+              if (dialogPolicy !== "ignore" && sessionId) {
+                const dialogParams = params as { message?: string; type?: string };
+                log(
+                  `Auto-${dialogPolicy === "accept" ? "accepting" : "dismissing"} ${dialogParams.type ?? "dialog"}: ${dialogParams.message ?? ""}`
+                );
+                sendToExtension({
+                  method: "forwardCDPCommand",
+                  params: {
+                    sessionId,
+                    method: "Page.handleJavaScriptDialog",
+                    params: { accept: dialogPolicy === "accept" },
+                  },
+                  timeout: 5000,
+                }).catch((err) => log(`Failed to handle JS dialog: ${err}`));
+              }
+            } else if (method === "Runtime.consoleAPICalled" && sessionId) {
+              const consoleParams = params as {
+                type: string;
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                args: any[];
+                timestamp: number;
+              };
+              pushConsoleMessage(sessionId, {
+                level: consoleParams.type,
+                text: (consoleParams.args ?? []).map(remoteObjectText).join(" "),
+                source: "console",
+                timestamp: consoleParams.timestamp ?? Date.now(),
+              });
+              registry.updateActivity(sessionId);
+            } else if (method === "Runtime.exceptionThrown" && sessionId) {
+              const exceptionParams = params as {
+                timestamp: number;
+                exceptionDetails: {
+                  text: string;
+                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                  exception?: any;
+                  url?: string;
+                  lineNumber?: number;
+                };
+              };
+              const details = exceptionParams.exceptionDetails;
+              pushConsoleMessage(sessionId, {
+                level: "error",
+                text: details.exception?.description ?? details.text,
+                source: "exception",
+                timestamp: exceptionParams.timestamp ?? Date.now(),
+                url: details.url,
+                line: details.lineNumber,
+              });
+              registry.updateActivity(sessionId);
+            } else if (method === "Log.entryAdded" && sessionId) {
+              const logParams = params as {
+                entry: {
+                  source: string;
+                  level: string;
+                  text: string;
+                  timestamp: number;
+                  url?: string;
+                  lineNumber?: number;
+                };
+              };
+              pushConsoleMessage(sessionId, {
+                level: logParams.entry.level,
+                text: logParams.entry.text,
+                source: "log",
+                timestamp: logParams.entry.timestamp ?? Date.now(),
+                url: logParams.entry.url,
+                line: logParams.entry.lineNumber,
+              });
+              registry.updateActivity(sessionId);
             } else {
               // Route Network events to HAR recorders
               if (sessionId && method.startsWith("Network.")) {
@@ -1836,6 +2199,8 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
           registry.clear();
           childTargets.clear();
           harRecorders.clear();
+          consoleBuffers.clear();
+          consoleEnabled.clear();
         },
 
         onError(event) {

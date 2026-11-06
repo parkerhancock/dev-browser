@@ -13,6 +13,8 @@ import {
   elementCenterExpression,
   mouseButton,
 } from "./cdp-helpers.js";
+import { authHeaders } from "./auth.js";
+import { resolve as resolvePath } from "node:path";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -102,6 +104,7 @@ export class CDPPage implements Page {
       headers: {
         "Content-Type": "application/json",
         "X-DevBrowser-Session": this.session,
+        ...authHeaders(),
       },
       body: JSON.stringify({
         page: this.pageName,
@@ -434,6 +437,28 @@ export class CDPPage implements Page {
     await this.keyboard.press(key, { delay: options?.delay });
   }
 
+  async setInputFiles(
+    selector: string,
+    files: string | string[],
+    _options?: { timeout?: number }
+  ): Promise<void> {
+    const fileList = (Array.isArray(files) ? files : [files]).map((f) =>
+      resolvePath(f)
+    );
+    const { root } = await this.cdp<{ root: { nodeId: number } }>(
+      "DOM.getDocument",
+      { depth: 0 }
+    );
+    const { nodeId } = await this.cdp<{ nodeId: number }>("DOM.querySelector", {
+      nodeId: root.nodeId,
+      selector,
+    });
+    if (!nodeId) {
+      throw new Error(`Element not found: ${selector}`);
+    }
+    await this.cdp("DOM.setFileInputFiles", { files: fileList, nodeId });
+  }
+
   async focus(
     selector: string,
     _options?: { timeout?: number }
@@ -660,7 +685,7 @@ export class CDPPage implements Page {
       `${this.relayUrl}/pages/${encodeURIComponent(this.pageName)}`,
       {
         method: "DELETE",
-        headers: { "X-DevBrowser-Session": this.session },
+        headers: { "X-DevBrowser-Session": this.session, ...authHeaders() },
       }
     );
   }
@@ -747,6 +772,7 @@ export class CDPPage implements Page {
       headers: {
         "Content-Type": "application/json",
         "X-DevBrowser-Session": this.session,
+        ...authHeaders(),
       },
       body: JSON.stringify({ page: this.pageName }),
     });
@@ -789,6 +815,7 @@ export class CDPPage implements Page {
       headers: {
         "Content-Type": "application/json",
         "X-DevBrowser-Session": this.session,
+        ...authHeaders(),
       },
       body: JSON.stringify({ page: this.pageName, action, ref, value }),
     });

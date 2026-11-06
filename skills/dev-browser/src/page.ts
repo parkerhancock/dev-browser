@@ -40,6 +40,7 @@ export interface Page {
   type(selector: string, text: string, options?: { delay?: number; timeout?: number }): Promise<void>;
   hover(selector: string, options?: { timeout?: number }): Promise<void>;
   selectOption(selector: string, values: any, options?: { timeout?: number }): Promise<string[]>;
+  setInputFiles(selector: string, files: string | string[], options?: { timeout?: number }): Promise<void>;
   check(selector: string, options?: { timeout?: number }): Promise<void>;
   uncheck(selector: string, options?: { timeout?: number }): Promise<void>;
   press(selector: string, key: string, options?: { delay?: number; timeout?: number }): Promise<void>;

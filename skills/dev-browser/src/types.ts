@@ -36,6 +36,17 @@ export interface ServeOptions {
   cdpPort?: number;
   /** Directory to store persistent browser profiles (cookies, localStorage, etc.) */
   profileDir?: string;
+  /**
+   * Named profile. Each name gets its own persistent data directory
+   * (".browser-data-<name>"), so "work" and "personal" state stay separate.
+   */
+  profile?: string;
+  /**
+   * Which browser to launch. "chromium" (default) is Playwright's bundled
+   * Chromium; the others use a locally installed branded browser via
+   * Playwright's channel mechanism.
+   */
+  browser?: "chromium" | "chrome" | "msedge";
 }
 
 export interface ViewportSize {

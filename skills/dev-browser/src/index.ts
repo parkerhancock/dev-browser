@@ -55,6 +55,8 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
   const headless = options.headless ?? true;
   const cdpPort = options.cdpPort ?? 9223;
   const profileDir = options.profileDir;
+  const browser = options.browser ?? "chromium";
+  const startedAt = Date.now();
 
   // Validate port numbers
   if (port < 1 || port > 65535) {
@@ -67,10 +69,14 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
     throw new Error("port and cdpPort must be different");
   }
 
-  // Determine user data directory for persistent context
+  // Determine user data directory for persistent context.
+  // Named profiles get their own directory so their state stays separate.
+  const dataDirName = options.profile
+    ? `browser-data-${options.profile}`
+    : "browser-data";
   const userDataDir = profileDir
-    ? join(profileDir, "browser-data")
-    : join(process.cwd(), ".browser-data");
+    ? join(profileDir, dataDirName)
+    : join(process.cwd(), `.${dataDirName}`);
 
   mkdirSync(userDataDir, { recursive: true });
   console.log(`Using persistent browser profile: ${userDataDir}`);
@@ -85,6 +91,8 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
   const context: BrowserContext = await chromium.launchPersistentContext(userDataDir, {
     headless,
     args: launchArgs,
+    // "chrome" / "msedge" launch a locally installed branded browser
+    channel: browser === "chromium" ? undefined : browser,
   });
   console.log("Browser launched with persistent profile...");
 
@@ -137,7 +145,22 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
 
   // GET / - server info
   app.get("/", (c) => {
-    return c.json({ wsEndpoint } satisfies ServerInfoResponse);
+    return c.json({ wsEndpoint, mode: "launch", browser } satisfies ServerInfoResponse & {
+      mode: string;
+      browser: string;
+    });
+  });
+
+  // GET /health - health probe
+  app.get("/health", (c) => {
+    return c.json({
+      ok: true,
+      mode: "launch",
+      browser,
+      uptimeSeconds: Math.round((Date.now() - startedAt) / 1000),
+      totalPages: registry.size,
+      totalSessions: sessions.size,
+    });
   });
 
   // GET /pages - list pages for this session

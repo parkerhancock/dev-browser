@@ -23,6 +23,9 @@ import { getSnapshotScript } from "./snapshot/browser-script";
 import { createWaczFromHar } from "./wacz.js";
 import { createLogger } from "./logging.js";
 import { wrapWithCleanErrors } from "./errors.js";
+import { authHeaders } from "./auth.js";
+import TurndownService from "turndown";
+import type { ConsoleMessage } from "./relay.js";
 import {
   type HarEntry,
   type HarLog,
@@ -45,6 +48,51 @@ interface HarRecorderState {
   completed: HarEntry[];
   pendingBodyFetches: number;
   bodyFetchDone?: () => void; // Called when pendingBodyFetches reaches 0
+  /** Console messages captured on the same CDP session (capped). */
+  consoleMessages: ConsoleMessage[];
+}
+
+const CONSOLE_BUFFER_MAX = 1000;
+
+// Re-export so consumers can type console results without importing relay
+export type { ConsoleMessage } from "./relay.js";
+
+/** A single CDP operation for client.batch(). */
+export interface BatchOp {
+  method: string;
+  params?: Record<string, unknown>;
+}
+
+/** Result of one batched CDP operation. */
+export interface BatchOpResult {
+  result?: unknown;
+  error?: string;
+}
+
+/** A live network log line derived from the HAR recorder. */
+export interface NetworkRequest {
+  method: string;
+  url: string;
+  status: number;
+  statusText?: string;
+  mimeType?: string;
+  startedDateTime: string;
+  timeMs: number;
+}
+
+/** A match from client.find() — a snapshot line plus its interaction ref. */
+export interface FindMatch {
+  /** Ref usable with clickRef/fillRef/selectSnapshotRef (absent for static text). */
+  ref?: string;
+  line: string;
+}
+
+/** Cookies + localStorage for one origin (exportOriginState/importOriginState). */
+export interface OriginState {
+  origin: string;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  cookies: any[];
+  localStorage: Record<string, string>;
 }
 
 /**
@@ -545,6 +593,76 @@ export interface DevBrowserClient {
     name: string,
     options?: { since?: number }
   ) => Promise<{ entries: HarEntry[]; total: number }>;
+  /**
+   * Execute several CDP commands against a page in one round trip.
+   * Stops at the first failing op; `completed` counts the ops that succeeded.
+   */
+  batch: (
+    name: string,
+    ops: BatchOp[]
+  ) => Promise<{ results: BatchOpResult[]; completed: number }>;
+  /**
+   * Read console messages captured for a page (console API calls, thrown
+   * exceptions, and browser log entries). Capture starts when the page is
+   * opened with recording on (the default). `pattern` is a regex applied to
+   * the message text; pass a previous `total` as `since` for incremental reads.
+   */
+  getConsoleMessages: (
+    name: string,
+    options?: { pattern?: string; since?: number }
+  ) => Promise<{ messages: ConsoleMessage[]; total: number }>;
+  /**
+   * Live network log for a page, derived from the HAR recorder: one line per
+   * completed request (method, url, status). `pattern` is a regex applied to
+   * the URL; pass a previous `total` as `since` for incremental reads.
+   */
+  getNetworkRequests: (
+    name: string,
+    options?: { pattern?: string; since?: number }
+  ) => Promise<{ requests: NetworkRequest[]; total: number }>;
+  /**
+   * Find elements on the page whose ARIA-snapshot line contains `query`
+   * (case-insensitive). Returns up to 20 matches with refs usable with
+   * clickRef/fillRef (extension mode) or selectSnapshotRef (standalone).
+   */
+  find: (name: string, query: string) => Promise<FindMatch[]>;
+  /**
+   * Fill several form fields in one call: { "css-selector": "value" }.
+   */
+  fillForm: (name: string, fields: Record<string, string>) => Promise<void>;
+  /** Page main content as Markdown (Turndown over the rendered DOM). */
+  markdown: (name: string) => Promise<string>;
+  /** Page text content (document.body.innerText). */
+  text: (name: string) => Promise<string>;
+  /**
+   * Grant browser permissions (e.g. "geolocation", "clipboard-read") for an
+   * origin. Standalone mode uses the browser context; extension mode
+   * forwards Browser.grantPermissions and may be refused by Chrome.
+   */
+  grantPermissions: (
+    name: string,
+    origin: string,
+    permissions: string[]
+  ) => Promise<void>;
+  /**
+   * Clear browsing data. With `origin`, clears that origin's storage
+   * (cookies, local/session storage, IndexedDB, cache storage); without,
+   * clears all cookies and the HTTP cache.
+   */
+  clearBrowsingData: (
+    name: string,
+    options?: { origin?: string }
+  ) => Promise<void>;
+  /**
+   * Export cookies + localStorage for an origin. localStorage can only be
+   * read when the page is currently on that origin.
+   */
+  exportOriginState: (name: string, origin: string) => Promise<OriginState>;
+  /**
+   * Import cookies + localStorage captured by exportOriginState.
+   * localStorage can only be written when the page is currently on that origin.
+   */
+  importOriginState: (name: string, state: OriginState) => Promise<void>;
 }
 
 // ============================================================================
@@ -555,7 +673,7 @@ async function fetchServerInfo(
   serverUrl: string,
   defaultMode: "launch" | "extension"
 ): Promise<ServerInfo> {
-  const res = await fetch(serverUrl);
+  const res = await fetch(serverUrl, { headers: authHeaders() });
   if (!res.ok) {
     throw new Error(`Server returned ${res.status}: ${await res.text()}`);
   }
@@ -643,6 +761,173 @@ async function deleteSessionPages(
   const data = (await res.json()) as { error?: string; closed?: number; pages?: string[] };
   if (data.error) throw new Error(data.error);
   return { closed: data.closed ?? 0, pages: data.pages ?? [] };
+}
+
+// ============================================================================
+// Shared feature helpers (mode-agnostic, operate on Page / HAR entries)
+// ============================================================================
+
+/** document.body.innerText of a page. */
+function pageInnerText(page: Page): Promise<string> {
+  return page.evaluate(() => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const g = globalThis as any;
+    return (g.document?.body?.innerText as string) ?? "";
+  });
+}
+
+/** Rendered DOM converted to Markdown. */
+async function pageMarkdown(page: Page): Promise<string> {
+  const html = await page.content();
+  const turndown = new TurndownService({
+    headingStyle: "atx",
+    codeBlockStyle: "fenced",
+  });
+  turndown.remove(["script", "style", "noscript"]);
+  return turndown.turndown(html);
+}
+
+/** Filter snapshot lines for find(). */
+function findInSnapshot(snapshot: string, query: string): FindMatch[] {
+  const q = query.toLowerCase();
+  const matches: FindMatch[] = [];
+  for (const line of snapshot.split("\n")) {
+    if (line.toLowerCase().includes(q)) {
+      const ref = /\[ref=(e\d+)\]/.exec(line)?.[1];
+      matches.push({ ref, line: line.trim() });
+      if (matches.length >= 20) break;
+    }
+  }
+  return matches;
+}
+
+/** Fill several fields sequentially. */
+async function fillFormFields(
+  page: Page,
+  fields: Record<string, string>
+): Promise<void> {
+  for (const [selector, value] of Object.entries(fields)) {
+    await page.fill(selector, value);
+  }
+}
+
+/** Map HAR entries to the live network-log shape, with regex URL filter. */
+function harToNetworkRequests(
+  entries: HarEntry[],
+  pattern?: string
+): NetworkRequest[] {
+  const regex = pattern ? new RegExp(pattern) : null;
+  const requests: NetworkRequest[] = [];
+  for (const entry of entries) {
+    if (regex && !regex.test(entry.request.url)) continue;
+    requests.push({
+      method: entry.request.method,
+      url: entry.request.url,
+      status: entry.response.status,
+      statusText: entry.response.statusText,
+      mimeType: entry.response.content?.mimeType,
+      startedDateTime: entry.startedDateTime,
+      timeMs: entry.time,
+    });
+  }
+  return requests;
+}
+
+/** Filter console messages by regex and since-index. */
+function filterConsoleMessages(
+  buffer: ConsoleMessage[],
+  options?: { pattern?: string; since?: number }
+): { messages: ConsoleMessage[]; total: number } {
+  const since =
+    options?.since && options.since > 0 ? Math.floor(options.since) : 0;
+  let messages = buffer.slice(since);
+  if (options?.pattern) {
+    const regex = new RegExp(options.pattern);
+    messages = messages.filter((m) => regex.test(m.text));
+  }
+  return { messages, total: buffer.length };
+}
+
+/** Read an origin's cookies + localStorage via a raw-CDP sender and the page. */
+async function exportOriginStateImpl(
+  sendCdp: (method: string, params?: Record<string, unknown>) => Promise<unknown>,
+  page: Page,
+  origin: string
+): Promise<OriginState> {
+  const cookieResult = (await sendCdp("Network.getCookies", {
+    urls: [origin],
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  })) as { cookies: any[] };
+
+  const localStorageData = await page.evaluate((targetOrigin: string) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const g = globalThis as any;
+    if (g.location?.origin !== targetOrigin) return {};
+    const out: Record<string, string> = {};
+    const storage = g.localStorage;
+    for (let i = 0; i < storage.length; i++) {
+      const key = storage.key(i);
+      if (key !== null) out[key] = storage.getItem(key) ?? "";
+    }
+    return out;
+  }, origin);
+
+  return { origin, cookies: cookieResult.cookies ?? [], localStorage: localStorageData };
+}
+
+/** Write an origin's cookies + localStorage back. */
+async function importOriginStateImpl(
+  sendCdp: (method: string, params?: Record<string, unknown>) => Promise<unknown>,
+  page: Page,
+  state: OriginState
+): Promise<void> {
+  for (const cookie of state.cookies) {
+    await sendCdp("Network.setCookie", {
+      name: cookie.name,
+      value: cookie.value,
+      domain: cookie.domain,
+      path: cookie.path,
+      secure: cookie.secure,
+      httpOnly: cookie.httpOnly,
+      sameSite: cookie.sameSite,
+      expires: cookie.expires,
+    });
+  }
+  if (Object.keys(state.localStorage).length > 0) {
+    // Single argument object: Playwright's evaluate only forwards one arg
+    await page.evaluate(
+      (arg: { targetOrigin: string; items: Record<string, string> }) => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const g = globalThis as any;
+        if (g.location?.origin !== arg.targetOrigin) {
+          throw new Error(
+            `Page must be on ${arg.targetOrigin} to import localStorage (currently ${g.location?.origin})`
+          );
+        }
+        for (const [key, value] of Object.entries(arg.items)) {
+          g.localStorage.setItem(key, value);
+        }
+      },
+      { targetOrigin: state.origin, items: state.localStorage }
+    );
+  }
+}
+
+/** Clear browsing data via raw CDP. */
+async function clearBrowsingDataImpl(
+  sendCdp: (method: string, params?: Record<string, unknown>) => Promise<unknown>,
+  options?: { origin?: string }
+): Promise<void> {
+  if (options?.origin) {
+    await sendCdp("Storage.clearDataForOrigin", {
+      origin: options.origin,
+      storageTypes:
+        "cookies,local_storage,session_storage,indexeddb,cache_storage",
+    });
+    return;
+  }
+  await sendCdp("Network.clearBrowserCookies");
+  await sendCdp("Network.clearBrowserCache");
 }
 
 export interface SaveWaczOptions {
@@ -811,6 +1096,56 @@ async function connectExtensionMode(
 
   logger.debug(`Extension mode: HTTP RPC to ${serverUrl}`);
 
+  // Raw CDP command against a named page via the relay
+  async function sendCdp(
+    name: string,
+    method: string,
+    params?: Record<string, unknown>
+  ): Promise<unknown> {
+    const res = await fetch(`${serverUrl}/cdp`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...sessionHeaders },
+      body: JSON.stringify({ page: name, method, params }),
+    });
+    const data = (await res.json()) as {
+      result?: unknown;
+      error?: { message: string };
+    };
+    if (!res.ok || data.error) {
+      throw new Error(data.error?.message ?? `CDP ${method} failed (${res.status})`);
+    }
+    return data.result;
+  }
+
+  // Lightweight handle to an existing page (no HAR/console auto-start)
+  function existingPage(name: string): Page {
+    return new CDPPage(serverUrl, name, session);
+  }
+
+  async function fetchSnapshot(name: string): Promise<string> {
+    const res = await fetch(`${serverUrl}/snapshot`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...sessionHeaders },
+      body: JSON.stringify({ page: name }),
+    });
+    if (!res.ok) {
+      throw new Error(`Snapshot failed: ${await res.text()}`);
+    }
+    const data = (await res.json()) as { snapshot: string };
+    return data.snapshot;
+  }
+
+  async function enableConsole(name: string): Promise<void> {
+    const res = await fetch(`${serverUrl}/console/enable`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...sessionHeaders },
+      body: JSON.stringify({ page: name }),
+    });
+    if (!res.ok) {
+      throw new Error(`Failed to enable console capture: ${await res.text()}`);
+    }
+  }
+
   return {
     async page(name: string, options?: PageOptions): Promise<Page> {
       const res = await fetch(`${serverUrl}/pages`, {
@@ -850,6 +1185,13 @@ async function connectExtensionMode(
             `Failed to auto-start HAR recording for "${name}":`,
             err
           );
+        }
+
+        // Auto-enable console capture too (same opt-out as HAR)
+        try {
+          await enableConsole(name);
+        } catch (err) {
+          logger.warn(`Failed to enable console capture for "${name}":`, err);
         }
       }
 
@@ -892,16 +1234,7 @@ async function connectExtensionMode(
     },
 
     async getAISnapshot(name: string): Promise<string> {
-      const res = await fetch(`${serverUrl}/snapshot`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", ...sessionHeaders },
-        body: JSON.stringify({ page: name }),
-      });
-      if (!res.ok) {
-        throw new Error(`Snapshot failed: ${await res.text()}`);
-      }
-      const data = (await res.json()) as { snapshot: string };
-      return data.snapshot;
+      return fetchSnapshot(name);
     },
 
     async selectSnapshotRef(
@@ -990,6 +1323,121 @@ async function connectExtensionMode(
       const data = (await res.json()) as { entries: HarEntry[]; total: number };
       return { entries: data.entries, total: data.total };
     },
+
+    async batch(
+      name: string,
+      ops: BatchOp[]
+    ): Promise<{ results: BatchOpResult[]; completed: number }> {
+      const res = await fetch(`${serverUrl}/batch`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...sessionHeaders },
+        body: JSON.stringify({ page: name, ops }),
+      });
+      const data = (await res.json()) as {
+        results?: BatchOpResult[];
+        completed?: number;
+        error?: { message: string };
+      };
+      if (!res.ok || data.error) {
+        throw new Error(data.error?.message ?? `Batch failed (${res.status})`);
+      }
+      return { results: data.results ?? [], completed: data.completed ?? 0 };
+    },
+
+    async getConsoleMessages(
+      name: string,
+      options?: { pattern?: string; since?: number }
+    ): Promise<{ messages: ConsoleMessage[]; total: number }> {
+      await enableConsole(name);
+      const params = new URLSearchParams({ page: name });
+      if (options?.pattern) params.set("pattern", options.pattern);
+      if (options?.since !== undefined) params.set("since", String(options.since));
+      const res = await fetch(`${serverUrl}/console?${params}`, {
+        headers: sessionHeaders,
+      });
+      if (!res.ok) {
+        throw new Error(`Failed to get console messages: ${await res.text()}`);
+      }
+      const data = (await res.json()) as {
+        messages: ConsoleMessage[];
+        total: number;
+      };
+      return data;
+    },
+
+    async getNetworkRequests(
+      name: string,
+      options?: { pattern?: string; since?: number }
+    ): Promise<{ requests: NetworkRequest[]; total: number }> {
+      const params = new URLSearchParams({ page: name });
+      if (options?.since !== undefined) params.set("since", String(options.since));
+      const res = await fetch(`${serverUrl}/har/entries?${params}`, {
+        headers: sessionHeaders,
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        let message = text;
+        try {
+          message = (JSON.parse(text) as { error?: string }).error ?? text;
+        } catch {
+          // Not JSON
+        }
+        throw new Error(message);
+      }
+      const data = (await res.json()) as { entries: HarEntry[]; total: number };
+      return {
+        requests: harToNetworkRequests(data.entries, options?.pattern),
+        total: data.total,
+      };
+    },
+
+    async find(name: string, query: string): Promise<FindMatch[]> {
+      const snapshot = await fetchSnapshot(name);
+      return findInSnapshot(snapshot, query);
+    },
+
+    async fillForm(name: string, fields: Record<string, string>): Promise<void> {
+      await fillFormFields(existingPage(name), fields);
+    },
+
+    async markdown(name: string): Promise<string> {
+      return pageMarkdown(existingPage(name));
+    },
+
+    async text(name: string): Promise<string> {
+      return pageInnerText(existingPage(name));
+    },
+
+    async grantPermissions(
+      name: string,
+      origin: string,
+      permissions: string[]
+    ): Promise<void> {
+      await sendCdp(name, "Browser.grantPermissions", { origin, permissions });
+    },
+
+    async clearBrowsingData(
+      name: string,
+      options?: { origin?: string }
+    ): Promise<void> {
+      await clearBrowsingDataImpl((m, p) => sendCdp(name, m, p), options);
+    },
+
+    async exportOriginState(name: string, origin: string): Promise<OriginState> {
+      return exportOriginStateImpl(
+        (m, p) => sendCdp(name, m, p),
+        existingPage(name),
+        origin
+      );
+    },
+
+    async importOriginState(name: string, state: OriginState): Promise<void> {
+      await importOriginStateImpl(
+        (m, p) => sendCdp(name, m, p),
+        existingPage(name),
+        state
+      );
+    },
   };
 }
 
@@ -1041,8 +1489,11 @@ export async function connect(
     );
   }
 
-  // Headers to include session in all requests
-  const sessionHeaders = { "X-DevBrowser-Session": session };
+  // Headers to include session (and the relay auth token, when present) in all requests
+  const sessionHeaders: Record<string, string> = {
+    "X-DevBrowser-Session": session,
+    ...authHeaders(),
+  };
 
   // ---- Extension mode: HTTP RPC via CDPPage (no Playwright) ----
   if (opts.mode === "extension") {
@@ -1238,9 +1689,65 @@ export async function connect(
       pending: new Map(),
       completed: [],
       pendingBodyFetches: 0,
+      consoleMessages: [],
     };
 
     await cdpSession.send("Network.enable");
+
+    // Console capture rides on the same CDP session
+    const pushConsole = (msg: ConsoleMessage) => {
+      state.consoleMessages.push(msg);
+      if (state.consoleMessages.length > CONSOLE_BUFFER_MAX) {
+        state.consoleMessages.splice(
+          0,
+          state.consoleMessages.length - CONSOLE_BUFFER_MAX
+        );
+      }
+    };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const remoteText = (obj: any): string => {
+      if (obj == null) return "";
+      if (obj.value !== undefined) {
+        return typeof obj.value === "string" ? obj.value : JSON.stringify(obj.value);
+      }
+      return obj.description ?? obj.unserializableValue ?? `[${obj.type}]`;
+    };
+    try {
+      await cdpSession.send("Runtime.enable");
+      await cdpSession.send("Log.enable");
+      cdpSession.on("Runtime.consoleAPICalled", (params) => {
+        pushConsole({
+          level: params.type,
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          text: (params.args ?? []).map((a: any) => remoteText(a)).join(" "),
+          source: "console",
+          timestamp: params.timestamp ?? Date.now(),
+        });
+      });
+      cdpSession.on("Runtime.exceptionThrown", (params) => {
+        const details = params.exceptionDetails;
+        pushConsole({
+          level: "error",
+          text: details.exception?.description ?? details.text,
+          source: "exception",
+          timestamp: params.timestamp ?? Date.now(),
+          url: details.url,
+          line: details.lineNumber,
+        });
+      });
+      cdpSession.on("Log.entryAdded", (params) => {
+        pushConsole({
+          level: params.entry.level,
+          text: params.entry.text,
+          source: "log",
+          timestamp: params.entry.timestamp ?? Date.now(),
+          url: params.entry.url,
+          line: params.entry.lineNumber,
+        });
+      });
+    } catch (err) {
+      logger.warn("Failed to enable console capture:", err);
+    }
 
     // Wrap fetchBody with pendingBodyFetches tracking for collectHarRecording()
     const fetchBody = async (requestId: string) => {
@@ -1316,7 +1823,7 @@ export async function connect(
     harRecorders.delete(name);
   }
 
-  return wrapWithCleanErrors({
+  const clientImpl: DevBrowserClient = {
     async page(name: string, options?: PageOptions): Promise<Page> {
       const p = await getPage(name, options);
       // Auto-start HAR recording unless opted out
@@ -1513,5 +2020,137 @@ export async function connect(
         total: state.completed.length,
       };
     },
-  }, "client");
+
+    async batch(
+      name: string,
+      ops: BatchOp[]
+    ): Promise<{ results: BatchOpResult[]; completed: number }> {
+      const page = await getPage(name);
+      const cdpSession = await page.context().newCDPSession(page);
+      const results: BatchOpResult[] = [];
+      try {
+        for (const op of ops) {
+          try {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const result = await cdpSession.send(op.method as any, op.params as any);
+            results.push({ result });
+          } catch (err) {
+            results.push({ error: err instanceof Error ? err.message : String(err) });
+            break;
+          }
+        }
+      } finally {
+        await cdpSession.detach().catch(() => {});
+      }
+      return { results, completed: results.filter((r) => !r.error).length };
+    },
+
+    async getConsoleMessages(
+      name: string,
+      options?: { pattern?: string; since?: number }
+    ): Promise<{ messages: ConsoleMessage[]; total: number }> {
+      const state = harRecorders.get(name);
+      if (!state) {
+        throw new Error(
+          `No console capture active for page "${name}". ` +
+            `Console capture starts with recording — open the page without { record: false }.`
+        );
+      }
+      return filterConsoleMessages(state.consoleMessages, options);
+    },
+
+    async getNetworkRequests(
+      name: string,
+      options?: { pattern?: string; since?: number }
+    ): Promise<{ requests: NetworkRequest[]; total: number }> {
+      const state = harRecorders.get(name);
+      if (!state) {
+        throw new Error(`No HAR recording active for page "${name}"`);
+      }
+      const entries = state.completed.slice(options?.since ?? 0);
+      return {
+        requests: harToNetworkRequests(entries, options?.pattern),
+        total: state.completed.length,
+      };
+    },
+
+    async find(name: string, query: string): Promise<FindMatch[]> {
+      const snapshot = await clientImpl.getAISnapshot(name);
+      return findInSnapshot(snapshot, query);
+    },
+
+    async fillForm(name: string, fields: Record<string, string>): Promise<void> {
+      const page = await getPage(name);
+      await fillFormFields(page as unknown as Page, fields);
+    },
+
+    async markdown(name: string): Promise<string> {
+      const page = await getPage(name);
+      return pageMarkdown(page as unknown as Page);
+    },
+
+    async text(name: string): Promise<string> {
+      const page = await getPage(name);
+      return pageInnerText(page as unknown as Page);
+    },
+
+    async grantPermissions(
+      name: string,
+      origin: string,
+      permissions: string[]
+    ): Promise<void> {
+      const page = await getPage(name);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await page.context().grantPermissions(permissions as any, { origin });
+    },
+
+    async clearBrowsingData(
+      name: string,
+      options?: { origin?: string }
+    ): Promise<void> {
+      const page = await getPage(name);
+      const cdpSession = await page.context().newCDPSession(page);
+      try {
+        await clearBrowsingDataImpl(
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (m, p) => cdpSession.send(m as any, p as any),
+          options
+        );
+      } finally {
+        await cdpSession.detach().catch(() => {});
+      }
+    },
+
+    async exportOriginState(name: string, origin: string): Promise<OriginState> {
+      const page = await getPage(name);
+      const cdpSession = await page.context().newCDPSession(page);
+      try {
+        return await exportOriginStateImpl(
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (m, p) => cdpSession.send(m as any, p as any),
+          page as unknown as Page,
+          origin
+        );
+      } finally {
+        await cdpSession.detach().catch(() => {});
+      }
+    },
+
+    async importOriginState(name: string, state: OriginState): Promise<void> {
+      const page = await getPage(name);
+      const cdpSession = await page.context().newCDPSession(page);
+      try {
+        await importOriginStateImpl(
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (m, p) => cdpSession.send(m as any, p as any),
+          page as unknown as Page,
+          state
+        );
+      } finally {
+        await cdpSession.detach().catch(() => {});
+      }
+    },
+  };
+
+  return wrapWithCleanErrors(clientImpl, "client");
 }

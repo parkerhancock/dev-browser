@@ -6,6 +6,7 @@
  */
 
 import WebSocket from "ws";
+import { TOKEN_HEADER, loadToken } from "../auth.js";
 
 /** Pick a random port to avoid conflicts between parallel test runs */
 export function randomPort(): number {
@@ -33,6 +34,9 @@ export async function fetchJson(
   options?: RequestInit & { session?: string }
 ): Promise<{ status: number; body: Record<string, unknown> }> {
   const headers: Record<string, string> = {};
+  // Relay auth token (created by serveRelay on startup in DEV_BROWSER_DIR)
+  const token = loadToken();
+  if (token) headers[TOKEN_HEADER] = token;
   if (options?.session) {
     headers["X-DevBrowser-Session"] = options.session;
   }
@@ -66,7 +70,10 @@ export class MockExtension {
   }
 
   async connect(): Promise<void> {
-    this.ws = new WebSocket(`ws://127.0.0.1:${this.port}/extension`);
+    const token = loadToken();
+    this.ws = new WebSocket(`ws://127.0.0.1:${this.port}/extension`, {
+      headers: token ? { [TOKEN_HEADER]: token } : {},
+    });
     await new Promise<void>((resolve, reject) => {
       this.ws.on("open", resolve);
       this.ws.on("error", reject);
