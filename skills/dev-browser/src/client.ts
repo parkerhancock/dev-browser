@@ -1283,6 +1283,14 @@ async function connectExtensionMode(
       const pageInfo = (await res.json()) as GetPageResponse & { url?: string };
       const page = new CDPPage(serverUrl, name, session, pageInfo.url);
 
+      // Agent tabs open in the background, and Chrome won't deliver input to a
+      // hidden tab. Playwright enables this on every page; do the same here.
+      try {
+        await page.cdp("Emulation.setFocusEmulationEnabled", { enabled: true });
+      } catch (err) {
+        logger.warn(`Failed to enable focus emulation for "${name}":`, err);
+      }
+
       // Auto-start HAR recording unless opted out
       if (options?.record !== false) {
         try {

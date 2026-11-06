@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import WebSocket from "ws";
 import { describe, test, expect, beforeAll, afterAll } from "vitest";
+import { connect } from "../client.js";
 import { serveRelay, type RelayServer } from "../relay.js";
 import { loadToken, TOKEN_HEADER } from "../auth.js";
 import type { RelayPolicy } from "../policy.js";
@@ -368,5 +369,37 @@ describe("Relay policy enforcement", () => {
     expect(results).toHaveLength(2);
     expect(results[1]!.error).toContain("Blocked by policy");
     expect(body.completed).toBe(1);
+  });
+});
+
+describe("Extension pages", () => {
+  let relay: RelayServer;
+  let port: number;
+  let ext: MockExtension;
+
+  beforeAll(async () => {
+    port = randomPort();
+    relay = await serveRelay({ port, host: "127.0.0.1" });
+    ext = new MockExtension(port);
+    await ext.connect();
+    await new Promise((r) => setTimeout(r, 600));
+  });
+
+  afterAll(async () => {
+    await ext.disconnect();
+    await relay.stop();
+  });
+
+  test("enable focus emulation so background tabs receive input", async () => {
+    const client = await connect(`http://127.0.0.1:${port}`, {
+      mode: "extension",
+      session: "focus-session",
+    });
+    await client.page("background", { record: false });
+    const command = ext
+      .forwardedCdpCommands()
+      .find((c) => c.method === "Emulation.setFocusEmulationEnabled");
+    expect(command?.params).toEqual({ enabled: true });
+    await client.disconnect();
   });
 });
