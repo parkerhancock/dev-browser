@@ -1,0 +1,100 @@
+/**
+ * Integration tests for the remote-ready standalone server: token auth on
+ * every request, the authenticated /cdp WebSocket proxy (Chromium's raw
+ * debug endpoint is never dialed by the client), and server-side download
+ * tracking with byte retrieval — the pieces a Docker/remote deployment needs.
+ *
+ * Launches a real headless Chromium once for the whole file.
+ */
+
+import { mkdtempSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { describe, test, expect, beforeAll, afterAll } from "vitest";
+
+process.env.DEV_BROWSER_DIR = mkdtempSync(
+  join(tmpdir(), "dev-browser-remote-test-")
+);
+
+import { serve, type DevBrowserServer } from "../index.js";
+import { connect, type DevBrowserClient } from "../client.js";
+import { loadToken, TOKEN_HEADER } from "../auth.js";
+
+const port = 19000 + Math.floor(Math.random() * 5000);
+const cdpPort = port + 5000;
+
+describe("Remote-ready standalone server", () => {
+  let server: DevBrowserServer;
+  let client: DevBrowserClient | null = null;
+
+  beforeAll(async () => {
+    server = await serve({
+      port,
+      cdpPort,
+      host: "127.0.0.1",
+      headless: true,
+      profileDir: mkdtempSync(join(tmpdir(), "dev-browser-remote-profile-")),
+    });
+  });
+
+  afterAll(async () => {
+    if (client) await client.disconnect();
+    await server.stop();
+  });
+
+  test("rejects requests without the token", async () => {
+    const res = await fetch(`http://127.0.0.1:${port}/health`);
+    expect(res.status).toBe(401);
+  });
+
+  test("accepts the token and advertises the /cdp proxy", async () => {
+    const token = loadToken()!;
+    const res = await fetch(`http://127.0.0.1:${port}/`, {
+      headers: { [TOKEN_HEADER]: token },
+    });
+    expect(res.status).toBe(200);
+    const info = (await res.json()) as { wsEndpoint: string; wsPath?: string };
+    expect(info.wsPath).toBe("/cdp");
+    // The advertised endpoint is the proxy on our own port, not Chromium's
+    expect(info.wsEndpoint).toContain(`:${port}/cdp`);
+    expect(info.wsEndpoint).not.toContain(String(cdpPort));
+  });
+
+  test("drives a page through the authenticated CDP proxy", async () => {
+    client = await connect(`http://127.0.0.1:${port}`, {
+      session: "remote-test",
+      token: loadToken()!,
+    });
+    const page = await client.page("proxied");
+    await page.goto("data:text/html,<h1>proxied</h1>");
+    expect(await page.locator("h1").textContent()).toBe("proxied");
+  });
+
+  test("tracks downloads server-side and serves the bytes", async () => {
+    const page = await client!.page("proxied");
+    await page.goto(
+      'data:text/html,<a id="dl" href="data:text/plain,hello-remote" download="hi.txt">dl</a>'
+    );
+    const before = Date.now();
+    await page.click("#dl");
+
+    const record = await client!.waitForDownload({ since: before - 1000 });
+    expect(record.state).toBe("completed");
+    expect(record.suggestedFilename).toBe("hi.txt");
+
+    // Fetch the bytes over HTTP — the remote-client path (record.path is a
+    // path on the server's machine).
+    const dest = join(process.env.DEV_BROWSER_DIR!, "saved.txt");
+    await client!.saveDownload(record.id, dest);
+    expect(readFileSync(dest, "utf8")).toBe("hello-remote");
+
+    // Downloads are session-scoped in standalone mode
+    const token = loadToken()!;
+    const other = await fetch(`http://127.0.0.1:${port}/downloads`, {
+      headers: { [TOKEN_HEADER]: token, "X-DevBrowser-Session": "someone-else" },
+    });
+    expect(((await other.json()) as { downloads: unknown[] }).downloads).toEqual(
+      []
+    );
+  });
+});

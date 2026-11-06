@@ -1,8 +1,13 @@
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import { serve as honoServe } from "@hono/node-server";
+import { RESPONSE_ALREADY_SENT } from "@hono/node-server/utils/response";
+import { createNodeWebSocket } from "@hono/node-ws";
 import { chromium, type BrowserContext, type Page } from "playwright";
-import { mkdirSync } from "fs";
+import { mkdirSync, readFileSync, statSync, copyFileSync } from "fs";
 import { join } from "path";
+import type { IncomingMessage, ServerResponse } from "node:http";
+import { TOKEN_HEADER, loadOrCreateToken, tokensMatch } from "./auth.js";
+import type { DownloadRecord } from "./relay.js";
 import {
   getAgentSession,
   validatePageName,
@@ -52,10 +57,12 @@ async function fetchWithRetry(
 
 export async function serve(options: ServeOptions = {}): Promise<DevBrowserServer> {
   const port = options.port ?? 9222;
+  const host = options.host ?? "127.0.0.1";
   const headless = options.headless ?? true;
   const cdpPort = options.cdpPort ?? 9223;
   const profileDir = options.profileDir;
   const browser = options.browser ?? "chromium";
+  const requireAuth = options.requireAuth ?? true;
   const startedAt = Date.now();
 
   // Validate port numbers
@@ -142,10 +149,174 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
 
   // Hono app
   const app = new Hono();
+  const { injectWebSocket, upgradeWebSocket } = createNodeWebSocket({ app });
+
+  // ---- Auth (§4): shared token on every HTTP request and WS upgrade ----
+  // Same scheme as the relay. The /cdp WS upgrade carries the token as a
+  // ?token= query param because Playwright's connectOverCDP can't send
+  // custom headers.
+  const token = requireAuth ? loadOrCreateToken() : "";
+  app.use("*", async (c, next) => {
+    if (!requireAuth) return next();
+    const candidate = c.req.header(TOKEN_HEADER) ?? c.req.query("token");
+    if (candidate && tokensMatch(candidate, token)) return next();
+    return c.json(
+      {
+        error:
+          "Unauthorized: missing or invalid X-DevBrowser-Token (read it from ~/.dev-browser/token or set DEV_BROWSER_TOKEN)",
+      },
+      401
+    );
+  });
+
+  /**
+   * The CDP WS URL we advertise: this server's authenticated /cdp proxy,
+   * addressed by whatever host the client dialed (works through Docker port
+   * mapping and remote hosts). Chromium's raw endpoint is never advertised.
+   */
+  function advertisedWsEndpoint(c: Context): string {
+    const dialedHost =
+      c.req.header("host") ??
+      `${host === "0.0.0.0" || host === "::" ? "127.0.0.1" : host}:${port}`;
+    return `ws://${dialedHost}/cdp`;
+  }
+
+  // ---- CDP WebSocket proxy: /cdp[/:session][?token=...] ----
+  // Bridges each incoming connection to Chromium's loopback-only debug
+  // endpoint. The trailing session segment is an isolation marker only.
+  const cdpProxyHandler = upgradeWebSocket(() => {
+    let upstream: WebSocket | null = null;
+    const queued: string[] = [];
+    return {
+      onOpen(_event, ws) {
+        upstream = new WebSocket(wsEndpoint);
+        upstream.addEventListener("open", () => {
+          for (const msg of queued) upstream!.send(msg);
+          queued.length = 0;
+        });
+        upstream.addEventListener("message", (ev) => {
+          ws.send(typeof ev.data === "string" ? ev.data : String(ev.data));
+        });
+        upstream.addEventListener("close", () => ws.close());
+        upstream.addEventListener("error", () => ws.close());
+      },
+      onMessage(event, ws) {
+        const msg =
+          typeof event.data === "string"
+            ? event.data
+            : Buffer.from(event.data as ArrayBuffer).toString("utf8");
+
+        // Remote Playwright clients send Browser.setDownloadBehavior with a
+        // downloadPath from THEIR machine, which breaks downloads in the
+        // browser (and clobbers this server's own download tracking).
+        // Answer it here instead of forwarding, so the server stays the
+        // owner of download behavior.
+        try {
+          const parsed = JSON.parse(msg) as {
+            id?: number;
+            method?: string;
+          };
+          if (parsed.method === "Browser.setDownloadBehavior") {
+            if (parsed.id !== undefined) {
+              ws.send(JSON.stringify({ id: parsed.id, result: {} }));
+            }
+            return;
+          }
+        } catch {
+          // Not JSON — forward as-is
+        }
+
+        if (upstream && upstream.readyState === WebSocket.OPEN) {
+          upstream.send(msg);
+        } else {
+          queued.push(msg);
+        }
+      },
+      onClose() {
+        try {
+          upstream?.close();
+        } catch {
+          // Upstream may already be closed
+        }
+      },
+    };
+  });
+  app.get("/cdp", cdpProxyHandler);
+  app.get("/cdp/:session", cdpProxyHandler);
+
+  // ---- Downloads (server-side; survives remote clients) ----
+  // Completed downloads are copied out of Playwright's temp artifacts dir
+  // (which Playwright may clean at any time, and which dies with the
+  // context) into a stable folder inside the profile dir, so GET
+  // /download/:id can serve the bytes for as long as the server runs.
+  const downloadsDir = join(userDataDir, "downloads");
+  mkdirSync(downloadsDir, { recursive: true });
+  const downloads: DownloadRecord[] = [];
+  const downloadSessions = new Map<number, string>();
+  let nextDownloadId = 1;
+
+  function trackPageDownloads(page: Page, agentSession: string): void {
+    page.on("download", (download) => {
+      const record: DownloadRecord = {
+        id: nextDownloadId++,
+        url: download.url(),
+        suggestedFilename: download.suggestedFilename(),
+        state: "inProgress",
+        startedAt: Date.now(),
+        updatedAt: Date.now(),
+      };
+      downloads.push(record);
+      downloadSessions.set(record.id, agentSession);
+      if (downloads.length > 100) {
+        const dropped = downloads.shift();
+        if (dropped) downloadSessions.delete(dropped.id);
+      }
+      download
+        .path()
+        .then((artifactPath) => {
+          const safeName = (record.suggestedFilename ?? "download").replace(
+            /[/\\]/g,
+            "_"
+          );
+          const dest = join(downloadsDir, `${record.id}-${safeName}`);
+          copyFileSync(artifactPath, dest);
+          record.path = dest;
+          record.state = "completed";
+          try {
+            record.fileSize = statSync(dest).size;
+          } catch {
+            // Size is best-effort
+          }
+          record.updatedAt = Date.now();
+        })
+        .catch(() => {
+          record.state = "interrupted";
+          record.updatedAt = Date.now();
+        });
+    });
+  }
+
+  // ---- Optional MCP endpoint (handler injected by the CLI) ----
+  if (options.mcpHandler) {
+    const mcpHandler = options.mcpHandler;
+    app.all("/mcp", async (c) => {
+      const { incoming, outgoing } = c.env as {
+        incoming: IncomingMessage;
+        outgoing: ServerResponse;
+      };
+      await mcpHandler(incoming, outgoing);
+      return RESPONSE_ALREADY_SENT;
+    });
+  }
 
   // GET / - server info
   app.get("/", (c) => {
-    return c.json({ wsEndpoint, mode: "launch", browser } satisfies ServerInfoResponse & {
+    return c.json({
+      wsEndpoint: advertisedWsEndpoint(c),
+      wsPath: "/cdp",
+      mode: "launch",
+      browser,
+    } satisfies ServerInfoResponse & {
       mode: string;
       browser: string;
     });
@@ -217,6 +388,8 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
         await page.setViewportSize(viewport);
       }
 
+      trackPageDownloads(page, agentSession);
+
       const targetId = await getTargetId(page);
       entry = { page, targetId };
       registry.set(pageKey, entry);
@@ -232,7 +405,7 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
     }
 
     const response: GetPageResponse & { warning?: string } = {
-      wsEndpoint,
+      wsEndpoint: advertisedWsEndpoint(c),
       name,
       targetId: entry.targetId,
     };
@@ -264,6 +437,44 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
     return c.json({ error: "page not found" }, 404);
   });
 
+  // GET /downloads - downloads for this session, newest state in place.
+  // `since` is an epoch-ms floor on each download's start time.
+  app.get("/downloads", (c) => {
+    const agentSession = getAgentSession(c);
+    const sinceRaw = c.req.query("since");
+    const since = sinceRaw ? Number(sinceRaw) : undefined;
+    const list = downloads.filter(
+      (d) =>
+        downloadSessions.get(d.id) === agentSession &&
+        (since === undefined || Number.isNaN(since) || d.startedAt >= since)
+    );
+    return c.json({ downloads: list });
+  });
+
+  // GET /download/:id - serve a completed download's bytes. The file is
+  // Playwright's artifact on this machine; it is never deleted here.
+  app.get("/download/:id", (c) => {
+    const id = Number(c.req.param("id"));
+    const record = downloads.find((d) => d.id === id);
+    if (!record) return c.json({ error: "Unknown download id" }, 404);
+    if (record.state !== "completed" || !record.path) {
+      return c.json({ error: `Download not complete (state: ${record.state})` }, 409);
+    }
+    let bytes: Uint8Array;
+    try {
+      bytes = new Uint8Array(readFileSync(record.path));
+    } catch (err) {
+      return c.json({ error: `Failed to read download: ${String(err)}` }, 500);
+    }
+    const filename = (record.suggestedFilename ?? "download").replace(/"/g, "");
+    return new Response(bytes, {
+      headers: {
+        "Content-Type": record.mime ?? "application/octet-stream",
+        "Content-Disposition": `attachment; filename="${filename}"`,
+      },
+    });
+  });
+
   // GET /stats - server stats for debugging
   app.get("/stats", (c) => {
     const bySession: Record<string, Array<{ name: string; url: string }>> = {};
@@ -287,10 +498,11 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
   });
 
   // Start the server
-  const server = honoServe({ fetch: app.fetch, port }, () => {
-    log(`HTTP API server running on port ${port}`);
+  const server = honoServe({ fetch: app.fetch, port, hostname: host }, () => {
+    log(`HTTP API server running on ${host}:${port}`);
     log(`Log file: ${logFile}`);
   });
+  injectWebSocket(server);
 
   // Track if cleanup has been called to avoid double cleanup
   let cleaningUp = false;

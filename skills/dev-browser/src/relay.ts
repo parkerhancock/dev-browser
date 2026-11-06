@@ -8,6 +8,7 @@
 
 import { Hono } from "hono";
 import { serve } from "@hono/node-server";
+import { RESPONSE_ALREADY_SENT } from "@hono/node-server/utils/response";
 import { createNodeWebSocket } from "@hono/node-ws";
 import type { WSContext } from "hono/ws";
 import {
@@ -64,6 +65,14 @@ export interface RelayOptions {
   dialogPolicy?: DialogPolicy;
   /** Override the policy (default: load ~/.dev-browser/policy.json). */
   policy?: RelayPolicy;
+  /**
+   * Optional raw Node handler mounted at ALL /mcp — lets the CLI serve the
+   * MCP streamable-HTTP endpoint from the relay's port.
+   */
+  mcpHandler?: (
+    req: import("node:http").IncomingMessage,
+    res: import("node:http").ServerResponse
+  ) => void | Promise<void>;
 }
 
 /** A download tracked by the relay (reported by the extension's chrome.downloads listeners). */
@@ -770,6 +779,20 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
       401
     );
   });
+
+  // ---- Optional MCP endpoint (handler injected by the CLI) ----
+  // Registered after the auth middleware, so /mcp requires the token too.
+  if (options.mcpHandler) {
+    const mcpHandler = options.mcpHandler;
+    app.all("/mcp", async (c) => {
+      const { incoming, outgoing } = c.env as {
+        incoming: import("node:http").IncomingMessage;
+        outgoing: import("node:http").ServerResponse;
+      };
+      await mcpHandler(incoming, outgoing);
+      return RESPONSE_ALREADY_SENT;
+    });
+  }
 
   /** Resolve the origin of a page's current URL for policy checks. */
   function originOfSession(cdpSessionId: string): string | undefined {

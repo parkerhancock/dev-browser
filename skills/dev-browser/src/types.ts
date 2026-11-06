@@ -34,6 +34,23 @@ export interface ServeOptions {
   port?: number;
   headless?: boolean;
   cdpPort?: number;
+  /**
+   * Interface to bind the HTTP API to. Default "127.0.0.1"; use "0.0.0.0"
+   * inside a container. Chromium's own CDP port always stays on loopback —
+   * remote clients reach it only through the authenticated /cdp proxy.
+   */
+  host?: string;
+  /** Require X-DevBrowser-Token on every request and WS upgrade. Default true. */
+  requireAuth?: boolean;
+  /**
+   * Optional raw Node handler mounted at ALL /mcp — lets the CLI serve the
+   * MCP streamable-HTTP endpoint from the same port without this package
+   * depending on the mcp-server package.
+   */
+  mcpHandler?: (
+    req: import("node:http").IncomingMessage,
+    res: import("node:http").ServerResponse
+  ) => void | Promise<void>;
   /** Directory to store persistent browser profiles (cookies, localStorage, etc.) */
   profileDir?: string;
   /**
@@ -76,4 +93,10 @@ export interface ListPagesResponse {
 
 export interface ServerInfoResponse {
   wsEndpoint: string;
+  /**
+   * Path of the server's own authenticated CDP WebSocket proxy (e.g. "/cdp").
+   * Clients derive the full WS URL from the HTTP URL they dialed, which works
+   * across Docker/port-forwarding/TLS; `wsEndpoint` is kept for old clients.
+   */
+  wsPath?: string;
 }

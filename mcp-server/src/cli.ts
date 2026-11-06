@@ -1,19 +1,23 @@
 /**
  * dev-browser CLI — one binary for all modes:
  *
- *   dev-browser serve    [--port 9222] [--headed] [--profile NAME] [--browser chromium|chrome|msedge] [--profile-dir PATH]
- *   dev-browser relay    [--port 9224]
+ *   dev-browser serve    [--port 9222] [--host 127.0.0.1] [--headed] [--profile NAME] [--browser chromium|chrome|msedge] [--profile-dir PATH] [--mcp]
+ *   dev-browser relay    [--port 9224] [--mcp]
  *   dev-browser mcp      [--http PORT] [--mode standalone|extension] [--session ID]
  *   dev-browser browsers
+ *
+ * --mcp mounts the MCP streamable-HTTP endpoint at /mcp on the same port
+ * (behind the server's token auth), so one process serves both the library
+ * HTTP API and MCP — the Docker/remote-service deployment shape.
  *
  * Replaces skills/dev-browser/{server,start,stop}.sh.
  */
 
 import { parseArgs } from "node:util";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { createServer as createHttpServer } from "node:http";
 import { buildServer, createState, type BrowserMode } from "./server.js";
+import { createMcpNodeHandler } from "./http.js";
 
 function usage(): never {
   console.error(
@@ -22,9 +26,11 @@ function usage(): never {
       "",
       "Commands:",
       "  serve      Start the standalone Chromium server (:9222)",
-      "             --port N, --headed, --profile NAME, --browser chromium|chrome|msedge, --profile-dir PATH",
+      "             --port N, --host ADDR (0.0.0.0 for containers), --headed,",
+      "             --profile NAME, --browser chromium|chrome|msedge,",
+      "             --profile-dir PATH, --mcp (mount MCP at /mcp)",
       "  relay      Start the Chrome-extension relay (:9224)",
-      "             --port N",
+      "             --port N, --mcp (mount MCP at /mcp)",
       "  mcp        Start the MCP server (stdio by default)",
       "             --http PORT (streamable HTTP), --mode standalone|extension, --session ID",
       "  browsers   Show which dev-browser servers are reachable",
@@ -42,19 +48,25 @@ async function main(): Promise<void> {
         args: rest,
         options: {
           port: { type: "string" },
+          host: { type: "string" },
           headed: { type: "boolean", default: false },
           profile: { type: "string" },
           browser: { type: "string" },
           "profile-dir": { type: "string" },
+          mcp: { type: "boolean", default: false },
         },
       });
       const { serve } = await import("../../skills/dev-browser/src/index.js");
       await serve({
         port: values.port ? Number(values.port) : undefined,
+        host: values.host,
         headless: !values.headed,
         profile: values.profile,
         browser: values.browser as "chromium" | "chrome" | "msedge" | undefined,
         profileDir: values["profile-dir"],
+        mcpHandler: values.mcp
+          ? createMcpNodeHandler({ mode: "standalone" })
+          : undefined,
       });
       break;
     }
@@ -62,11 +74,17 @@ async function main(): Promise<void> {
     case "relay": {
       const { values } = parseArgs({
         args: rest,
-        options: { port: { type: "string" } },
+        options: {
+          port: { type: "string" },
+          mcp: { type: "boolean", default: false },
+        },
       });
       const { serveRelay } = await import("../../skills/dev-browser/src/relay.js");
       await serveRelay({
         port: values.port ? Number(values.port) : undefined,
+        mcpHandler: values.mcp
+          ? createMcpNodeHandler({ mode: "extension" })
+          : undefined,
       });
       break;
     }
@@ -80,37 +98,25 @@ async function main(): Promise<void> {
           session: { type: "string" },
         },
       });
-      const state = createState({
-        mode: values.mode as BrowserMode | undefined,
-        session: values.session,
-      });
-
       if (values.http) {
         const port = Number(values.http);
-        const httpServer = createHttpServer(async (req, res) => {
-          // Stateless streamable HTTP: a fresh server+transport per request
-          try {
-            const server = buildServer(state);
-            const transport = new StreamableHTTPServerTransport({
-              sessionIdGenerator: undefined,
-            });
-            res.on("close", () => {
-              transport.close();
-              server.close();
-            });
-            await server.connect(transport);
-            await transport.handleRequest(req, res);
-          } catch (err) {
-            console.error("MCP HTTP error:", err);
-            if (!res.headersSent) {
-              res.writeHead(500).end(JSON.stringify({ error: String(err) }));
-            }
-          }
+        // Stateful streamable HTTP: each MCP connection gets its own
+        // transport and dev-browser session (unless --session pins one).
+        const handler = createMcpNodeHandler({
+          mode: values.mode as BrowserMode | undefined,
+          session: values.session,
+        });
+        const httpServer = createHttpServer((req, res) => {
+          void handler(req, res);
         });
         httpServer.listen(port, "127.0.0.1", () => {
           console.error(`dev-browser MCP listening on http://127.0.0.1:${port}/`);
         });
       } else {
+        const state = createState({
+          mode: values.mode as BrowserMode | undefined,
+          session: values.session,
+        });
         const server = buildServer(state);
         await server.connect(new StdioServerTransport());
         console.error("dev-browser MCP server running on stdio");

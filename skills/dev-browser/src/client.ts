@@ -16,14 +16,14 @@ import type { Page } from "./page.js";
 import { CDPPage } from "./cdp-page.js";
 import { join } from "node:path";
 import { homedir, tmpdir } from "node:os";
-import { mkdir } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { mkdtempSync, createWriteStream, rmSync } from "node:fs";
 import archiver from "archiver";
 import { getSnapshotScript } from "./snapshot/browser-script";
 import { createWaczFromHar } from "./wacz.js";
 import { createLogger } from "./logging.js";
 import { wrapWithCleanErrors } from "./errors.js";
-import { authHeaders } from "./auth.js";
+import { authHeaders, loadToken, TOKEN_HEADER } from "./auth.js";
 import TurndownService from "turndown";
 import type { ConsoleMessage, DownloadRecord } from "./relay.js";
 import {
@@ -486,6 +486,12 @@ export interface ConnectOptions {
    */
   ephemeral?: boolean;
   /**
+   * Auth token for the server. Defaults to DEV_BROWSER_TOKEN or the local
+   * ~/.dev-browser/token file; pass it explicitly when connecting to a
+   * dev-browser server on another machine or in a container.
+   */
+  token?: string;
+  /**
    * Require the connected browser to match this label (e.g. "chrome",
    * "msedge", "brave"). Throws at connect time when the server or relay is
    * driving a different browser, or (extension mode) when no browser is
@@ -680,9 +686,9 @@ export interface DevBrowserClient {
    */
   importOriginState: (name: string, state: OriginState) => Promise<void>;
   /**
-   * Downloads observed since connecting (standalone) or tracked by the relay
-   * (extension mode; reported by chrome.downloads, browser-wide). `since` is
-   * an epoch-ms floor on each download's start time.
+   * Downloads tracked by the server. Standalone tracks per session; extension
+   * mode reports chrome.downloads, which is browser-wide. `since` is an
+   * epoch-ms floor on each download's start time.
    */
   getDownloads: (options?: { since?: number }) => Promise<DownloadRecord[]>;
   /**
@@ -696,6 +702,12 @@ export interface DevBrowserClient {
     since?: number;
     timeoutMs?: number;
   }) => Promise<DownloadRecord>;
+  /**
+   * Save a completed download's bytes to a local file and return destPath.
+   * A DownloadRecord's `path` is a path on the server's machine, so use this
+   * when the browser runs remotely (Docker, another host).
+   */
+  saveDownload: (id: number, destPath: string) => Promise<string>;
   /**
    * List connected browsers. Extension mode reports the browser the extension
    * runs in (chrome/msedge/brave/...); standalone mode reports the launched
@@ -980,6 +992,41 @@ async function pollForDownload(
   }
 }
 
+/** GET /downloads from a dev-browser server (either mode). */
+async function fetchDownloadsHttp(
+  serverUrl: string,
+  headers: Record<string, string>,
+  since?: number
+): Promise<DownloadRecord[]> {
+  const params = new URLSearchParams();
+  if (since !== undefined) params.set("since", String(since));
+  const res = await fetch(`${serverUrl}/downloads?${params}`, { headers });
+  if (!res.ok) {
+    throw new Error(`Failed to get downloads: ${await res.text()}`);
+  }
+  const data = (await res.json()) as { downloads: DownloadRecord[] };
+  return data.downloads;
+}
+
+/**
+ * Stream a completed download's bytes from the server to a local file.
+ * This is how downloads reach the agent when the browser runs on another
+ * machine; `record.path` is a path on the server.
+ */
+async function saveDownloadHttp(
+  serverUrl: string,
+  headers: Record<string, string>,
+  id: number,
+  destPath: string
+): Promise<string> {
+  const res = await fetch(`${serverUrl}/download/${id}`, { headers });
+  if (!res.ok) {
+    throw new Error(`Failed to fetch download ${id}: ${await res.text()}`);
+  }
+  await writeFile(destPath, Buffer.from(await res.arrayBuffer()));
+  return destPath;
+}
+
 async function clearBrowsingDataImpl(
   sendCdp: (method: string, params?: Record<string, unknown>) => Promise<unknown>,
   options?: { origin?: string }
@@ -1213,16 +1260,7 @@ async function connectExtensionMode(
   }
 
   async function fetchDownloads(since?: number): Promise<DownloadRecord[]> {
-    const params = new URLSearchParams();
-    if (since !== undefined) params.set("since", String(since));
-    const res = await fetch(`${serverUrl}/downloads?${params}`, {
-      headers: sessionHeaders,
-    });
-    if (!res.ok) {
-      throw new Error(`Failed to get downloads: ${await res.text()}`);
-    }
-    const data = (await res.json()) as { downloads: DownloadRecord[] };
-    return data.downloads;
+    return fetchDownloadsHttp(serverUrl, sessionHeaders, since);
   }
 
   return {
@@ -1529,6 +1567,10 @@ async function connectExtensionMode(
       return pollForDownload((since) => fetchDownloads(since), options);
     },
 
+    async saveDownload(id: number, destPath: string): Promise<string> {
+      return saveDownloadHttp(serverUrl, sessionHeaders, id, destPath);
+    },
+
     async listBrowsers(): Promise<BrowserInfo[]> {
       const res = await fetch(`${serverUrl}/browsers`, {
         headers: sessionHeaders,
@@ -1590,10 +1632,10 @@ export async function connect(
     );
   }
 
-  // Headers to include session (and the relay auth token, when present) in all requests
+  // Headers to include session (and the server auth token, when present) in all requests
   const sessionHeaders: Record<string, string> = {
     "X-DevBrowser-Session": session,
-    ...authHeaders(),
+    ...(opts.token ? { [TOKEN_HEADER]: opts.token } : authHeaders()),
   };
 
   // Verify the connected browser matches the requested one (P1 #10b)
@@ -1650,39 +1692,6 @@ export async function connect(
   // Track active HAR recordings: pageName -> recorder state
   const harRecorders = new Map<string, HarRecorderState>();
 
-  // Downloads observed via Playwright's "download" event (this client only)
-  const downloadRecords: DownloadRecord[] = [];
-  let nextDownloadId = 1;
-  const downloadTrackedPages = new WeakSet<PlaywrightPage>();
-
-  function trackDownloads(p: PlaywrightPage): void {
-    if (downloadTrackedPages.has(p)) return;
-    downloadTrackedPages.add(p);
-    p.on("download", (download) => {
-      const record: DownloadRecord = {
-        id: nextDownloadId++,
-        url: download.url(),
-        suggestedFilename: download.suggestedFilename(),
-        state: "inProgress",
-        startedAt: Date.now(),
-        updatedAt: Date.now(),
-      };
-      downloadRecords.push(record);
-      if (downloadRecords.length > 100) downloadRecords.shift();
-      download
-        .path()
-        .then((filePath) => {
-          record.path = filePath;
-          record.state = "completed";
-          record.updatedAt = Date.now();
-        })
-        .catch(() => {
-          record.state = "interrupted";
-          record.updatedAt = Date.now();
-        });
-    });
-  }
-
   // Force reconnect by closing existing connection and starting fresh
   // This is needed in extension mode when new tabs are created after Playwright connected
   async function forceReconnect(): Promise<Browser> {
@@ -1713,15 +1722,26 @@ export async function connect(
     // Start new connection with mutex
     connectingPromise = (async () => {
       try {
-        const res = await fetch(serverUrl);
+        const res = await fetch(serverUrl, { headers: sessionHeaders });
         if (!res.ok) {
           throw new Error(`Server returned ${res.status}: ${await res.text()}`);
         }
         const info = (await res.json()) as ServerInfoResponse;
 
-        // Include session in CDP URL for multi-agent isolation
-        // (Playwright's connectOverCDP can't send custom headers)
-        wsEndpoint = `${info.wsEndpoint}/${encodeURIComponent(session)}`;
+        // Include session in CDP URL for multi-agent isolation, and the auth
+        // token as a query param (Playwright's connectOverCDP can't send
+        // custom headers).
+        if (info.wsPath) {
+          // Server exposes its own authenticated CDP proxy: derive the WS URL
+          // from the HTTP URL we dialed, so remote/forwarded hosts work.
+          const base = serverUrl.replace(/^http/i, "ws").replace(/\/+$/, "");
+          const wsToken = opts.token ?? loadToken();
+          const qs = wsToken ? `?token=${encodeURIComponent(wsToken)}` : "";
+          wsEndpoint = `${base}${info.wsPath}/${encodeURIComponent(session)}${qs}`;
+        } else {
+          // Legacy server: raw Chromium endpoint, local only
+          wsEndpoint = `${info.wsEndpoint}/${encodeURIComponent(session)}`;
+        }
 
         // Connect to the browser via CDP
         browser = await chromium.connectOverCDP(wsEndpoint);
@@ -1843,13 +1863,17 @@ export async function connect(
       return allPages[0];
     }
 
-    // In launch mode, use the original targetId-based lookup
-    const page = await findPageByTargetId(b, targetId);
-    if (!page) {
-      throw new Error(`Page "${name}" not found in browser contexts`);
+    // In launch mode, use the original targetId-based lookup. A page the
+    // server just created can take a moment to attach on this CDP
+    // connection (especially through the /cdp proxy), so retry briefly.
+    const deadline = Date.now() + 5000;
+    for (;;) {
+      const page = await findPageByTargetId(b, targetId);
+      if (page) return page;
+      if (Date.now() >= deadline) break;
+      await new Promise((r) => setTimeout(r, 100));
     }
-
-    return page;
+    throw new Error(`Page "${name}" not found in browser contexts`);
   }
 
   // Helper: set up HAR recording CDP listeners on a page
@@ -1997,7 +2021,6 @@ export async function connect(
   const clientImpl: DevBrowserClient = {
     async page(name: string, options?: PageOptions): Promise<Page> {
       const p = await getPage(name, options);
-      trackDownloads(p);
       // Auto-start HAR recording unless opted out
       if (options?.record !== false && !harRecorders.has(name)) {
         try {
@@ -2324,10 +2347,7 @@ export async function connect(
     },
 
     async getDownloads(options?: { since?: number }): Promise<DownloadRecord[]> {
-      const since = options?.since;
-      return downloadRecords.filter(
-        (d) => since === undefined || d.startedAt >= since
-      );
+      return fetchDownloadsHttp(serverUrl, sessionHeaders, options?.since);
     },
 
     async waitForDownload(options?: {
@@ -2335,13 +2355,17 @@ export async function connect(
       timeoutMs?: number;
     }): Promise<DownloadRecord> {
       return pollForDownload(
-        async (since) => downloadRecords.filter((d) => d.startedAt >= since),
+        (since) => fetchDownloadsHttp(serverUrl, sessionHeaders, since),
         options
       );
     },
 
+    async saveDownload(id: number, destPath: string): Promise<string> {
+      return saveDownloadHttp(serverUrl, sessionHeaders, id, destPath);
+    },
+
     async listBrowsers(): Promise<BrowserInfo[]> {
-      const res = await fetch(`${serverUrl}/health`, { headers: authHeaders() });
+      const res = await fetch(`${serverUrl}/health`, { headers: sessionHeaders });
       if (!res.ok) {
         throw new Error(`Failed to get server health: ${await res.text()}`);
       }

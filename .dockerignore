@@ -1,0 +1,11 @@
+**/node_modules
+**/.browser-data*
+**/browser-data*
+**/tmp
+**/*.log
+extension
+agents
+assets
+hooks
+issues
+.git

@@ -20,6 +20,16 @@ relay `GET /downloads` + `GET /download/:id`; `client.getDownloads()` /
 `GET /browsers` and `browser` in `/health`; `client.listBrowsers()` and
 `connect({ browser })`).
 
+**Landed** (remote-service follow-up, same date): the standalone server is
+now deployable as a Docker/remote service — token auth on every request
+(matching the relay), an authenticated `/cdp` WebSocket proxy on the HTTP
+port (Chromium's debug port is never advertised or exposed; the proxy also
+absorbs remote clients' `Browser.setDownloadBehavior`), server-side download
+tracking with `GET /downloads` / `GET /download/:id` and
+`client.saveDownload()`, `connect({ token })` + `DEV_BROWSER_TOKEN`, an
+`/mcp` streamable-HTTP mount (`serve --mcp` / `relay --mcp`, one MCP session
+per connection), `--host`, and a repo-root `Dockerfile`.
+
 **Deferred** (needs a product decision):
 - §4(3) native-messaging host in place of the `debugger` permission
 - P2 strict-by-default: shipped as permissive when no

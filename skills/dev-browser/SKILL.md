@@ -365,11 +365,13 @@ await page.mouse.wheel(0, 300); // Scroll down
 `mcp-server/` (repo root) packages the client as model-facing MCP tools and a single CLI:
 
 ```bash
-dev-browser serve     # standalone Chromium server on :9222 (--headed, --profile NAME, --browser chrome|msedge, --port)
-dev-browser relay     # Chrome-extension relay on :9224 (--port)
+dev-browser serve     # standalone Chromium server on :9222 (--headed, --profile NAME, --browser chrome|msedge, --port, --host, --mcp)
+dev-browser relay     # Chrome-extension relay on :9224 (--port, --mcp)
 dev-browser mcp       # MCP server on stdio (--http PORT for streamable HTTP, --mode, --session)
 dev-browser browsers  # show which servers are reachable
 ```
+
+`--mcp` mounts the MCP streamable-HTTP endpoint at `/mcp` on the same port, behind the server's token auth, so one process serves both the library HTTP API and MCP. Over HTTP, each MCP connection gets its own dev-browser session (`mcp-<id>`), the HTTP equivalent of the per-conversation isolation `CLAUDE_SESSION_ID` gives stdio.
 
 Run it from `mcp-server/` with `node bin/dev-browser.mjs <cmd>` (or install the package to get the `dev-browser` bin). The MCP server auto-detects the mode: extension relay first (if its extension is connected), standalone otherwise; `switch_browser` changes it at runtime. The session defaults to `CLAUDE_SESSION_ID` for per-conversation isolation.
 
@@ -395,11 +397,20 @@ Vendor tool → dev-browser mapping (every MCP tool is a thin wrapper over the c
 | `read_network_requests` | `client.getNetworkRequests(name, { pattern, since })` |
 | `switch_browser` / `list_connected_browsers` | `/health` probes on :9222 and :9224 (includes the `browser` label) |
 
-Downloads and browser identity are also exposed over HTTP on the relay: `GET /downloads?since=<ms>` lists downloads reported by the extension, `GET /download/:id` serves a completed download's bytes (the file itself is never deleted), and `GET /browsers` reports which browser the extension connection comes from (`chrome`, `msedge`, `brave`, ...). Note that `chrome.downloads` has no tab association, so extension-mode download tracking is browser-wide: downloads the user starts by hand while the extension is active also appear in `getDownloads()`.
+Downloads and browser identity are also exposed over HTTP in both modes: `GET /downloads?since=<ms>` lists downloads (standalone tracks them per session; the relay reports the extension's `chrome.downloads`, which is browser-wide — downloads the user starts by hand also appear), `GET /download/:id` serves a completed download's bytes, and `GET /browsers` reports the browser label. In standalone mode completed downloads are copied into `<profile>/downloads/` so the bytes stay servable; extension-mode files stay in the user's Downloads folder and are never deleted. `client.saveDownload(id, destPath)` fetches the bytes to a local file — a `DownloadRecord`'s `path` is a path on the server's machine, so use `saveDownload` whenever the browser runs remotely.
+
+## Remote / Docker
+
+The standalone server is deployable as a service: the repo-root `Dockerfile` runs `dev-browser serve --host 0.0.0.0 --mcp --profile-dir /data` on the Playwright base image, with the token and browser profile persisted under the `/data` volume. One port (9222) serves everything:
+
+- **Library**: `connect("http://host:9222", { token })` — or set `DEV_BROWSER_TOKEN` instead of passing it. The client derives the CDP WebSocket URL from the HTTP URL it dialed and carries the token as `?token=` on the upgrade.
+- **MCP**: `http://host:9222/mcp` (streamable HTTP) with header `X-DevBrowser-Token: <token>`, e.g. `claude mcp add --transport http dev-browser http://host:9222/mcp --header "X-DevBrowser-Token: $TOKEN"`.
+
+Chromium's own CDP debug port stays on loopback inside the container; the only way in is the server's authenticated `/cdp` WebSocket proxy, which also shields the browser from remote Playwright clients misconfiguring download paths (`Browser.setDownloadBehavior` is answered at the proxy, never forwarded).
 
 ## Security & Policy
 
-- **Token auth**: the relay generates `~/.dev-browser/token` (0600) on first start and requires it (`X-DevBrowser-Token` header or `?token=`) on every HTTP request and WS upgrade. The client reads the same file automatically — nothing to configure on the same machine. `/extension` upgrades also accept a `chrome-extension://` Origin in place of the token and always reject http(s) Origins.
+- **Token auth**: both servers generate `~/.dev-browser/token` (0600) on first start and require it (`X-DevBrowser-Token` header or `?token=`) on every HTTP request and WS upgrade. The client reads the same file automatically — nothing to configure on the same machine; remotely, pass `token` to `connect()` or set `DEV_BROWSER_TOKEN`. `/extension` upgrades also accept a `chrome-extension://` Origin in place of the token and always reject http(s) Origins.
 - **Policy**: `~/.dev-browser/policy.json` (optional) is enforced at the relay before any CDP command is routed. `{"defaultMode": "strict", "allowedDomains": ["example.com"], "blockedDomains": [...], "cdpMethodAllowlist": [...], "fullCdpAccessOrigins": [...], "sessions": {"<id>": {...}}}`. Strict mode fails closed: navigation only to allowlisted domains, raw CDP limited to the safe set unless the page's origin has full access. No file means permissive (plus the blocklist still applies if present); a malformed file fails closed.
 - **JS dialogs** are auto-dismissed at the relay (`DEV_BROWSER_DIALOG_POLICY=dismiss|accept|ignore`).
 

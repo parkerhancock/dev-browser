@@ -31,8 +31,14 @@ export function tokenFilePath(): string {
   return join(devBrowserDir(), "token");
 }
 
-/** Read the token if it exists; null otherwise. Never creates. */
+/**
+ * Read the token if it exists; null otherwise. Never creates.
+ * DEV_BROWSER_TOKEN overrides the file — that's how a client on a different
+ * machine (or a container) gets the token without sharing a filesystem.
+ */
 export function loadToken(): string | null {
+  const fromEnv = process.env.DEV_BROWSER_TOKEN?.trim();
+  if (fromEnv) return fromEnv;
   try {
     const value = readFileSync(tokenFilePath(), "utf8").trim();
     return value.length > 0 ? value : null;
