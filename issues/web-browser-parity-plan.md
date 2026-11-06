@@ -1,7 +1,27 @@
 # Plan: web-browser-use parity with Claude in Chrome / Codex browser-use / desktop apps
 
 **Date:** 2026-11-06
-**Status:** plan, not started — pick up from P0
+**Status:** implemented 2026-11-06 (see below for the deferred remainder)
+
+**Landed** (commits `Add parity features…` and `Add MCP server package…`):
+§4(1)(2) token auth + Origin rejection (`src/auth.ts`, enforced in relay);
+P0 MCP server (`mcp-server/`, stdio + streamable HTTP, 19 tools);
+P1 #1-7, #9, #10a (standalone `serve({browser})`), #11 (client side), #12,
+#13, #14, #15; P2 permission modes + domain lists + CDP allowlist +
+per-origin full access (`src/policy.ts`, enforced in `/cdp` and `/batch`)
+and per-origin state export/import; P3 `dev-browser` CLI + SKILL.md.
+
+**Deferred** (needs Chrome-extension-side work or a product decision):
+- P1 #8 downloads in extension mode (chrome.downloads integration)
+- P1 #10b labeling extension WS connections per browser
+  (`extension/services/ConnectionManager.ts`)
+- §4(3) native-messaging host in place of the `debugger` permission
+- P2 strict-by-default: shipped as permissive when no
+  `~/.dev-browser/policy.json` exists (strict with no allowlist would
+  brick every existing script); a policy file with
+  `"defaultMode": "strict"` fail-closes exactly as specced
+- P3 shell-script removal: `server.sh`/`start.sh`/`stop.sh` kept until
+  the SessionStart hook and docs migrate to the CLI
 **Context:** reverse-engineering docs live outside this repo at
 `/Users/parkerhancock/Projects/openjev-mlx/research/docs/` (`claude-code-browser-use.md`,
 `codex-desktop-app-browser-computer-use.md`, `dev-browser-web-parity-plan.md` — the latter
