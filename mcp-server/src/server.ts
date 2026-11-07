@@ -143,6 +143,33 @@ function imageResult(page: string, buffer: Buffer, message?: string): ToolResult
   };
 }
 
+/**
+ * Run code with REPL semantics. page.evaluate() rejects top-level await in both
+ * modes, so this goes through CDP, where replMode allows it.
+ */
+async function evaluateRepl(
+  client: DevBrowserClient,
+  page: string,
+  code: string
+): Promise<unknown> {
+  const { results } = await client.batch(page, [
+    {
+      method: "Runtime.evaluate",
+      params: { expression: code, returnByValue: true, awaitPromise: true, replMode: true },
+    },
+  ]);
+  const { result, error } = results[0]!;
+  if (error) throw new Error(error);
+  const { result: remote, exceptionDetails } = result as {
+    result: { value?: unknown };
+    exceptionDetails?: { text: string; exception?: { description?: string } };
+  };
+  if (exceptionDetails) {
+    throw new Error(exceptionDetails.exception?.description ?? exceptionDetails.text);
+  }
+  return remote.value;
+}
+
 function errorResult(err: unknown): ToolResult {
   return {
     content: [
@@ -336,8 +363,9 @@ export function buildServer(state: BrowserState): McpServer {
     },
     async (args) => {
       const client = await getClient(state);
-      const p = await client.page(pageName(args));
-      const result = await p.evaluate(String(args.code));
+      const name = pageName(args);
+      await client.page(name);
+      const result = await evaluateRepl(client, name, String(args.code));
       return textResult(result === undefined ? "undefined" : result);
     }
   );

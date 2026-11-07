@@ -3,21 +3,37 @@
  * work without a running browser server.
  */
 
-import { describe, test, expect } from "vitest";
+import { afterEach, describe, test, expect, vi } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { buildServer, createState } from "../server.js";
+import { buildServer, createState, type BrowserState } from "../server.js";
+import type { DevBrowserClient } from "../../../skills/dev-browser/src/client.js";
 
-async function connectedClient(): Promise<Client> {
+async function connectedClient(
+  state: BrowserState = createState({ session: "mcp-test" })
+): Promise<Client> {
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-  const server = buildServer(createState({ session: "mcp-test" }));
+  const server = buildServer(state);
   await server.connect(serverTransport);
   const client = new Client({ name: "test-client", version: "0.0.1" });
   await client.connect(clientTransport);
   return client;
 }
 
+/** A connected client whose browser answers Runtime.evaluate with `result`. */
+async function clientWithEvaluateResult(result: unknown) {
+  const batch = vi.fn(async () => ({ results: [{ result }], completed: 1 }));
+  const state = createState({ mode: "standalone", session: "mcp-test" });
+  const browser = { page: vi.fn(async () => ({})), batch };
+  state.clients.set("standalone", browser as unknown as DevBrowserClient);
+  return { client: await connectedClient(state), batch };
+}
+
 describe("dev-browser MCP server", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   test("registers the vendor-parity tool surface", async () => {
     const client = await connectedClient();
     const { tools } = await client.listTools();
@@ -64,18 +80,52 @@ describe("dev-browser MCP server", () => {
   });
 
   test("tools report errors instead of throwing when no browser is running", async () => {
+    // Fail the health probes so this can't reach a server running on this
+    // machine, where navigate would open a real tab.
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("connection refused")));
     const client = await connectedClient();
     const result = await client.callTool({
       name: "navigate",
       arguments: { url: "https://example.com" },
     });
-    // With no server running this must come back as a tool error, not a crash
-    if (result.isError) {
-      const content = result.content as Array<{ type: string; text: string }>;
-      expect(content[0]!.text).toContain("No dev-browser server is running");
-    }
-    // (If a local dev-browser server happens to be running, navigation may
-    // actually succeed — both outcomes are acceptable here.)
+    expect(result.isError).toBe(true);
+    const content = result.content as Array<{ type: string; text: string }>;
+    expect(content[0]!.text).toContain("No dev-browser server is running");
+  });
+
+  test("javascript evaluates in REPL mode so top-level await works", async () => {
+    const { client, batch } = await clientWithEvaluateResult({ result: { value: 42 } });
+    const result = await client.callTool({
+      name: "javascript",
+      arguments: { code: "await Promise.resolve(42)" },
+    });
+    expect(batch).toHaveBeenCalledWith("main", [
+      {
+        method: "Runtime.evaluate",
+        params: {
+          expression: "await Promise.resolve(42)",
+          returnByValue: true,
+          awaitPromise: true,
+          replMode: true,
+        },
+      },
+    ]);
+    const content = result.content as Array<{ type: string; text: string }>;
+    expect(content[0]!.text).toBe("42");
+  });
+
+  test("javascript reports page exceptions as tool errors", async () => {
+    const { client } = await clientWithEvaluateResult({
+      result: {},
+      exceptionDetails: { text: "Uncaught", exception: { description: "Error: boom" } },
+    });
+    const result = await client.callTool({
+      name: "javascript",
+      arguments: { code: "throw new Error('boom')" },
+    });
+    expect(result.isError).toBe(true);
+    const content = result.content as Array<{ type: string; text: string }>;
+    expect(content[0]!.text).toContain("Error: boom");
   });
 
   test("browser_batch refuses nesting and unknown tools", async () => {
