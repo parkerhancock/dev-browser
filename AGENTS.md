@@ -57,6 +57,8 @@ All source code lives in `skills/dev-browser/`:
 - `src/browser-cdp.ts` - Browser-level CDP connection (opens each page in its own window)
 - `src/challenge.ts` - Bot-challenge detection (Cloudflare, DataDome, captchas, short 403s) and navigation error kinds
 - `src/fetch.ts` - `fetchPage()`: one-shot fetch to Markdown/HTML/text with optional screenshot and WACZ
+- `src/http-fetch.ts` - `httpFetch()`: the no-browser tier (impit, Chrome TLS fingerprint), same result shape
+- `src/markdown.ts` - HTML to Markdown and text helpers
 - `src/types.ts` - Shared TypeScript types for API requests/responses
 - `src/snapshot/` - ARIA snapshot utilities for LLM-friendly page inspection
 - `scripts/start-server.ts` - Entry point to start standalone server

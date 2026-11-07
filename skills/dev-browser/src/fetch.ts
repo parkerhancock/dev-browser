@@ -6,10 +6,10 @@
 
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
-import TurndownService from "turndown";
 import type { Page as PlaywrightPage } from "patchright";
 import { detectChallengeFromSignals, readPageSignals, type Challenge, type NavigationErrorKind } from "./challenge.js";
 import { navigateTo, saveWacz, type DevBrowserClient } from "./client.js";
+import { toMarkdown } from "./markdown.js";
 import type { Page } from "./page.js";
 
 export interface FetchPageOptions {
@@ -44,6 +44,20 @@ export interface FetchPageResult {
   content: string;
   screenshotPath?: string;
   waczPath?: string;
+  /** Which tier produced the result: a browser page, or a plain HTTP request. */
+  engine: "browser" | "http";
+  /** The response's Content-Type, when known (HTTP tier). */
+  contentType?: string;
+}
+
+/**
+ * Whether an HTTP-tier result should be retried in a browser: it failed, hit
+ * a challenge, or is HTML with too little text to be the rendered page.
+ */
+export function needsBrowser(result: FetchPageResult, minText = 200): boolean {
+  if (result.error || result.challenge) return true;
+  const html = !result.contentType || /html/i.test(result.contentType);
+  return html && result.textLength < minText;
 }
 
 const POLL_MS = 500;
@@ -56,24 +70,6 @@ const MAIN_HTML_SCRIPT = `(() => {
   }
   return document.body ? document.body.innerHTML : "";
 })()`;
-
-function toMarkdown(html: string, baseUrl: string): string {
-  const turndown = new TurndownService({ headingStyle: "atx", codeBlockStyle: "fenced", bulletListMarker: "-" });
-  turndown.remove(["script", "style", "noscript", "iframe", "nav", "footer", "aside"]);
-  turndown.addRule("absoluteLinks", {
-    filter: "a",
-    replacement: (content, node) => {
-      const href = node.getAttribute("href");
-      if (!href || href.startsWith("#") || href.startsWith("javascript:")) return content;
-      try {
-        return `[${content}](${new URL(href, baseUrl).href})`;
-      } catch {
-        return `[${content}](${href})`;
-      }
-    },
-  });
-  return turndown.turndown(html);
-}
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -115,7 +111,7 @@ export async function fetchPage(
     const nav = await navigateTo(page as unknown as PlaywrightPage, url, {
       timeout: options.timeout ?? 30000,
     });
-    const base = { url, finalUrl: nav.url, format, status: nav.status };
+    const base = { url, finalUrl: nav.url, format, status: nav.status, engine: "browser" as const };
     if (nav.error && nav.error.kind !== "timeout") {
       return { ...base, title: "", challenge: null, error: nav.error, textLength: 0, content: "" };
     }

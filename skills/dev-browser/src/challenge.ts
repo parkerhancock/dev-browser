@@ -9,6 +9,7 @@
  */
 
 import type { Page } from "./page.js";
+import { htmlTitle, htmlToText } from "./markdown.js";
 
 export type ChallengeVendor =
   | "cloudflare"
@@ -130,16 +131,56 @@ export async function detectChallenge(
   return detectChallengeFromSignals(signals, response?.headers() ?? {});
 }
 
+/** Page signals read from raw HTML, for HTTP responses with no browser. */
+export function signalsFromHtml(status: number, html: string): PageSignals {
+  const frames = Array.from(html.matchAll(/<iframe\b[^>]*\bsrc=["']([^"']+)["']/gi), (m) => m[1]!).slice(0, 100);
+  return { status, title: htmlTitle(html), frames, textLength: htmlToText(html).length, htmlLength: html.length };
+}
+
+/** A body smaller than this has no real content behind a captcha embed. */
+const MIN_CONTENT_BYTES = 15000;
+
+/**
+ * Detect a challenge from an HTTP response alone. Adds the body checks from
+ * stealth-browser's HTTP tier: a DataDome blocker script, or a captcha embed
+ * that gates the response (a block status, or a body too small to be a page).
+ */
+export function detectChallengeFromHttp(
+  status: number,
+  headers: Record<string, string>,
+  html: string
+): Challenge | null {
+  const found = detectChallengeFromSignals(signalsFromHtml(status, html), headers);
+  if (found) return found;
+  if (html.slice(0, 5000).toLowerCase().includes("datado.me")) {
+    return { vendor: "datadome", reason: "DataDome blocker script in the response", status };
+  }
+  if (BLOCK_STATUSES.has(status) || html.length < MIN_CONTENT_BYTES) {
+    const head = html.slice(0, MIN_CONTENT_BYTES);
+    const embeds: [ChallengeVendor, string][] = [
+      ["hcaptcha", "hcaptcha.com"],
+      ["turnstile", "challenges.cloudflare.com"],
+      ["recaptcha", "google.com/recaptcha"],
+    ];
+    for (const [vendor, marker] of embeds) {
+      if (head.includes(marker)) return { vendor, reason: `${marker} embed gating the response`, status };
+    }
+  }
+  return null;
+}
+
 export type NavigationErrorKind = "timeout" | "dns" | "tls" | "connection" | "other";
 
 /** Classify a navigation error message from Playwright or CDP. */
 export function classifyNavigationError(message: string): NavigationErrorKind {
   const msg = message.toLowerCase();
-  if (/timeout \d+ms exceeded|timed out after/.test(msg)) return "timeout";
-  if (/err_name_not_resolved|err_name_resolution_failed|getaddrinfo|enotfound/.test(msg)) return "dns";
+  if (/timeout \d+ms exceeded|timeout \(\d+ ms\) exceeded|timed out after/.test(msg)) return "timeout";
+  if (/err_name_not_resolved|err_name_resolution_failed|getaddrinfo|enotfound|dns error|failed to lookup/.test(msg)) {
+    return "dns";
+  }
   if (/err_cert_|err_ssl_|ssl_protocol|certificate/.test(msg)) return "tls";
   if (
-    /err_connection_|err_address_unreachable|err_internet_disconnected|err_empty_response|err_timed_out|econnrefused|econnreset/.test(
+    /err_connection_|err_address_unreachable|err_internet_disconnected|err_empty_response|err_timed_out|econnrefused|econnreset|connectionrefused|connectionreset|tcp connect error/.test(
       msg
     )
   ) {

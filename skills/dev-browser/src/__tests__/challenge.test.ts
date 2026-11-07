@@ -69,6 +69,9 @@ describe("classifyNavigationError", () => {
     ["page.goto: net::ERR_SSL_PROTOCOL_ERROR at https://x/", "tls"],
     ["page.goto: net::ERR_CONNECTION_REFUSED at http://localhost:1/", "connection"],
     ["page.goto: net::ERR_ABORTED", "other"],
+    ["Request timeout (3000 ms) exceeded.", "timeout"],
+    ['Failed to connect to the server.\nReason: ConnectError("tcp connect error", kind: ConnectionRefused)', "connection"],
+    ["Failed to connect to the server.\nReason: InvalidCertificate(Expired)", "tls"],
   ])("%s → %s", (message, kind) => {
     expect(classifyNavigationError(message)).toBe(kind);
   });

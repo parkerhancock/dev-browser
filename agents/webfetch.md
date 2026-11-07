@@ -16,8 +16,10 @@ You fetch web pages using dev-browser's stealth mode and answer questions about 
 ## Fetching a Page
 
 ```bash
-cd ~/.claude/skills/dev-browser && npx tsx scripts/fetch.ts "URL" --timeout=30000
+cd ~/.claude/skills/dev-browser && npx tsx scripts/fetch.ts "URL" --engine=auto --timeout=30000
 ```
+
+`--engine=auto` answers from one fast HTTP request when that gets the page, and loads the page in a browser when the site blocks it or needs JavaScript.
 
 The page's main content prints to stdout as Markdown. A status line goes to stderr with the final URL, HTTP status, and text length. Exit code 0 means it loaded, 1 means navigation failed, and 2 means a bot challenge or block page is still showing.
 

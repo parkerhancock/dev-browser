@@ -115,15 +115,16 @@ Standalone servers take `dev-browser serve --proxy http://user:pass@host:port` (
 ### Fetch Script
 
 ```bash
-cd skills/dev-browser && npx tsx scripts/fetch.ts "https://example.com" [--format=markdown|html|text|json] [--timeout=30000] [--mode=standalone|extension] [--screenshot=out.png] [--wacz=out.wacz]
+cd skills/dev-browser && npx tsx scripts/fetch.ts "https://example.com" [--format=markdown|html|text|json] [--engine=browser|http|auto] [--timeout=30000] [--mode=standalone|extension] [--fresh] [--headed] [--browser=chrome] [--proxy=url] [--screenshot=out.png] [--wacz=out.wacz]
 ```
 
-- Prints the page's main content (article, main, else body) as Markdown with absolute links. A status line goes to stderr.
+- Prints the page's main content (article, main, else body) as Markdown with absolute links. A status line goes to stderr naming the engine that served it.
 - Exit codes: 0 loaded, 1 navigation failed (the error says dns, tls, connection, or timeout), 2 a bot challenge or block page is still showing.
-- Standalone mode (default) runs headless and starts the server if needed. Extension mode uses your Chrome and its signed-in sessions.
+- Engines: `browser` (default) loads the page; `http` sends one request with Chrome's TLS fingerprint and no browser, in well under a second, and returns JSON and other non-HTML bodies as they are; `auto` tries HTTP first and loads the browser when the response is blocked, failed, or has less text than a rendered page would.
+- Standalone mode runs headless and starts the server if needed. `--fresh` uses a private browser with a throwaway profile, so no cookies carry over; `--headed`, `--browser`, and `--proxy` apply to it. Extension mode uses your Chrome and its signed-in sessions.
 - It waits for client-rendered pages to fill in, and gives an automatic challenge such as Cloudflare's "Just a moment" up to 10s to clear on its own. It never solves captchas.
 
-From a script, `fetchPage(client, url, options)` in `@/fetch.js` returns the same result object, and `navigateTo()` results carry `status`, `challenge`, `textLength`, and `error`. The MCP `navigate` tool reports a `challenge` when it detects one.
+From a script, `fetchPage(client, url, options)` in `@/fetch.js` and `httpFetch(url, options)` in `@/http-fetch.js` return the same result object, and `needsBrowser(result)` says when an HTTP result should be retried in a browser. `navigateTo()` results carry `status`, `challenge`, `textLength`, and `error`. The MCP `navigate` tool reports a `challenge` when it detects one.
 
 ## Session Types
 
