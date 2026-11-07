@@ -49,7 +49,12 @@ export interface ComputerInput {
   duration?: number;
   /** [x0, y0, x1, y1] region for `zoom`. */
   region?: number[];
+  /** Shrink the returned image for `screenshot` and `zoom` (0.1-1, default 1). */
+  scale?: number;
 }
+
+/** Send one CDP command to the page. Enables magnified zoom and scaled screenshots. */
+export type CdpSend = <T = unknown>(method: string, params?: Record<string, unknown>) => Promise<T>;
 
 export interface ComputerResult {
   message: string;
@@ -174,26 +179,79 @@ async function click(
   return { message: `${input.action} at (${Math.round(x)}, ${Math.round(y)})` };
 }
 
-async function screenshot(page: Page): Promise<ComputerResult> {
-  const image = await page.screenshot({ scale: "css" });
-  const size = await page.evaluate<{ width: number; height: number }>(
-    "({ width: window.innerWidth, height: window.innerHeight })"
-  );
-  return {
-    message: `Screenshot of the ${size.width}x${size.height} viewport. Image pixels are click coordinates.`,
-    image,
-  };
+/** Longest side, in image pixels, that zoom magnifies a region up to. */
+const ZOOM_TARGET_PX = 1024;
+const MAX_ZOOM = 4;
+
+interface ViewState {
+  width: number;
+  height: number;
+  scrollX: number;
+  scrollY: number;
+  dpr: number;
 }
 
-async function zoom(page: Page, region: number[] | undefined): Promise<ComputerResult> {
+const viewState = (page: Page): Promise<ViewState> =>
+  page.evaluate<ViewState>(
+    "({ width: innerWidth, height: innerHeight, scrollX, scrollY, dpr: devicePixelRatio })"
+  );
+
+/**
+ * Capture a viewport region with CDP. Clips are in document coordinates, and
+ * output pixels are CSS pixels x clip scale x devicePixelRatio.
+ */
+async function capture(
+  cdp: CdpSend,
+  view: ViewState,
+  clip: { x: number; y: number; width: number; height: number },
+  magnification: number
+): Promise<Buffer> {
+  const { data } = await cdp<{ data: string }>("Page.captureScreenshot", {
+    format: "png",
+    clip: { ...clip, x: clip.x + view.scrollX, y: clip.y + view.scrollY, scale: magnification / view.dpr },
+  });
+  return Buffer.from(data, "base64");
+}
+
+function checkScale(scale: number | undefined): number {
+  const s = scale ?? 1;
+  if (!(s >= 0.1 && s <= 1)) throw new Error("scale must be from 0.1 to 1");
+  return s;
+}
+
+async function screenshot(page: Page, input: ComputerInput, cdp?: CdpSend): Promise<ComputerResult> {
+  const scale = checkScale(input.scale);
+  const view = await viewState(page);
+  const image =
+    scale < 1 && cdp
+      ? await capture(cdp, view, { x: 0, y: 0, width: view.width, height: view.height }, scale)
+      : await page.screenshot({ scale: "css" });
+  const note =
+    scale < 1 && cdp
+      ? `Image is scaled to ${scale}x; divide image pixels by ${scale} for click coordinates.`
+      : "Image pixels are click coordinates.";
+  return { message: `Screenshot of the ${view.width}x${view.height} viewport. ${note}`, image };
+}
+
+async function zoom(page: Page, input: ComputerInput, cdp?: CdpSend): Promise<ComputerResult> {
+  const region = input.region;
   const [x0, y0, x1, y1] = region ?? [];
   if (region?.length !== 4 || !(x1! > x0!) || !(y1! > y0!)) {
     throw new Error("region must be [x0, y0, x1, y1] with x1 > x0 and y1 > y0");
   }
+  const scale = checkScale(input.scale);
   const clip = { x: x0!, y: y0!, width: x1! - x0!, height: y1! - y0! };
+  const frame = "Coordinates stay in the full viewport frame.";
+  if (!cdp) {
+    return { message: `Region (${x0}, ${y0}) to (${x1}, ${y1}). ${frame}`, image: await page.screenshot({ clip }) };
+  }
+  // Render the region larger, at real resolution, rather than upscaling pixels
+  const magnification =
+    Math.min(MAX_ZOOM, Math.max(1, ZOOM_TARGET_PX / Math.max(clip.width, clip.height))) * scale;
+  const rounded = Math.round(magnification * 100) / 100;
   return {
-    message: `Region (${x0}, ${y0}) to (${x1}, ${y1}). Coordinates stay in the full viewport frame.`,
-    image: await page.screenshot({ clip }),
+    message: `Region (${x0}, ${y0}) to (${x1}, ${y1}) at ${rounded}x. ${frame}`,
+    image: await capture(cdp, await viewState(page), clip, magnification),
   };
 }
 
@@ -238,7 +296,11 @@ async function drag(page: Page, input: ComputerInput): Promise<ComputerResult> {
   return { message: `Dragged (${from.x}, ${from.y}) to (${to.x}, ${to.y})` };
 }
 
-export async function computerAction(page: Page, input: ComputerInput): Promise<ComputerResult> {
+export async function computerAction(
+  page: Page,
+  input: ComputerInput,
+  cdp?: CdpSend
+): Promise<ComputerResult> {
   switch (input.action) {
     case "left_click":
       return click(page, input, {});
@@ -268,9 +330,9 @@ export async function computerAction(page: Page, input: ComputerInput): Promise<
     case "left_click_drag":
       return drag(page, input);
     case "screenshot":
-      return screenshot(page);
+      return screenshot(page, input, cdp);
     case "zoom":
-      return zoom(page, input.region);
+      return zoom(page, input, cdp);
     case "wait": {
       const seconds = input.duration;
       if (seconds === undefined || !(seconds >= 0 && seconds <= MAX_WAIT_SECONDS)) {

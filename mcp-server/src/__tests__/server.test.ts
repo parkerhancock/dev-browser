@@ -60,6 +60,7 @@ describe("dev-browser MCP server", () => {
       "file_upload",
       "tabs_create",
       "tabs_close",
+      "tabs_select",
       "read_console_messages",
       "read_network_requests",
       "switch_browser",

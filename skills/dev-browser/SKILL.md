@@ -350,21 +350,21 @@ Vendor tool → dev-browser mapping (every MCP tool is a thin wrapper over the c
 |---|---|
 | `tabs_context` | `client.list()` + `client.allTargets()` + `getServerInfo()` |
 | `navigate` | `client.page(name)` + `page.goto()` / `goBack()` / `goForward()` |
-| `read_page` | `client.getAISnapshot(name)` |
+| `read_page` | `client.getAISnapshot(name)` + `filterSnapshot()` (`filter: "interactive"`, `depth`, `ref_id`, `max_chars`) |
 | `get_page_text` | `client.text(name)` / `client.markdown(name)` |
 | `find` | `client.find(name, query)` |
 | `ref_action` | `page.clickRef/fillRef` (extension) / `selectSnapshotRef` (standalone) |
-| `form_input` | `client.fillForm(name, fields)` |
+| `form_input` | `setRefValue(page, ref, value)` (inputs, selects, checkboxes, contenteditable) or `client.fillForm(name, fields)` |
 | `browser_batch` | sequential dispatch of this server's own tools |
 | `cdp_batch` | `client.batch(name, ops)` (`POST /batch` on the relay) |
 | `javascript` | `page.evaluate(code)` |
 | `screenshot` | `page.screenshot()` (also saved under `~/.dev-browser/screenshots`) |
 | `computer` | `computerAction(page, input)` over `page.mouse` / `page.keyboard` / `page.screenshot()`: clicks, type, key, scroll, drag, hover, zoom, wait. Coordinates are CSS pixels and match its screenshots, including on HiDPI displays |
-| `resize_window` | `page.setViewportSize()` |
-| `file_upload` | `page.setInputFiles()` (`DOM.setFileInputFiles` in extension mode) |
-| `tabs_create` / `tabs_close` | `client.page(name)` / `client.close(name)` |
-| `read_console_messages` | `client.getConsoleMessages(name, { pattern, since })` |
-| `read_network_requests` | `client.getNetworkRequests(name, { pattern, since })` |
+| `resize_window` | `client.emulate(name, options)`: size, `mobile`/`tablet`/`desktop` presets (touch + Android UA), `color_scheme` |
+| `file_upload` | `page.setInputFiles()` by selector, or by ref (`DOM.setFileInputFiles` in extension mode) |
+| `tabs_create` / `tabs_close` / `tabs_select` | `client.page(name)` / `client.close(name)` / `Page.bringToFront` |
+| `read_console_messages` | `client.getConsoleMessages(name, { pattern, since })`, plus `only_errors` and `limit` |
+| `read_network_requests` | `client.getNetworkRequests(name, { pattern, since })`; `request_id` returns headers and body from `client.getHarEntries()` |
 | `switch_browser` / `list_connected_browsers` | `/health` probes on :9222 and :9224 (includes the `browser` label) |
 
 Downloads and browser identity are also exposed over HTTP in both modes: `GET /downloads?since=<ms>` lists downloads (standalone tracks them per session; the relay reports the extension's `chrome.downloads`, which is browser-wide — downloads the user starts by hand also appear), `GET /download/:id` serves a completed download's bytes, and `GET /browsers` reports the browser label. In standalone mode completed downloads are copied into `<profile>/downloads/` so the bytes stay servable; extension-mode files stay in the user's Downloads folder and are never deleted. `client.saveDownload(id, destPath)` fetches the bytes to a local file — a `DownloadRecord`'s `path` is a path on the server's machine, so use `saveDownload` whenever the browser runs remotely.

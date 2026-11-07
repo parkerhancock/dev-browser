@@ -12,3 +12,4 @@
  */
 
 export { getSnapshotScript, clearSnapshotScriptCache } from "./browser-script";
+export { filterSnapshot, type SnapshotFilter } from "./filter";

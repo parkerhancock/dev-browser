@@ -14,7 +14,7 @@ import type {
   Page as PwPage,
 } from "patchright";
 import { CDPPage } from "../cdp-page.js";
-import { computerAction, normalizeKeyCombo } from "../computer.js";
+import { computerAction, normalizeKeyCombo, type CdpSend } from "../computer.js";
 import type { Page } from "../page.js";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -315,6 +315,41 @@ describe.each(["standalone", "extension"] as const)("computer tool (%s)", (mode)
     const [width, height, r, g, b] = await pixelAt(probe, image!, 25, 25);
     expect([width, height]).toEqual([50, 50]);
     expect([r, g, b]).toEqual([0, 0, 255]);
+  });
+
+  const cdpFor = async (): Promise<CdpSend> => {
+    const session = await context.newCDPSession(pw);
+    return (method, params) => session.send(method as any, params) as any;
+  };
+
+  test.each([
+    ["1x", () => browser, undefined],
+    ["2x display", () => hidpiBrowser, { viewport: null }],
+  ] as const)("zoom with CDP magnifies the region (%s)", async (_, from, options) => {
+    await open(from(), options);
+    await pw.evaluate(() => window.scrollTo(0, 1000));
+    const { image, message } = await computerAction(
+      page,
+      { action: "zoom", region: [0, 0, 50, 50] },
+      await cdpFor()
+    );
+    expect(message).toContain("at 4x");
+    const [width, height, r, g, b] = await pixelAt(probe, image!, 100, 100);
+    expect([width, height]).toEqual([200, 200]);
+    expect([r, g, b]).toEqual([0, 0, 255]);
+  });
+
+  test("screenshot scale shrinks the image", async () => {
+    await open();
+    const { image, message } = await computerAction(
+      page,
+      { action: "screenshot", scale: 0.5 },
+      await cdpFor()
+    );
+    const [width, height, r, g, b] = await pixelAt(probe, image!, 25, 25);
+    expect([width, height]).toEqual([400, 300]);
+    expect([r, g, b]).toEqual([255, 0, 0]);
+    expect(message).toContain("divide image pixels by 0.5");
   });
 
   test("wait pauses and rejects long durations", async () => {

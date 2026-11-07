@@ -15,6 +15,14 @@ import type {
 import type { Page } from "./page.js";
 import { CDPPage } from "./cdp-page.js";
 import {
+  BROWSER_IDENTITY_SCRIPT,
+  CLEAR_MOBILE_OPS,
+  colorSchemeOp,
+  mobileOps,
+  type BrowserIdentity,
+  type EmulateOptions,
+} from "./emulation.js";
+import {
   classifyNavigationError,
   detectChallengeFromSignals,
   readPageSignals,
@@ -92,6 +100,8 @@ export interface BatchOpResult {
 
 /** A live network log line derived from the HAR recorder. */
 export interface NetworkRequest {
+  /** Index in the page's request log; pass to getHarEntries({ since: id }) for the full entry and body. */
+  id: number;
   method: string;
   url: string;
   status: number;
@@ -669,6 +679,12 @@ export interface DevBrowserClient {
     options?: { pattern?: string; since?: number }
   ) => Promise<{ requests: NetworkRequest[]; total: number }>;
   /**
+   * Emulate a viewport size, a touch phone or tablet (mobile layout, touch,
+   * Android user agent), or a color scheme. `mobile: false` returns to the
+   * desktop browser. Lasts while this client stays connected.
+   */
+  emulate: (name: string, options: EmulateOptions) => Promise<void>;
+  /**
    * Find elements on the page whose ARIA-snapshot line contains `query`
    * (case-insensitive). Returns up to 20 matches with refs usable with
    * clickRef/fillRef (extension mode) or selectSnapshotRef (standalone).
@@ -891,13 +907,15 @@ async function fillFormFields(
 /** Map HAR entries to the live network-log shape, with regex URL filter. */
 function harToNetworkRequests(
   entries: HarEntry[],
-  pattern?: string
+  pattern?: string,
+  offset = 0
 ): NetworkRequest[] {
   const regex = pattern ? new RegExp(pattern) : null;
   const requests: NetworkRequest[] = [];
-  for (const entry of entries) {
+  for (const [i, entry] of entries.entries()) {
     if (regex && !regex.test(entry.request.url)) continue;
     requests.push({
+      id: offset + i,
       method: entry.request.method,
       url: entry.request.url,
       status: entry.response.status,
@@ -1537,9 +1555,28 @@ async function connectExtensionMode(
       }
       const data = (await res.json()) as { entries: HarEntry[]; total: number };
       return {
-        requests: harToNetworkRequests(data.entries, options?.pattern),
+        requests: harToNetworkRequests(data.entries, options?.pattern, options?.since ?? 0),
         total: data.total,
       };
+    },
+
+    async emulate(name: string, options: EmulateOptions): Promise<void> {
+      const page = existingPage(name);
+      if (options.colorScheme) {
+        const op = colorSchemeOp(options.colorScheme);
+        await sendCdp(name, op.method, op.params);
+      }
+      if (options.mobile) {
+        const identity = await page.evaluate<BrowserIdentity>(BROWSER_IDENTITY_SCRIPT);
+        for (const op of mobileOps(identity, options.width ?? 375, options.height ?? 812)) {
+          await sendCdp(name, op.method, op.params);
+        }
+      } else if (options.mobile === false) {
+        for (const op of CLEAR_MOBILE_OPS) await sendCdp(name, op.method, op.params);
+      }
+      if (!options.mobile && options.width && options.height) {
+        await page.setViewportSize({ width: options.width, height: options.height });
+      }
     },
 
     async find(name: string, query: string): Promise<FindMatch[]> {
@@ -1725,6 +1762,8 @@ export async function connect(
 
   // Track active HAR recordings: pageName -> recorder state
   const harRecorders = new Map<string, HarRecorderState>();
+  // CDP sessions holding device emulation, one per emulated page
+  const emulationSessions = new Map<string, CDPSession>();
 
   // Force reconnect by closing existing connection and starting fresh
   // This is needed in extension mode when new tabs are created after Playwright connected
@@ -2308,9 +2347,33 @@ export async function connect(
       }
       const entries = state.completed.slice(options?.since ?? 0);
       return {
-        requests: harToNetworkRequests(entries, options?.pattern),
+        requests: harToNetworkRequests(entries, options?.pattern, options?.since ?? 0),
         total: state.completed.length,
       };
+    },
+
+    async emulate(name: string, options: EmulateOptions): Promise<void> {
+      const page = await getPage(name);
+      if (options.colorScheme) await page.emulateMedia({ colorScheme: options.colorScheme });
+      if (options.mobile) {
+        let session = emulationSessions.get(name);
+        if (!session) {
+          session = await page.context().newCDPSession(page);
+          emulationSessions.set(name, session);
+        }
+        const identity = await page.evaluate<BrowserIdentity>(BROWSER_IDENTITY_SCRIPT);
+        for (const op of mobileOps(identity, options.width ?? 375, options.height ?? 812)) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          await session.send(op.method as any, op.params);
+        }
+      } else if (options.mobile === false) {
+        // Detaching drops every override the session set
+        await emulationSessions.get(name)?.detach().catch(() => {});
+        emulationSessions.delete(name);
+      }
+      if (!options.mobile && options.width && options.height) {
+        await page.setViewportSize({ width: options.width, height: options.height });
+      }
     },
 
     async find(name: string, query: string): Promise<FindMatch[]> {
