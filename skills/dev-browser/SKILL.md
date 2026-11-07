@@ -370,6 +370,7 @@ Vendor tool → dev-browser mapping (every MCP tool is a thin wrapper over the c
 | `tabs_create` / `tabs_close` / `tabs_select` | `client.page(name)` / `client.close(name)` / `Page.bringToFront` |
 | `read_console_messages` | `client.getConsoleMessages(name, { pattern, since })`, plus `only_errors` and `limit` |
 | `read_network_requests` | `client.getNetworkRequests(name, { pattern, since })`; `request_id` returns headers and body from `client.getHarEntries()` |
+| `preview_start` / `preview_list` / `preview_logs` / `preview_stop` | Dev servers from the project's `.claude/launch.json` (`mcp-server/src/preview.ts`): start or reuse one, open it in a page, read its output, stop it |
 | `switch_browser` / `list_connected_browsers` | `/health` probes on :9222 and :9224 (includes the `browser` label) |
 
 Downloads and browser identity are also exposed over HTTP in both modes: `GET /downloads?since=<ms>` lists downloads (standalone tracks them per session; the relay reports the extension's `chrome.downloads`, which is browser-wide — downloads the user starts by hand also appear), `GET /download/:id` serves a completed download's bytes, and `GET /browsers` reports the browser label. In standalone mode completed downloads are copied into `<profile>/downloads/` so the bytes stay servable; extension-mode files stay in the user's Downloads folder and are never deleted. `client.saveDownload(id, destPath)` fetches the bytes to a local file — a `DownloadRecord`'s `path` is a path on the server's machine, so use `saveDownload` whenever the browser runs remotely.

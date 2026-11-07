@@ -3,7 +3,7 @@
  * on private ports, so each tool's options are checked end to end.
  */
 
-import { mkdtempSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -17,6 +17,7 @@ import { serve, type DevBrowserServer } from "../../../skills/dev-browser/src/in
 import { connect, type DevBrowserClient } from "../../../skills/dev-browser/src/client.js";
 import { loadToken } from "../../../skills/dev-browser/src/auth.js";
 import { buildServer, createState } from "../server.js";
+import { PreviewManager } from "../preview.js";
 
 const port = 21000 + Math.floor(Math.random() * 4000);
 
@@ -33,6 +34,7 @@ let browserClient: DevBrowserClient;
 let site: Server;
 let origin = "";
 let mcp: Client;
+let previews: PreviewManager;
 
 type Content = Array<{ type: string; text?: string; data?: string }>;
 
@@ -67,6 +69,24 @@ beforeAll(async () => {
   browserClient = await connect(`http://127.0.0.1:${port}`, { session: "mcp-live", token: loadToken()! });
   const state = createState({ mode: "standalone", session: "mcp-live" });
   state.clients.set("standalone", browserClient);
+  const project = mkdtempSync(join(tmpdir(), "dev-browser-mcp-live-project-"));
+  mkdirSync(join(project, ".claude"));
+  const appPort = port + 2;
+  writeFileSync(
+    join(project, ".claude", "launch.json"),
+    JSON.stringify({
+      configurations: [
+        {
+          name: "app",
+          runtimeExecutable: process.execPath,
+          runtimeArgs: ["-e", `require("http").createServer((q, r) => r.end("<title>Dev app</title>")).listen(${appPort})`],
+          port: appPort,
+        },
+      ],
+    })
+  );
+  state.previews = new PreviewManager(project);
+  previews = state.previews;
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await buildServer(state).connect(serverTransport);
   mcp = new Client({ name: "live-test", version: "0.0.1" });
@@ -75,6 +95,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  for (const s of previews?.list() ?? []) await previews.stop(s.id);
   await browserClient?.disconnect();
   await server?.stop();
   site?.close();
@@ -137,6 +158,14 @@ describe("MCP tools on a live standalone browser", () => {
     const id = requests.find((r) => r.url.endsWith("/data.json"))!.id;
     const detail = JSON.parse(await call("read_network_requests", { request_id: id }));
     expect(detail).toMatchObject({ status: 200, body: '{"answer":42}' });
+  });
+
+  test("preview_start runs a launch.json server and opens it", async () => {
+    const started = JSON.parse(await call("preview_start", { name: "app", page: "dev" }));
+    expect(started).toMatchObject({ title: "Dev app", server: { name: "app", status: "running" } });
+    expect(JSON.parse(await call("preview_list"))).toHaveLength(1);
+    await call("preview_stop", { server_id: started.server.id });
+    expect(JSON.parse(await call("preview_list"))).toEqual([]);
   });
 
   test("tabs_select and scaled screenshots work", async () => {

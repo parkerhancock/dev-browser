@@ -65,6 +65,10 @@ describe("dev-browser MCP server", () => {
       "read_network_requests",
       "switch_browser",
       "list_connected_browsers",
+      "preview_start",
+      "preview_list",
+      "preview_logs",
+      "preview_stop",
     ];
     for (const name of expected) {
       expect(names).toContain(name);

@@ -4,7 +4,7 @@
  * Mirrors the vendor web-browser-use tool surface (tabs_context, navigate,
  * read_page, get_page_text, find, form_input, browser_batch, javascript,
  * screenshot, computer, resize_window, file_upload, tabs_create, tabs_close,
- * tabs_select, read_console_messages, read_network_requests, switch_browser,
+ * tabs_select, preview_start/list/logs/stop, read_console_messages, read_network_requests, switch_browser,
  * list_connected_browsers) as thin wrappers around the script API in
  * skills/dev-browser/src/client.ts. The client stays the engine.
  */
@@ -30,6 +30,7 @@ import {
 import { filterSnapshot } from "../../skills/dev-browser/src/snapshot/filter.js";
 import { setRefValue } from "../../skills/dev-browser/src/ref-actions.js";
 import { PRESETS } from "../../skills/dev-browser/src/emulation.js";
+import { PreviewManager } from "./preview.js";
 
 export type BrowserMode = "standalone" | "extension";
 
@@ -48,6 +49,8 @@ export interface BrowserState {
   activeMode?: BrowserMode;
   session: string;
   clients: Map<BrowserMode, DevBrowserClient>;
+  /** Dev servers started by preview_start, created on first use. */
+  previews?: PreviewManager;
 }
 
 export function createState(options: ServerOptions = {}): BrowserState {
@@ -756,6 +759,71 @@ export function buildServer(state: BrowserState): McpServer {
       state.forcedMode = mode;
       state.activeMode = mode;
       return textResult({ success: true, mode, health });
+    }
+  );
+
+  const previews = (): PreviewManager => (state.previews ??= new PreviewManager());
+
+  tool(
+    "preview_start",
+    "Start a dev server from the project's .claude/launch.json and open it in a page, or open a url. " +
+      'launch.json: {"version":"0.0.1","configurations":[{"name":"web","runtimeExecutable":"npm","runtimeArgs":["run","dev"],"port":3000}]}. ' +
+      'A configuration with "url" and no command attaches to a server that is already running. Reuses a server that is already up.',
+    {
+      name: z.string().optional().describe("Configuration name from .claude/launch.json"),
+      url: z.string().optional().describe("Open this URL instead of starting a server"),
+      page: pageParam,
+    },
+    async (args) => {
+      let url = typeof args.url === "string" ? args.url : undefined;
+      let server;
+      if (typeof args.name === "string") {
+        server = await previews().start(args.name);
+        url ??= server.url;
+      }
+      if (!url) throw new Error("Pass name or url");
+      const client = await getClient(state);
+      const p = await client.page(pageName(args));
+      await p.goto(url);
+      return textResult({ ...(server ? { server } : {}), page: pageName(args), url: p.url(), title: await p.title() });
+    }
+  );
+
+  tool(
+    "preview_list",
+    "List dev servers started with preview_start.",
+    {},
+    async () => textResult(previews().list())
+  );
+
+  tool(
+    "preview_logs",
+    "Read a preview server's stdout and stderr. level=error keeps lines mentioning error, exception, failed, or fatal.",
+    {
+      server_id: z.string(),
+      level: z.enum(["all", "error"]).optional(),
+      search: z.string().optional().describe("Keep lines containing this text"),
+      lines: z.number().optional().describe("Most recent lines to return (default 50)"),
+    },
+    async (args) =>
+      textResult(
+        previews()
+          .logs(String(args.server_id), {
+            level: args.level as "all" | "error" | undefined,
+            search: args.search as string | undefined,
+            lines: args.lines as number | undefined,
+          })
+          .join("\n") || "(no output)"
+      )
+  );
+
+  tool(
+    "preview_stop",
+    "Stop a dev server started with preview_start.",
+    { server_id: z.string() },
+    async (args) => {
+      await previews().stop(String(args.server_id));
+      return textResult({ success: true, stopped: args.server_id });
     }
   );
 
