@@ -208,6 +208,7 @@ EOF
 3. **Descriptive page names**: Use `"checkout"`, `"login"`, not `"main"`
 4. **Disconnect to exit**: `await client.disconnect()` - pages persist on server
 5. **Plain JS in evaluate**: `page.evaluate()` runs in browser - no TypeScript syntax
+6. **Standalone evaluate is isolated**: standalone mode runs on patchright, which hides automation from sites. Its `page.evaluate()` sees the DOM but not the page's own JS globals (`window.someAppState` is `undefined`). To read page globals, use the MCP `javascript` tool or pass `false` as a third argument, `page.evaluate(fn, arg, false)`; sites can detect both.
 
 ## Workflow Loop
 

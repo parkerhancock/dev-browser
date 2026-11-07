@@ -74,7 +74,7 @@ import { serve } from "@/index.js";
 ### How It Works
 
 1. **Server** (`serve()` in `src/index.ts`):
-   - Launches Chromium with `launchPersistentContext` (preserves cookies, localStorage)
+   - Launches Chromium with patchright's `launchPersistentContext` (preserves cookies, localStorage). Patchright is a Playwright fork that hides automation; `src/launch-args.ts` holds the rest of the launch recipe, and its `page.evaluate` runs in an isolated world
    - Exposes HTTP API on port 9222 for page management
    - Exposes CDP WebSocket endpoint on port 9223
    - Pages are registered by name and persist until explicitly closed

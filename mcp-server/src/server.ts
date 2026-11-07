@@ -482,7 +482,7 @@ export function buildServer(state: BrowserState): McpServer {
 
   tool(
     "read_console_messages",
-    "Read console output (console API calls, exceptions, browser log) captured for a page. pattern is a regex on the message text.",
+    "Read console output (console API calls, exceptions, browser log) captured for a page. pattern is a regex on the message text. In standalone mode, console API capture starts on the first call (earlier messages are replayed) and is detectable by bot checks from then on.",
     {
       page: pageParam,
       pattern: z.string().optional(),

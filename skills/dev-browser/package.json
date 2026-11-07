@@ -17,7 +17,7 @@
     "@hono/node-ws": "^1.2.0",
     "archiver": "^7.0.1",
     "hono": "^4.11.1",
-    "playwright": "^1.57.0",
+    "patchright": "1.57.0",
     "turndown": "^7.2.4",
     "warcio": "^2.4.7"
   },

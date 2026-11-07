@@ -5,7 +5,7 @@
  * If Playwright changes their Page API in a breaking way, this test will fail at build time.
  */
 import { describe, it, expect } from "vitest";
-import type { Page as PlaywrightPage } from "playwright-core";
+import type { Page as PlaywrightPage } from "patchright-core";
 import type { Page } from "../page.js";
 
 describe("Page structural compatibility", () => {

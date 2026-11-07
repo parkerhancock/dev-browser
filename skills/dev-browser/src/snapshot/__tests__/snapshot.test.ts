@@ -1,5 +1,5 @@
-import { chromium } from "playwright";
-import type { Browser, BrowserContext, Page } from "playwright";
+import { chromium } from "patchright";
+import type { Browser, BrowserContext, Page } from "patchright";
 import { beforeAll, afterAll, beforeEach, afterEach, describe, test, expect } from "vitest";
 import { getSnapshotScript, clearSnapshotScriptCache } from "../browser-script";
 

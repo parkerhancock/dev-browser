@@ -1,5 +1,5 @@
-import { chromium } from "playwright";
-import type { Browser, BrowserContext, Page, CDPSession } from "playwright";
+import { chromium } from "patchright";
+import type { Browser, BrowserContext, Page, CDPSession } from "patchright";
 import { beforeAll, afterAll, beforeEach, afterEach, describe, test, expect } from "vitest";
 import type { HarLog, HarEntry, HarCookie, PageOptions } from "../client";
 import { navigateTo } from "../client";

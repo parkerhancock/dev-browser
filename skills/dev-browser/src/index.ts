@@ -2,7 +2,7 @@ import { Hono, type Context } from "hono";
 import { serve as honoServe } from "@hono/node-server";
 import { RESPONSE_ALREADY_SENT } from "@hono/node-server/utils/response";
 import { createNodeWebSocket } from "@hono/node-ws";
-import { chromium, type BrowserContext, type Page } from "playwright";
+import { chromium, type BrowserContext, type Page } from "patchright";
 import { mkdirSync, readFileSync, statSync, copyFileSync } from "fs";
 import { join } from "path";
 import type { IncomingMessage, ServerResponse } from "node:http";
@@ -23,6 +23,8 @@ import type {
   ServerInfoResponse,
 } from "./types";
 import { createLogger } from "./logging.js";
+import { DEFAULT_VIEWPORT, stealthLaunchArgs } from "./launch-args.js";
+import { connectBrowserCdp } from "./browser-cdp.js";
 
 export type { ServeOptions, GetPageResponse, ListPagesResponse, ServerInfoResponse };
 
@@ -105,18 +107,21 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
   console.log("Launching browser with persistent context...");
 
   // Launch persistent context - preserves cookies, localStorage, cache
-  const launchArgs = [`--remote-debugging-port=${cdpPort}`];
+  const launchArgs = [`--remote-debugging-port=${cdpPort}`, ...stealthLaunchArgs(headless)];
   if (!headless) {
     launchArgs.push("--silent-launch", "--no-startup-window");
   }
 
-  // "chrome" / "msedge" launch a locally installed branded browser
+  // "chrome" / "msedge" launch a locally installed branded browser.
+  // Headless runs pass --headless=new themselves (see launch-args.ts), so
+  // Playwright's own headless option stays off.
   const channel = browser === "chromium" ? undefined : browser;
   const context: BrowserContext = await chromium.launchPersistentContext(userDataDir, {
-    headless,
+    headless: false,
     args: launchArgs,
     channel,
     userAgent: headless ? await headedUserAgent(channel) : undefined,
+    viewport: headless ? DEFAULT_VIEWPORT : undefined,
   });
   console.log("Browser launched with persistent profile...");
 
@@ -125,6 +130,7 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
   const cdpInfo = (await cdpResponse.json()) as { webSocketDebuggerUrl: string };
   const wsEndpoint = cdpInfo.webSocketDebuggerUrl;
   console.log(`CDP WebSocket endpoint: ${wsEndpoint}`);
+  const browserCdp = connectBrowserCdp(wsEndpoint);
 
   // Registry types
   interface PageEntry {
@@ -152,6 +158,23 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
 
   function getSessionPageCount(sessionId: string): number {
     return sessions.get(sessionId)?.pageNames.size ?? 0;
+  }
+
+  // Open each page in its own window. Pages that share a window are
+  // background tabs, which Chrome marks hidden, and Playwright's actionability
+  // checks stall on hidden pages.
+  async function newWindowPage(): Promise<Page> {
+    const created = browserCdp
+      .send<{ targetId: string }>("Target.createTarget", { url: "about:blank", newWindow: true })
+      .then((r) => r.targetId);
+    const [page] = await Promise.all([
+      context.waitForEvent("page", {
+        predicate: async (p) => (await getTargetId(p)) === (await created),
+        timeout: 30000,
+      }),
+      created,
+    ]);
+    return page;
   }
 
   async function getTargetId(page: Page): Promise<string> {
@@ -391,15 +414,7 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
         log(`POST /pages session=${agentSession} name=${name} warning=approaching-limit sessionTotal=${sessionPageCount}`);
       }
 
-      const page = await withTimeout(context.newPage(), 30000, "Page creation timed out after 30s");
-
-      // Inject stealth overrides before any navigation
-      await page.addInitScript(() => {
-        Object.defineProperty(navigator, "webdriver", {
-          configurable: true,
-          get: () => undefined,
-        });
-      });
+      const page = await withTimeout(newWindowPage(), 30000, "Page creation timed out after 30s");
 
       if (viewport) {
         await page.setViewportSize(viewport);
@@ -539,6 +554,7 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
     }
     registry.clear();
 
+    browserCdp.close();
     try {
       await context.close();
     } catch {

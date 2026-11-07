@@ -19,9 +19,9 @@ console.log("Checking Playwright browser installation...");
 
 function findPackageManager(): { name: string; command: string } | null {
   const managers = [
-    { name: "bun", command: "bunx playwright install chromium" },
-    { name: "pnpm", command: "pnpm exec playwright install chromium" },
-    { name: "npm", command: "npx playwright install chromium" },
+    { name: "bun", command: "bunx patchright install chromium" },
+    { name: "pnpm", command: "pnpm exec patchright install chromium" },
+    { name: "npm", command: "npx patchright install chromium" },
   ];
 
   for (const manager of managers) {
@@ -69,7 +69,7 @@ try {
   }
 } catch (error) {
   console.error("Failed to install Playwright browsers:", error);
-  console.log("You may need to run: npx playwright install chromium");
+  console.log("You may need to run: npx patchright install chromium");
 }
 
 // Check if server is already running

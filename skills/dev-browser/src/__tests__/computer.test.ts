@@ -5,14 +5,14 @@
  */
 
 import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from "vitest";
-import { chromium } from "playwright";
+import { chromium } from "patchright";
 import type {
   Browser,
   BrowserContext,
   BrowserContextOptions,
   CDPSession,
   Page as PwPage,
-} from "playwright";
+} from "patchright";
 import { CDPPage } from "../cdp-page.js";
 import { computerAction, normalizeKeyCombo } from "../computer.js";
 import type { Page } from "../page.js";
@@ -130,8 +130,21 @@ describe.each(["standalone", "extension"] as const)("computer tool (%s)", (mode)
     }
   }
 
+  // Patchright evaluates in an isolated world by default. The fixture's own
+  // script records events in the main world, so read them there.
   const events = (type: string): Promise<any[]> =>
-    pw.evaluate((t) => window.log.filter((e: any) => e.type === t), type);
+    pw.evaluate((t) => window.log.filter((e: any) => e.type === t), type, false);
+
+  // Put snapshot refs in the world the Page under test reads them from:
+  // isolated for patchright's Page, main for CDPPage.
+  const setRefs = (id?: string): Promise<void> =>
+    pw.evaluate(
+      (refId) => {
+        (globalThis as any).__devBrowserRefs = refId ? { e1: document.getElementById(refId) } : {};
+      },
+      id,
+      mode === "standalone"
+    );
 
   afterEach(async () => {
     vi.unstubAllGlobals();
@@ -147,18 +160,14 @@ describe.each(["standalone", "extension"] as const)("computer tool (%s)", (mode)
 
   test("left_click by ref scrolls the element into view first", async () => {
     await open();
-    await pw.evaluate(() => {
-      (globalThis as any).__devBrowserRefs = { e1: document.getElementById("far") };
-    });
+    await setRefs("far");
     await computerAction(page, { action: "left_click", ref: "e1" });
     expect((await events("click"))[0]).toMatchObject({ target: "far" });
   });
 
   test("an unknown ref reports an error", async () => {
     await open();
-    await pw.evaluate(() => {
-      (globalThis as any).__devBrowserRefs = {};
-    });
+    await setRefs();
     await expect(computerAction(page, { action: "left_click", ref: "e9" })).rejects.toThrow(
       /not found/
     );
@@ -254,9 +263,7 @@ describe.each(["standalone", "extension"] as const)("computer tool (%s)", (mode)
 
   test("scroll_to brings a ref into view", async () => {
     await open();
-    await pw.evaluate(() => {
-      (globalThis as any).__devBrowserRefs = { e1: document.getElementById("far") };
-    });
+    await setRefs("far");
     await computerAction(page, { action: "scroll_to", ref: "e1" });
     expect(await pw.evaluate(() => window.scrollY)).toBeGreaterThan(1500);
   });
@@ -268,7 +275,7 @@ describe.each(["standalone", "extension"] as const)("computer tool (%s)", (mode)
       start_coordinate: [220, 240],
       coordinate: [420, 240],
     });
-    const moves = await pw.evaluate(() => window.drag);
+    const moves = await pw.evaluate(() => window.drag, undefined, false);
     expect(moves.length).toBeGreaterThan(1);
     expect(moves.at(-1).x).toBe(420);
     expect(moves.every((m: any) => m.buttons === 1)).toBe(true);

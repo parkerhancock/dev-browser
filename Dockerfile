@@ -15,7 +15,7 @@
 #   library: connect("http://host:9222", { token })
 #   MCP:     http://host:9222/mcp with header X-DevBrowser-Token: <token>
 #
-# The base image tag must match the locked playwright version
+# The base image tag must match the locked patchright version
 # (skills/dev-browser/package-lock.json) so the bundled Chromium is present.
 FROM mcr.microsoft.com/playwright:v1.57.0-noble
 
@@ -35,7 +35,7 @@ RUN cd mcp-server && npm ci
 
 # Branded browsers aren't in the Playwright base image
 RUN if [ "$BROWSER" != "chromium" ]; then \
-      cd skills/dev-browser && npx playwright install "$BROWSER"; \
+      cd skills/dev-browser && npx patchright install "$BROWSER"; \
     fi
 
 COPY skills/dev-browser/ skills/dev-browser/

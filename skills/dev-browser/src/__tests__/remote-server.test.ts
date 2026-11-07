@@ -77,6 +77,37 @@ describe("Remote-ready standalone server", () => {
     expect(userAgent).toMatch(/ Chrome\/\d+\.0\.0\.0 /);
   });
 
+  test("headless pages look like a normal browser", async () => {
+    const page = await client!.page("proxied");
+    const env = await page.evaluate<{
+      webdriver: boolean;
+      brands: string[];
+      width: number;
+      height: number;
+    }>(`({
+      webdriver: navigator.webdriver,
+      brands: (navigator.userAgentData?.brands ?? []).map((b) => b.brand),
+      width: innerWidth,
+      height: innerHeight,
+    })`);
+    expect(env.webdriver).toBe(false);
+    expect(env.brands.join(" ")).not.toContain("Headless");
+    expect([env.width, env.height]).toEqual([1440, 900]);
+  });
+
+  test("console capture includes messages logged before the first read", async () => {
+    const page = await client!.page("console");
+    await page.goto("data:text/html,<script>console.log('early message')</script>");
+    const { messages } = await client!.getConsoleMessages("console");
+    expect(messages.map((m) => m.text)).toContain("early message");
+  });
+
+  test("opening another page leaves earlier pages visible", async () => {
+    const first = await client!.page("proxied");
+    await client!.page("console");
+    expect(await first.evaluate<string>("document.visibilityState")).toBe("visible");
+  });
+
   test("tracks downloads server-side and serves the bytes", async () => {
     const page = await client!.page("proxied");
     await page.goto(

@@ -4,7 +4,7 @@ import {
   type Page as PlaywrightPage,
   type ElementHandle,
   type CDPSession,
-} from "playwright";
+} from "patchright";
 import type {
   GetPageRequest,
   GetPageResponse,
@@ -50,6 +50,8 @@ interface HarRecorderState {
   bodyFetchDone?: () => void; // Called when pendingBodyFetches reaches 0
   /** Console messages captured on the same CDP session (capped). */
   consoleMessages: ConsoleMessage[];
+  /** Whether console API calls and exceptions are being captured yet. */
+  runtimeCapture: boolean;
 }
 
 const CONSOLE_BUFFER_MAX = 1000;
@@ -1884,6 +1886,49 @@ export async function connect(
     throw new Error(`Page "${name}" not found in browser contexts`);
   }
 
+  function pushConsole(state: HarRecorderState, msg: ConsoleMessage): void {
+    state.consoleMessages.push(msg);
+    if (state.consoleMessages.length > CONSOLE_BUFFER_MAX) {
+      state.consoleMessages.splice(0, state.consoleMessages.length - CONSOLE_BUFFER_MAX);
+    }
+  }
+
+  // Start capturing console API calls and exceptions on a recording session.
+  async function startRuntimeCapture(state: HarRecorderState): Promise<void> {
+    if (state.runtimeCapture) return;
+    state.runtimeCapture = true;
+    const { cdpSession } = state;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const remoteText = (obj: any): string => {
+      if (obj == null) return "";
+      if (obj.value !== undefined) {
+        return typeof obj.value === "string" ? obj.value : JSON.stringify(obj.value);
+      }
+      return obj.description ?? obj.unserializableValue ?? `[${obj.type}]`;
+    };
+    cdpSession.on("Runtime.consoleAPICalled", (params) => {
+      pushConsole(state, {
+        level: params.type,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        text: (params.args ?? []).map((a: any) => remoteText(a)).join(" "),
+        source: "console",
+        timestamp: params.timestamp ?? Date.now(),
+      });
+    });
+    cdpSession.on("Runtime.exceptionThrown", (params) => {
+      const details = params.exceptionDetails;
+      pushConsole(state, {
+        level: "error",
+        text: details.exception?.description ?? details.text,
+        source: "exception",
+        timestamp: params.timestamp ?? Date.now(),
+        url: details.url,
+        line: details.lineNumber,
+      });
+    });
+    await cdpSession.send("Runtime.enable");
+  }
+
   // Helper: set up HAR recording CDP listeners on a page
   async function setupHarRecording(page: PlaywrightPage): Promise<HarRecorderState> {
     const cdpSession = await page.context().newCDPSession(page);
@@ -1893,53 +1938,18 @@ export async function connect(
       completed: [],
       pendingBodyFetches: 0,
       consoleMessages: [],
+      runtimeCapture: false,
     };
 
     await cdpSession.send("Network.enable");
 
-    // Console capture rides on the same CDP session
-    const pushConsole = (msg: ConsoleMessage) => {
-      state.consoleMessages.push(msg);
-      if (state.consoleMessages.length > CONSOLE_BUFFER_MAX) {
-        state.consoleMessages.splice(
-          0,
-          state.consoleMessages.length - CONSOLE_BUFFER_MAX
-        );
-      }
-    };
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const remoteText = (obj: any): string => {
-      if (obj == null) return "";
-      if (obj.value !== undefined) {
-        return typeof obj.value === "string" ? obj.value : JSON.stringify(obj.value);
-      }
-      return obj.description ?? obj.unserializableValue ?? `[${obj.type}]`;
-    };
+    // Browser log entries ride on the same CDP session. Console API calls and
+    // exceptions need Runtime.enable, which pages can detect, so that part
+    // waits for the first getConsoleMessages call (startRuntimeCapture).
     try {
-      await cdpSession.send("Runtime.enable");
       await cdpSession.send("Log.enable");
-      cdpSession.on("Runtime.consoleAPICalled", (params) => {
-        pushConsole({
-          level: params.type,
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          text: (params.args ?? []).map((a: any) => remoteText(a)).join(" "),
-          source: "console",
-          timestamp: params.timestamp ?? Date.now(),
-        });
-      });
-      cdpSession.on("Runtime.exceptionThrown", (params) => {
-        const details = params.exceptionDetails;
-        pushConsole({
-          level: "error",
-          text: details.exception?.description ?? details.text,
-          source: "exception",
-          timestamp: params.timestamp ?? Date.now(),
-          url: details.url,
-          line: details.lineNumber,
-        });
-      });
       cdpSession.on("Log.entryAdded", (params) => {
-        pushConsole({
+        pushConsole(state, {
           level: params.entry.level,
           text: params.entry.text,
           source: "log",
@@ -1949,7 +1959,7 @@ export async function connect(
         });
       });
     } catch (err) {
-      logger.warn("Failed to enable console capture:", err);
+      logger.warn("Failed to enable browser log capture:", err);
     }
 
     // Wrap fetchBody with pendingBodyFetches tracking for collectHarRecording()
@@ -2259,6 +2269,8 @@ export async function connect(
             `Console capture starts with recording — open the page without { record: false }.`
         );
       }
+      // Console API capture starts on the first call (see setupHarRecording)
+      await startRuntimeCapture(state);
       return filterConsoleMessages(state.consoleMessages, options);
     },
 
