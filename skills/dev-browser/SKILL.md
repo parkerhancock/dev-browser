@@ -370,6 +370,8 @@ Vendor tool → dev-browser mapping (every MCP tool is a thin wrapper over the c
 | `tabs_create` / `tabs_close` / `tabs_select` | `client.page(name)` / `client.close(name)` / `Page.bringToFront` |
 | `read_console_messages` | `client.getConsoleMessages(name, { pattern, since })`, plus `only_errors` and `limit` |
 | `read_network_requests` | `client.getNetworkRequests(name, { pattern, since })`; `request_id` returns headers and body from `client.getHarEntries()` |
+| `gif_creator` | `encodeGif(frames)` (`src/gif.ts`): records a frame after each action on the page, with click markers, and exports a GIF |
+| `upload_image` | Set a file on a file input by ref, or drop it on an element by ref or coordinate (`dropFile()` in `src/ref-actions.ts`) |
 | `preview_start` / `preview_list` / `preview_logs` / `preview_stop` | Dev servers from the project's `.claude/launch.json` (`mcp-server/src/preview.ts`): start or reuse one, open it in a page, read its output, stop it |
 | `switch_browser` / `list_connected_browsers` | `/health` probes on :9222 and :9224 (includes the `browser` label) |
 

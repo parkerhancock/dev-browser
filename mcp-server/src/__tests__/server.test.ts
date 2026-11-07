@@ -69,6 +69,8 @@ describe("dev-browser MCP server", () => {
       "preview_list",
       "preview_logs",
       "preview_stop",
+      "gif_creator",
+      "upload_image",
     ];
     for (const name of expected) {
       expect(names).toContain(name);

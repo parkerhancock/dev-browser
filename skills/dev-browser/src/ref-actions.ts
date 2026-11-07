@@ -51,3 +51,54 @@ const SET_VALUE_SCRIPT = (ref: string, value: string | number | boolean): string
 export async function setRefValue(page: Page, ref: string, value: string | number | boolean): Promise<string> {
   return page.evaluate<string>(SET_VALUE_SCRIPT(ref, value));
 }
+
+export interface DropFile {
+  /** File contents, base64. */
+  data: string;
+  name: string;
+  mimeType: string;
+}
+
+/**
+ * Drop a file onto a page element, as if dragged in from the desktop: the
+ * element at `ref`, or the one at viewport point (x, y). Fires dragenter,
+ * dragover, and drop with a DataTransfer holding the file.
+ */
+export async function dropFile(
+  page: Page,
+  file: DropFile,
+  target: { ref?: string; x?: number; y?: number }
+): Promise<string> {
+  return page.evaluate<string>(`(() => {
+    const file = ${JSON.stringify(file)};
+    const target = ${JSON.stringify(target)};
+    let el;
+    if (target.ref) {
+      const refs = globalThis.__devBrowserRefs;
+      el = refs && refs[target.ref];
+      if (!el) throw new Error("Ref " + target.ref + " not found. Call read_page again.");
+    } else {
+      el = document.elementFromPoint(target.x, target.y);
+      if (!el) throw new Error("Nothing at (" + target.x + ", " + target.y + ")");
+    }
+    const bytes = Uint8Array.from(atob(file.data), (c) => c.charCodeAt(0));
+    const transfer = new DataTransfer();
+    transfer.items.add(new File([bytes], file.name, { type: file.mimeType }));
+    const rect = el.getBoundingClientRect();
+    const point = target.ref
+      ? { clientX: rect.x + rect.width / 2, clientY: rect.y + rect.height / 2 }
+      : { clientX: target.x, clientY: target.y };
+    for (const type of ["dragenter", "dragover", "drop"]) {
+      el.dispatchEvent(new DragEvent(type, { bubbles: true, cancelable: true, dataTransfer: transfer, ...point }));
+    }
+    return "dropped " + file.name + " on <" + el.tagName.toLowerCase() + (el.id ? "#" + el.id : "") + ">";
+  })()`);
+}
+
+/** Whether the element at `ref` is an <input type=file>. */
+export async function isFileInputRef(page: Page, ref: string): Promise<boolean> {
+  return page.evaluate<boolean>(`(() => {
+    const el = (globalThis.__devBrowserRefs || {})[${JSON.stringify(ref)}];
+    return !!el && el.tagName === "INPUT" && el.type === "file";
+  })()`);
+}

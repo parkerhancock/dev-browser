@@ -3,7 +3,7 @@
  * on private ports, so each tool's options are checked end to end.
  */
 
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -27,6 +27,15 @@ const FORM = `<!doctype html><title>Form</title>
 <label><input type="checkbox" id="agree"> Agree</label>
 <input type="file" id="upload" aria-label="Upload">
 <button>Send</button>
+<div id="drop" style="position:absolute;left:0;top:300px;width:200px;height:100px;background:#eee">Drop here</div>
+<script>
+  drop.addEventListener("dragover", (e) => e.preventDefault());
+  drop.addEventListener("drop", (e) => {
+    e.preventDefault();
+    const f = e.dataTransfer.files[0];
+    drop.dataset.got = f.name + ":" + f.size + ":" + f.type;
+  });
+</script>
 <script>console.error("boom"); console.log("fine"); fetch("/data.json");</script>`;
 
 let server: DevBrowserServer;
@@ -166,6 +175,29 @@ describe("MCP tools on a live standalone browser", () => {
     expect(JSON.parse(await call("preview_list"))).toHaveLength(1);
     await call("preview_stop", { server_id: started.server.id });
     expect(JSON.parse(await call("preview_list"))).toEqual([]);
+  });
+
+  test("upload_image sets a file input by ref and drops on a zone", async () => {
+    await call("navigate", { url: `${origin}/form` });
+    const image = join(process.cwd(), "..", "assets", "header.png");
+    const size = statSync(image).size;
+    await call("upload_image", { path: image, ref: await refFor(/button "Upload"/), filename: "shot.png" });
+    expect(await js(`document.querySelector("#upload").files[0].name`)).toBe("shot.png");
+    await call("upload_image", { path: image, coordinate: [100, 350] });
+    expect(await js(`document.querySelector("#drop").dataset.got`)).toBe(`header.png:${size}:image/png`);
+  });
+
+  test("gif_creator records actions and exports a GIF", async () => {
+    await call("gif_creator", { action: "start_recording" });
+    await call("computer", { action: "left_click", coordinate: [100, 350] });
+    await call("navigate", { url: `${origin}/form` });
+    expect(JSON.parse(await call("gif_creator", { action: "stop_recording" })).frames).toBe(4);
+    const path = join(process.env.DEV_BROWSER_DIR!, "out.gif");
+    const exported = JSON.parse(await call("gif_creator", { action: "export", path }));
+    expect(exported).toMatchObject({ path, frames: 4 });
+    expect(readFileSync(path).subarray(0, 6).toString()).toBe("GIF89a");
+    await call("gif_creator", { action: "clear" });
+    await expect(call("gif_creator", { action: "export" })).rejects.toThrow(/No frames/);
   });
 
   test("tabs_select and scaled screenshots work", async () => {

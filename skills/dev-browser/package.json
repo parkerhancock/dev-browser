@@ -16,14 +16,17 @@
     "@hono/node-server": "^1.19.7",
     "@hono/node-ws": "^1.2.0",
     "archiver": "^7.0.1",
+    "gifenc": "1.0.3",
     "hono": "^4.11.1",
     "impit": "0.14.8",
     "patchright": "1.57.0",
+    "pngjs": "7.0.0",
     "turndown": "^7.2.4",
     "warcio": "^2.4.7"
   },
   "devDependencies": {
     "@types/archiver": "^7.0.0",
+    "@types/pngjs": "6.0.5",
     "@types/ws": "^8.18.1",
     "tsx": "^4.21.0",
     "typescript": "^5.0.0",

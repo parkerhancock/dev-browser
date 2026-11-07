@@ -4,15 +4,16 @@
  * Mirrors the vendor web-browser-use tool surface (tabs_context, navigate,
  * read_page, get_page_text, find, form_input, browser_batch, javascript,
  * screenshot, computer, resize_window, file_upload, tabs_create, tabs_close,
- * tabs_select, preview_start/list/logs/stop, read_console_messages, read_network_requests, switch_browser,
+ * tabs_select, preview_start/list/logs/stop, gif_creator, upload_image, read_console_messages, read_network_requests, switch_browser,
  * list_connected_browsers) as thin wrappers around the script API in
  * skills/dev-browser/src/client.ts. The client stays the engine.
  */
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { basename, dirname, extname, join } from "node:path";
 import {
   connect,
   CDPPage,
@@ -28,7 +29,8 @@ import {
   type ComputerInput,
 } from "../../skills/dev-browser/src/computer.js";
 import { filterSnapshot } from "../../skills/dev-browser/src/snapshot/filter.js";
-import { setRefValue } from "../../skills/dev-browser/src/ref-actions.js";
+import { dropFile, isFileInputRef, setRefValue } from "../../skills/dev-browser/src/ref-actions.js";
+import { encodeGif, type GifFrame } from "../../skills/dev-browser/src/gif.js";
 import { PRESETS } from "../../skills/dev-browser/src/emulation.js";
 import { PreviewManager } from "./preview.js";
 
@@ -51,7 +53,33 @@ export interface BrowserState {
   clients: Map<BrowserMode, DevBrowserClient>;
   /** Dev servers started by preview_start, created on first use. */
   previews?: PreviewManager;
+  /** gif_creator recordings by page name. */
+  recordings?: Map<string, { frames: GifFrame[]; active: boolean }>;
 }
+
+/** Tools whose results are worth a GIF frame while recording. */
+const RECORDED_TOOLS = new Set([
+  "navigate",
+  "computer",
+  "ref_action",
+  "form_input",
+  "file_upload",
+  "upload_image",
+  "resize_window",
+  "javascript",
+  "preview_start",
+]);
+const MAX_GIF_FRAMES = 300;
+
+const MIME_TYPES: Record<string, string> = {
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".gif": "image/gif",
+  ".webp": "image/webp",
+  ".svg": "image/svg+xml",
+  ".pdf": "application/pdf",
+};
 
 export function createState(options: ServerOptions = {}): BrowserState {
   return {
@@ -251,7 +279,13 @@ export function buildServer(state: BrowserState): McpServer {
     shape: z.ZodRawShape,
     handler: (args: Record<string, unknown>) => Promise<ToolResult>
   ): void {
-    const wrapped = safe(handler);
+    const wrapped = safe(async (args: Record<string, unknown>) => {
+      const result = await handler(args);
+      if (RECORDED_TOOLS.has(name) && !result.isError) {
+        await recordFrame(name, args, result).catch(() => {});
+      }
+      return result;
+    });
     handlers.set(name, wrapped);
     server.tool(name, description, shape, wrapped as never);
   }
@@ -260,6 +294,28 @@ export function buildServer(state: BrowserState): McpServer {
     typeof args.page === "string" && args.page.length > 0
       ? args.page
       : DEFAULT_PAGE;
+
+  const recordings = () => (state.recordings ??= new Map());
+
+  async function captureFrame(name: string, marker?: { x: number; y: number }): Promise<void> {
+    const recording = recordings().get(name);
+    if (!recording?.active || recording.frames.length >= MAX_GIF_FRAMES) return;
+    const client = await getClient(state);
+    const page = await client.page(name);
+    recording.frames.push({ png: await page.screenshot({ scale: "css" }), marker });
+  }
+
+  /** While a page is recording, add a frame after each action on it. */
+  async function recordFrame(tool: string, args: Record<string, unknown>, result: ToolResult): Promise<void> {
+    if (tool === "computer" && ["screenshot", "zoom", "wait"].includes(String(args.action))) return;
+    let marker: { x: number; y: number } | undefined;
+    if (tool === "computer" && /click/.test(String(args.action))) {
+      const text = result.content.find((c) => c.type === "text");
+      const at = text && "text" in text ? /at \((-?[\d.]+), (-?[\d.]+)\)/.exec(text.text) : null;
+      if (at) marker = { x: Number(at[1]), y: Number(at[2]) };
+    }
+    await captureFrame(pageName(args), marker);
+  }
 
   // --------------------------------------------------------------------
   // Tools
@@ -824,6 +880,91 @@ export function buildServer(state: BrowserState): McpServer {
     async (args) => {
       await previews().stop(String(args.server_id));
       return textResult({ success: true, stopped: args.server_id });
+    }
+  );
+
+  tool(
+    "gif_creator",
+    "Record the page as an animated GIF. start_recording captures a frame now and after each action on the page " +
+      "(navigate, computer, ref_action, form_input, uploads, resize_window, javascript), with a red marker on clicks; " +
+      "stop_recording adds a last frame; export writes the GIF and returns its path; clear discards the frames.",
+    {
+      action: z.enum(["start_recording", "stop_recording", "export", "clear"]),
+      path: z.string().optional().describe("Where export writes the GIF (default ~/.dev-browser/recordings)"),
+      max_width: z.number().optional().describe("Scale frames down to this width (default 800)"),
+      page: pageParam,
+    },
+    async (args) => {
+      const name = pageName(args);
+      const recording = recordings().get(name);
+      switch (args.action) {
+        case "start_recording":
+          recordings().set(name, { frames: [], active: true });
+          await captureFrame(name);
+          return textResult({ recording: true, page: name, frames: 1 });
+        case "stop_recording":
+          if (!recording) throw new Error(`Page "${name}" isn't recording`);
+          await captureFrame(name);
+          recording.active = false;
+          return textResult({ recording: false, page: name, frames: recording.frames.length });
+        case "export": {
+          if (!recording?.frames.length) throw new Error(`No frames recorded for page "${name}"`);
+          const gif = encodeGif(recording.frames, { maxWidth: args.max_width as number | undefined });
+          const path =
+            typeof args.path === "string"
+              ? args.path
+              : join(devBrowserDir(), "recordings", `${name}-${new Date().toISOString().replace(/[:.]/g, "-")}.gif`);
+          mkdirSync(dirname(path), { recursive: true });
+          writeFileSync(path, gif);
+          return textResult({ path, frames: recording.frames.length, bytes: gif.length });
+        }
+        default:
+          recordings().delete(name);
+          return textResult({ cleared: true, page: name });
+      }
+    }
+  );
+
+  tool(
+    "upload_image",
+    "Upload an image or other file from this machine into the page: set it on a file input (ref), or drop it on " +
+      "an element like a drag-and-drop zone (ref or coordinate). Screenshots from this server are saved as files, " +
+      "so their paths work here.",
+    {
+      path: z.string().describe("Absolute path of the file to upload"),
+      ref: z.string().optional().describe("Ref of a file input or drop target"),
+      coordinate: z.array(z.number()).optional().describe("[x, y] viewport point of a drop target"),
+      filename: z.string().optional().describe("Name the page sees (default: the file's own name)"),
+      page: pageParam,
+    },
+    async (args) => {
+      const client = await getClient(state);
+      const name = pageName(args);
+      const p = await client.page(name);
+      const path = String(args.path);
+      const filename = typeof args.filename === "string" ? args.filename : basename(path);
+      const ref = typeof args.ref === "string" ? args.ref : undefined;
+      if (ref && (await isFileInputRef(p, ref))) {
+        let source = path;
+        if (filename !== basename(path)) {
+          source = join(mkdtempSync(join(tmpdir(), "dev-browser-upload-")), filename);
+          copyFileSync(path, source);
+        }
+        await setRefFiles(client, name, p, ref, [source]);
+        return textResult({ success: true, set: filename, ref });
+      }
+      const [x, y] = (args.coordinate as number[] | undefined) ?? [];
+      if (!ref && (x === undefined || y === undefined)) throw new Error("Pass ref or coordinate");
+      const result = await dropFile(
+        p,
+        {
+          data: readFileSync(path).toString("base64"),
+          name: filename,
+          mimeType: MIME_TYPES[extname(path).toLowerCase()] ?? "application/octet-stream",
+        },
+        ref ? { ref } : { x, y }
+      );
+      return textResult({ success: true, result });
     }
   );
 
