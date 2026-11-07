@@ -10,6 +10,13 @@ declare module "turndown" {
     constructor(options?: TurndownOptions);
     turndown(html: string): string;
     remove(filter: string | string[]): this;
+    addRule(
+      key: string,
+      rule: {
+        filter: string | string[];
+        replacement: (content: string, node: { getAttribute(name: string): string | null }) => string;
+      }
+    ): this;
   }
   export = TurndownService;
 }

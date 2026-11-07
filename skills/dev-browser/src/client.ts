@@ -14,6 +14,14 @@ import type {
 } from "./types";
 import type { Page } from "./page.js";
 import { CDPPage } from "./cdp-page.js";
+import {
+  classifyNavigationError,
+  detectChallengeFromSignals,
+  readPageSignals,
+  type Challenge,
+  type NavigationErrorKind,
+  type PageSignals,
+} from "./challenge.js";
 import { join } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { mkdir, writeFile } from "node:fs/promises";
@@ -37,6 +45,8 @@ const logger = createLogger("client");
 
 // Re-export for consumers
 export type { Page, Locator, Keyboard, Mouse } from "./page.js";
+export { detectChallenge, classifyNavigationError } from "./challenge.js";
+export type { Challenge, ChallengeVendor, NavigationErrorKind } from "./challenge.js";
 export { CDPPage, CDPFrame } from "./cdp-page.js";
 export type { CDPCommandOptions } from "./cdp-page.js";
 export type { HarCookie, HarPostData, HarContent, HarEntry, HarLog } from "./har.js";
@@ -333,6 +343,14 @@ export interface NavigateResult {
   navigationTimedOut: boolean;
   /** Whether the load wait timed out (page may still be usable) */
   loadTimedOut: boolean;
+  /** HTTP status of the main document, when known */
+  status?: number;
+  /** Bot challenge or block page on the loaded page, or null if none was found */
+  challenge?: Challenge | null;
+  /** Length of the page's visible text; near zero means a block or an unhydrated app shell */
+  textLength?: number;
+  /** Why navigation failed, when it did */
+  error?: { kind: NavigationErrorKind; message: string };
 }
 
 /**
@@ -368,8 +386,9 @@ export async function navigateTo(
 
   // Phase 1: Navigate with "commit" — server has started responding
   // This is the fastest reliable waitUntil and works on virtually all sites.
+  let response: Awaited<ReturnType<PlaywrightPage["goto"]>> = null;
   try {
-    await page.goto(url, { waitUntil: "commit", timeout });
+    response = await page.goto(url, { waitUntil: "commit", timeout });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     if (msg.includes("Timeout") || msg.includes("timeout")) {
@@ -385,34 +404,39 @@ export async function navigateTo(
         totalTimeMs: Date.now() - startTime,
         navigationTimedOut: false,
         loadTimedOut: false,
+        error: { kind: classifyNavigationError(msg), message: msg },
       };
     }
   }
 
   // Phase 2: Wait for page load with graceful timeout
+  let load = { success: !navigationTimedOut, readyState: "unknown", pendingRequests: 0, timedOut: false };
   if (options.waitForLoad !== false) {
     const remainingTime = Math.max(timeout - (Date.now() - startTime), 2000);
-    const loadResult = await waitForPageLoad(page, { timeout: remainingTime });
-
-    return {
-      success: loadResult.success && !navigationTimedOut,
-      url: page.url(),
-      readyState: loadResult.readyState,
-      pendingRequests: loadResult.pendingRequests,
-      totalTimeMs: Date.now() - startTime,
-      navigationTimedOut,
-      loadTimedOut: loadResult.timedOut,
-    };
+    load = await waitForPageLoad(page, { timeout: remainingTime });
+    load.success = load.success && !navigationTimedOut;
   }
 
+  // Phase 3: Check what loaded. Best effort: a page mid-navigation can't be read.
+  let signals: PageSignals | undefined;
+  try {
+    signals = await readPageSignals(page as unknown as Page);
+  } catch {
+    // Leave status, challenge, and textLength unknown
+  }
+  const headers = response?.headers() ?? {};
   return {
-    success: !navigationTimedOut,
+    success: load.success,
     url: page.url(),
-    readyState: "unknown",
-    pendingRequests: 0,
+    readyState: load.readyState,
+    pendingRequests: load.pendingRequests,
     totalTimeMs: Date.now() - startTime,
     navigationTimedOut,
-    loadTimedOut: false,
+    loadTimedOut: load.timedOut,
+    status: response?.status() ?? (signals?.status || undefined),
+    challenge: signals ? detectChallengeFromSignals(signals, headers) : undefined,
+    textLength: signals?.textLength,
+    ...(navigationTimedOut ? { error: { kind: "timeout" as const, message: "Navigation timed out" } } : {}),
   };
 }
 

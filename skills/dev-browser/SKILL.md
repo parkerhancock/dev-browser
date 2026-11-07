@@ -108,50 +108,18 @@ This plugin includes a `webfetch` agent that replaces Claude Code's built-in Web
 
 Just install and use. Ask Claude to fetch any URL and it routes to the stealth fetcher.
 
-### Mode Priority
-
-The fetch script tries modes in this order:
-1. **Extension mode** (port 9224) - Best stealth, uses your real Chrome with logged-in sessions
-2. **Standalone mode** (port 9222) - Auto-starts if extension unavailable, launches fresh Chromium
-
-For extension mode, you need the dev-browser Chrome extension installed and activated.
-Download: https://github.com/SawyerHood/dev-browser/releases
-
-**Alternative (manual):** If hooks aren't working, add to `~/.claude/settings.json`:
-
-```json
-{
-  "permissions": {
-    "deny": ["WebFetch"]
-  }
-}
-```
-
-### How It Works
-
-When you ask Claude to fetch a URL, it routes to the `webfetch` agent which:
-1. Uses dev-browser's extension mode (real Chrome, not headless)
-2. Fetches the page with stealth protections
-3. Converts HTML to clean markdown
-4. Processes with Haiku (cost-efficient, like built-in WebFetch)
-5. Returns a concise answer
-
-### Direct CLI Usage
+### Fetch Script
 
 ```bash
-cd skills/dev-browser && npx tsx <<'EOF'
-import { connect, navigateTo } from "@/client.js";
-import TurndownService from "turndown";
-
-const client = await connect({ ephemeral: true });
-const page = await client.page("fetch");
-await navigateTo(page, "https://example.com");
-const html = await page.evaluate(() => document.body.innerHTML);
-const md = new TurndownService().turndown(html);
-console.log(md);
-await client.disconnect();
-EOF
+cd skills/dev-browser && npx tsx scripts/fetch.ts "https://example.com" [--format=markdown|html|text|json] [--timeout=30000] [--mode=standalone|extension] [--screenshot=out.png] [--wacz=out.wacz]
 ```
+
+- Prints the page's main content (article, main, else body) as Markdown with absolute links. A status line goes to stderr.
+- Exit codes: 0 loaded, 1 navigation failed (the error says dns, tls, connection, or timeout), 2 a bot challenge or block page is still showing.
+- Standalone mode (default) runs headless and starts the server if needed. Extension mode uses your Chrome and its signed-in sessions.
+- It waits for client-rendered pages to fill in, and gives an automatic challenge such as Cloudflare's "Just a moment" up to 10s to clear on its own. It never solves captchas.
+
+From a script, `fetchPage(client, url, options)` in `@/fetch.js` returns the same result object, and `navigateTo()` results carry `status`, `challenge`, `textLength`, and `error`. The MCP `navigate` tool reports a `challenge` when it detects one.
 
 ## Session Types
 

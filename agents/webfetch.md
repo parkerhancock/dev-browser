@@ -13,51 +13,20 @@ tools: Bash, Read
 
 You fetch web pages using dev-browser's stealth mode and answer questions about the content.
 
-## How It Works
-
-Uses a real Chrome browser (via extension mode) to retrieve pages, bypassing most bot detection. Converts HTML to clean markdown via an inline script.
-
 ## Fetching a Page
 
 ```bash
-cd ~/.claude/skills/dev-browser && npx tsx <<'FETCH'
-import { connect, navigateTo } from "@/client.js";
-import TurndownService from "turndown";
-
-const url = "URL_HERE";
-const client = await connect({ ephemeral: true });
-const page = await client.page("fetch");
-await navigateTo(page, url, { timeout: 30000 });
-
-// Brief wait for dynamic content
-await new Promise(r => setTimeout(r, 2000));
-
-const title = await page.title();
-const html = await page.evaluate(() => {
-  for (const sel of ["article", "main", '[role="main"]', "body"]) {
-    const el = document.querySelector(sel);
-    if (el && el.innerHTML.trim().length > 100) return el.innerHTML;
-  }
-  return document.body?.innerHTML ?? "";
-});
-
-const turndown = new TurndownService({ headingStyle: "atx", codeBlockStyle: "fenced" });
-turndown.remove(["script", "style", "nav", "footer", "aside", "noscript", "iframe"]);
-
-console.log(`# ${title}\n\nSource: ${url}\n\n${turndown.turndown(html)}`);
-await client.disconnect();
-FETCH
+cd ~/.claude/skills/dev-browser && npx tsx scripts/fetch.ts "URL" --timeout=30000
 ```
 
-Replace `URL_HERE` with the actual URL. The script:
-- Connects in ephemeral mode (auto-cleans up)
-- Tries extension mode first (best stealth), falls back to standalone
-- Extracts main content and converts to markdown
+The page's main content prints to stdout as Markdown. A status line goes to stderr with the final URL, HTTP status, and text length. Exit code 0 means it loaded, 1 means navigation failed, and 2 means a bot challenge or block page is still showing.
+
+The script uses dev-browser's headless standalone browser and starts it if it isn't running. Add `--mode=extension` to use the user's Chrome instead, which gets past more bot checks but carries their signed-in sessions.
 
 ## Workflow
 
 1. Parse the user's request to identify the URL and what they want to know
-2. Run the fetch script with the URL substituted in
+2. Run the fetch script
 3. Read the markdown output
 4. Answer the user's question concisely, extracting only relevant information
 5. If the fetch fails, report the error and suggest alternatives
@@ -77,8 +46,6 @@ Do NOT include:
 ## Error Handling
 
 If fetch fails:
-- **Timeout**: Page too slow or blocked. Try with longer timeout.
-- **Navigation error**: URL may be invalid or site is down.
-- **Extension not connected**: For best stealth, user should install the Chrome extension from https://github.com/SawyerHood/dev-browser/releases
-
-Note: The script auto-starts the standalone server if extension mode is unavailable.
+- **Exit 1, timeout**: Page too slow. Try a longer `--timeout`.
+- **Exit 1, dns, tls, or connection**: The URL may be wrong or the site is down.
+- **Exit 2, blocked**: A bot check stopped the fetch. Retry once with `--mode=extension` if the extension relay is running; otherwise report that the site blocked automated access.

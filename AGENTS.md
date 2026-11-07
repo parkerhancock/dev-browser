@@ -53,10 +53,15 @@ All source code lives in `skills/dev-browser/`:
 - `src/cdp-page.ts` - `CDPPage` implementation: full Page interface via CDP over HTTP RPC (extension mode)
 - `src/cdp-helpers.ts` - Key code mapping, element coordinate resolution, modifier bitmask utilities
 - `src/har.ts` - HAR recording: processes CDP Network events into HAR entries
+- `src/launch-args.ts` - Standalone launch recipe on top of patchright (headless mode, disabled features, viewport)
+- `src/browser-cdp.ts` - Browser-level CDP connection (opens each page in its own window)
+- `src/challenge.ts` - Bot-challenge detection (Cloudflare, DataDome, captchas, short 403s) and navigation error kinds
+- `src/fetch.ts` - `fetchPage()`: one-shot fetch to Markdown/HTML/text with optional screenshot and WACZ
 - `src/types.ts` - Shared TypeScript types for API requests/responses
 - `src/snapshot/` - ARIA snapshot utilities for LLM-friendly page inspection
 - `scripts/start-server.ts` - Entry point to start standalone server
 - `scripts/start-relay.ts` - Entry point to start relay server (extension mode)
+- `scripts/fetch.ts` - Fetch CLI used by the webfetch agent
 - `tmp/` - Directory for temporary automation scripts
 
 ### Path Aliases

@@ -10,6 +10,7 @@
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createServer, type Server } from "node:http";
 import { describe, test, expect, beforeAll, afterAll } from "vitest";
 
 process.env.DEV_BROWSER_DIR = mkdtempSync(
@@ -19,6 +20,7 @@ process.env.DEV_BROWSER_DIR = mkdtempSync(
 import { serve, type DevBrowserServer } from "../index.js";
 import { connect, type DevBrowserClient } from "../client.js";
 import { loadToken, TOKEN_HEADER } from "../auth.js";
+import { fetchPage } from "../fetch.js";
 
 const port = 19000 + Math.floor(Math.random() * 5000);
 const cdpPort = port + 5000;
@@ -134,5 +136,51 @@ describe("Remote-ready standalone server", () => {
     expect(((await other.json()) as { downloads: unknown[] }).downloads).toEqual(
       []
     );
+  });
+
+  describe("fetchPage", () => {
+    let site: Server;
+    let origin = "";
+    beforeAll(async () => {
+      site = createServer((req, res) => {
+        if (req.url === "/blocked") {
+          res.writeHead(403, { "content-type": "text/html", "cf-mitigated": "challenge" });
+          res.end("<title>Just a moment...</title><p>Checking your browser</p>");
+          return;
+        }
+        res.writeHead(200, { "content-type": "text/html" });
+        res.end(
+          '<title>Article</title><nav>menu</nav><article><h1>Heading</h1><p>' +
+            "Body text. ".repeat(40) +
+            '<a href="/next">next</a></p></article>'
+        );
+      });
+      await new Promise<void>((resolve) => site.listen(0, "127.0.0.1", resolve));
+      const address = site.address() as { port: number };
+      origin = `http://127.0.0.1:${address.port}`;
+    });
+    afterAll(() => {
+      site.close();
+    });
+
+    test("returns the main content as Markdown with absolute links", async () => {
+      const result = await fetchPage(client!, `${origin}/article`);
+      expect(result).toMatchObject({ status: 200, title: "Article", challenge: null });
+      expect(result.content).toContain("# Heading");
+      expect(result.content).toContain(`[next](${origin}/next)`);
+      expect(result.content).not.toContain("menu");
+    });
+
+    test("reports a challenge that doesn't clear", async () => {
+      const result = await fetchPage(client!, `${origin}/blocked`, { challengeWait: 500 });
+      expect(result.status).toBe(403);
+      expect(result.challenge).toMatchObject({ vendor: "cloudflare" });
+    });
+
+    test("reports a DNS failure without throwing", async () => {
+      const result = await fetchPage(client!, "https://nope.invalid/");
+      expect(result.error?.kind).toBe("dns");
+      expect(result.content).toBe("");
+    });
   });
 });

@@ -16,6 +16,7 @@ import { join } from "node:path";
 import {
   connect,
   CDPPage,
+  detectChallenge,
   type DevBrowserClient,
   type BatchOp,
 } from "../../skills/dev-browser/src/client.js";
@@ -169,6 +170,11 @@ async function evaluateRepl(
   return remote.value;
 }
 
+/** Whether a navigate target already names its scheme (data:, about:blank, https://...). */
+function hasScheme(url: string): boolean {
+  return url.includes("://") || /^(data|about|blob|javascript|file|chrome):/i.test(url);
+}
+
 function errorResult(err: unknown): ToolResult {
   return {
     content: [
@@ -243,7 +249,7 @@ export function buildServer(state: BrowserState): McpServer {
 
   tool(
     "navigate",
-    "Navigate a named page to a URL (creates the page if needed). Also accepts \"back\" and \"forward\".",
+    "Navigate a named page to a URL (creates the page if needed). Also accepts \"back\" and \"forward\". Reports a bot challenge or block page (Cloudflare, DataDome, captcha, short 403) when it detects one.",
     {
       url: z.string().describe('URL to open, or "back" / "forward"'),
       page: pageParam,
@@ -252,10 +258,12 @@ export function buildServer(state: BrowserState): McpServer {
       const client = await getClient(state);
       const p = await client.page(pageName(args));
       const url = String(args.url);
+      let response = null;
       if (url === "back") await p.goBack();
       else if (url === "forward") await p.goForward();
-      else await p.goto(url.includes("://") ? url : `https://${url}`);
-      return textResult({ url: p.url(), title: await p.title() });
+      else response = await p.goto(hasScheme(url) ? url : `https://${url}`);
+      const challenge = await detectChallenge(p, response).catch(() => null);
+      return textResult({ url: p.url(), title: await p.title(), ...(challenge ? { challenge } : {}) });
     }
   );
 
