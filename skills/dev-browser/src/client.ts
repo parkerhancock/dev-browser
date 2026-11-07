@@ -1818,6 +1818,11 @@ export async function connect(
 
         // Connect to the browser via CDP
         browser = await chromium.connectOverCDP(wsEndpoint);
+        // This connection answers proxy auth challenges too (patchright
+        // intercepts every request), so it needs the proxy's credentials
+        if (info.proxyCredentials) {
+          await Promise.all(browser.contexts().map((c) => c.setHTTPCredentials(info.proxyCredentials!)));
+        }
         return browser;
       } finally {
         connectingPromise = null;

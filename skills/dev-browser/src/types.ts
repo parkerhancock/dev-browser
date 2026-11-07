@@ -64,6 +64,34 @@ export interface ServeOptions {
    * Playwright's channel mechanism.
    */
   browser?: "chromium" | "chrome" | "msedge";
+  /** Route the browser's traffic through a proxy. */
+  proxy?: ProxySettings;
+  /** Browser locale, e.g. "de-DE": navigator.language, Accept-Language, and Intl formatting. */
+  locale?: string;
+  /** Time zone, e.g. "Europe/Berlin". Pair it with a proxy's exit country. */
+  timezoneId?: string;
+}
+
+export interface ProxySettings {
+  /** "http://host:port", "https://host:port", or "socks5://host:port". */
+  server: string;
+  username?: string;
+  password?: string;
+  /** Comma-separated hosts that skip the proxy, e.g. ".internal.example,localhost". */
+  bypass?: string;
+}
+
+/**
+ * Parse a proxy URL, taking credentials from it if present:
+ * "http://user:pass@host:8080" -> { server: "http://host:8080", username, password }.
+ */
+export function parseProxyUrl(url: string, bypass?: string): ProxySettings {
+  const parsed = new URL(url.includes("://") ? url : `http://${url}`);
+  const settings: ProxySettings = { server: `${parsed.protocol}//${parsed.host}` };
+  if (parsed.username) settings.username = decodeURIComponent(parsed.username);
+  if (parsed.password) settings.password = decodeURIComponent(parsed.password);
+  if (bypass) settings.bypass = bypass;
+  return settings;
 }
 
 export interface ViewportSize {
@@ -99,4 +127,9 @@ export interface ServerInfoResponse {
    * across Docker/port-forwarding/TLS; `wsEndpoint` is kept for old clients.
    */
   wsPath?: string;
+  /**
+   * Proxy credentials, when the server's proxy needs them. Every patchright
+   * connection answers auth challenges itself, so clients must hold them too.
+   */
+  proxyCredentials?: { username: string; password: string };
 }

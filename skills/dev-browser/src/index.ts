@@ -116,13 +116,27 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
   // Headless runs pass --headless=new themselves (see launch-args.ts), so
   // Playwright's own headless option stays off.
   const channel = browser === "chromium" ? undefined : browser;
-  const context: BrowserContext = await chromium.launchPersistentContext(userDataDir, {
-    headless: false,
-    args: launchArgs,
-    channel,
-    userAgent: headless ? await headedUserAgent(channel) : undefined,
-    viewport: headless ? DEFAULT_VIEWPORT : undefined,
-  });
+  let context: BrowserContext;
+  try {
+    context = await chromium.launchPersistentContext(userDataDir, {
+      headless: false,
+      args: launchArgs,
+      channel,
+      userAgent: headless ? await headedUserAgent(channel) : undefined,
+      viewport: headless ? DEFAULT_VIEWPORT : undefined,
+      proxy: options.proxy,
+      locale: options.locale,
+      timezoneId: options.timezoneId,
+    });
+  } catch (err) {
+    if (err instanceof Error && /ProcessSingleton|profile directory is already in use/i.test(err.message)) {
+      throw new Error(
+        `Browser profile ${userDataDir} is already in use by another browser. ` +
+          `Stop the other dev-browser server, or start this one with a different --profile.`
+      );
+    }
+    throw err;
+  }
   console.log("Browser launched with persistent profile...");
 
   // Get the CDP WebSocket endpoint from Chrome's JSON API
@@ -356,6 +370,9 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
       wsPath: "/cdp",
       mode: "launch",
       browser,
+      ...(options.proxy?.username
+        ? { proxyCredentials: { username: options.proxy.username, password: options.proxy.password ?? "" } }
+        : {}),
     } satisfies ServerInfoResponse & {
       mode: string;
       browser: string;

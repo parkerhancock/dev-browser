@@ -108,6 +108,10 @@ This plugin includes a `webfetch` agent that replaces Claude Code's built-in Web
 
 Just install and use. Ask Claude to fetch any URL and it routes to the stealth fetcher.
 
+### Proxy, Locale, and Time Zone
+
+Standalone servers take `dev-browser serve --proxy http://user:pass@host:port` (or `DEV_BROWSER_PROXY`), `--proxy-bypass`, `--locale de-DE`, and `--timezone Europe/Berlin`; `serve()` takes the same as `proxy`, `locale`, and `timezoneId`. Match the locale and time zone to the proxy's exit country, since a mismatch is a bot signal.
+
 ### Fetch Script
 
 ```bash

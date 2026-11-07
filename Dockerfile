@@ -9,6 +9,9 @@
 #
 #   docker build --build-arg BROWSER=chromium -t dev-browser .
 #
+# Route browser traffic through a proxy with -e DEV_BROWSER_PROXY=http://user:pass@host:port
+# (socks5:// works too, without credentials).
+#
 # The token is generated on first start at /data/token (print it with
 # `docker exec <ctr> cat /data/token`), or pin it by setting DEV_BROWSER_TOKEN.
 # Agents connect with:

@@ -2,6 +2,7 @@
  * dev-browser CLI — one binary for all modes:
  *
  *   dev-browser serve    [--port 9222] [--host 127.0.0.1] [--headed] [--profile NAME] [--browser chromium|chrome|msedge] [--profile-dir PATH] [--mcp]
+ *                        [--proxy URL] [--proxy-bypass HOSTS] [--locale de-DE] [--timezone Europe/Berlin]
  *   dev-browser relay    [--port 9224] [--mcp]
  *   dev-browser mcp      [--http PORT] [--mode standalone|extension] [--session ID]
  *   dev-browser browsers
@@ -28,7 +29,9 @@ function usage(): never {
       "  serve      Start the standalone Chromium server (:9222)",
       "             --port N, --host ADDR (0.0.0.0 for containers), --headed,",
       "             --profile NAME, --browser chromium|chrome|msedge,",
-      "             --profile-dir PATH, --mcp (mount MCP at /mcp)",
+      "             --profile-dir PATH, --mcp (mount MCP at /mcp),",
+      "             --proxy URL (http://user:pass@host:port or socks5://...; or DEV_BROWSER_PROXY),",
+      "             --proxy-bypass HOSTS, --locale de-DE, --timezone Europe/Berlin",
       "  relay      Start the Chrome-extension relay (:9224)",
       "             --port N, --mcp (mount MCP at /mcp)",
       "  mcp        Start the MCP server (stdio by default)",
@@ -54,9 +57,15 @@ async function main(): Promise<void> {
           browser: { type: "string" },
           "profile-dir": { type: "string" },
           mcp: { type: "boolean", default: false },
+          proxy: { type: "string" },
+          "proxy-bypass": { type: "string" },
+          locale: { type: "string" },
+          timezone: { type: "string" },
         },
       });
       const { serve } = await import("../../skills/dev-browser/src/index.js");
+      const { parseProxyUrl } = await import("../../skills/dev-browser/src/types.js");
+      const proxyUrl = values.proxy ?? process.env.DEV_BROWSER_PROXY;
       await serve({
         port: values.port ? Number(values.port) : undefined,
         host: values.host,
@@ -64,6 +73,9 @@ async function main(): Promise<void> {
         profile: values.profile,
         browser: values.browser as "chromium" | "chrome" | "msedge" | undefined,
         profileDir: values["profile-dir"],
+        proxy: proxyUrl ? parseProxyUrl(proxyUrl, values["proxy-bypass"]) : undefined,
+        locale: values.locale,
+        timezoneId: values.timezone,
         mcpHandler: values.mcp
           ? createMcpNodeHandler({ mode: "standalone" })
           : undefined,
