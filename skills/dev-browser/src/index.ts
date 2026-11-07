@@ -55,6 +55,21 @@ async function fetchWithRetry(
   throw new Error(`Failed after ${maxRetries} retries: ${lastError?.message}`);
 }
 
+/**
+ * The user agent this browser sends when it isn't headless. Headless builds say
+ * "HeadlessChrome", which sites can block on. Only the browser knows its version.
+ */
+async function headedUserAgent(channel: string | undefined): Promise<string> {
+  const probe = await chromium.launch({ channel });
+  try {
+    const page = await probe.newPage();
+    const userAgent = await page.evaluate<string>("navigator.userAgent");
+    return userAgent.replace(/HeadlessChrome\/(\d+)[\d.]*/, "Chrome/$1.0.0.0");
+  } finally {
+    await probe.close();
+  }
+}
+
 export async function serve(options: ServeOptions = {}): Promise<DevBrowserServer> {
   const port = options.port ?? 9222;
   const host = options.host ?? "127.0.0.1";
@@ -95,11 +110,13 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
     launchArgs.push("--silent-launch", "--no-startup-window");
   }
 
+  // "chrome" / "msedge" launch a locally installed branded browser
+  const channel = browser === "chromium" ? undefined : browser;
   const context: BrowserContext = await chromium.launchPersistentContext(userDataDir, {
     headless,
     args: launchArgs,
-    // "chrome" / "msedge" launch a locally installed branded browser
-    channel: browser === "chromium" ? undefined : browser,
+    channel,
+    userAgent: headless ? await headedUserAgent(channel) : undefined,
   });
   console.log("Browser launched with persistent profile...");
 

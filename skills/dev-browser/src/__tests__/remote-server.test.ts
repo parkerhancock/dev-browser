@@ -70,6 +70,13 @@ describe("Remote-ready standalone server", () => {
     expect(await page.locator("h1").textContent()).toBe("proxied");
   });
 
+  test("headless pages don't announce HeadlessChrome", async () => {
+    const page = await client!.page("proxied");
+    const userAgent = await page.evaluate<string>("navigator.userAgent");
+    expect(userAgent).not.toContain("Headless");
+    expect(userAgent).toMatch(/ Chrome\/\d+\.0\.0\.0 /);
+  });
+
   test("tracks downloads server-side and serves the bytes", async () => {
     const page = await client!.page("proxied");
     await page.goto(
