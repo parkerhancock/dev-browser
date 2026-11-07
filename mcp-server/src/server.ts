@@ -13,14 +13,13 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { homedir } from "node:os";
 import {
   connect,
   CDPPage,
   type DevBrowserClient,
   type BatchOp,
 } from "../../skills/dev-browser/src/client.js";
-import { authHeaders } from "../../skills/dev-browser/src/auth.js";
+import { authHeaders, devBrowserDir } from "../../skills/dev-browser/src/auth.js";
 import {
   COMPUTER_ACTIONS,
   computerAction,
@@ -131,7 +130,7 @@ function textResult(value: unknown): ToolResult {
 
 /** Return a PNG to the model and keep a copy under ~/.dev-browser/screenshots. */
 function imageResult(page: string, buffer: Buffer, message?: string): ToolResult {
-  const dir = join(homedir(), ".dev-browser", "screenshots");
+  const dir = join(devBrowserDir(), "screenshots");
   mkdirSync(dir, { recursive: true });
   const path = join(dir, `${page}-${new Date().toISOString().replace(/[:.]/g, "-")}.png`);
   writeFileSync(path, buffer);

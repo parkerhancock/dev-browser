@@ -22,7 +22,7 @@ import { randomBytes, timingSafeEqual } from "node:crypto";
 
 export const TOKEN_HEADER = "X-DevBrowser-Token";
 
-function devBrowserDir(): string {
+export function devBrowserDir(): string {
   return process.env.DEV_BROWSER_DIR ?? join(homedir(), ".dev-browser");
 }
 

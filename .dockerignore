@@ -2,6 +2,7 @@
 **/.browser-data*
 **/browser-data*
 **/tmp
+**/tmp-*
 **/*.log
 extension
 agents

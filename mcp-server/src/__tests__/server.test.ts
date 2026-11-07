@@ -3,6 +3,9 @@
  * work without a running browser server.
  */
 
+import { existsSync, mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, describe, test, expect, vi } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
@@ -32,6 +35,7 @@ async function clientWithEvaluateResult(result: unknown) {
 describe("dev-browser MCP server", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
   });
 
   test("registers the vendor-parity tool surface", async () => {
@@ -126,6 +130,22 @@ describe("dev-browser MCP server", () => {
     expect(result.isError).toBe(true);
     const content = result.content as Array<{ type: string; text: string }>;
     expect(content[0]!.text).toContain("Error: boom");
+  });
+
+  test("screenshots are saved under DEV_BROWSER_DIR", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "dev-browser-mcp-"));
+    vi.stubEnv("DEV_BROWSER_DIR", dir);
+    const state = createState({ mode: "standalone", session: "mcp-test" });
+    const page = { screenshot: async () => Buffer.from("png") };
+    const browser = { page: async () => page };
+    state.clients.set("standalone", browser as unknown as DevBrowserClient);
+    const client = await connectedClient(state);
+
+    const result = await client.callTool({ name: "screenshot", arguments: {} });
+    const content = result.content as Array<{ type: string; text: string }>;
+    const path = content[1]!.text.replace("Saved to ", "");
+    expect(path.startsWith(join(dir, "screenshots"))).toBe(true);
+    expect(existsSync(path)).toBe(true);
   });
 
   test("browser_batch refuses nesting and unknown tools", async () => {
