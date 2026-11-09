@@ -8,11 +8,9 @@ import type { RelayContext } from "./context.js";
 
 export function registerCdpRoutes(app: Hono, ctx: RelayContext): void {
   const {
-    policy,
     childTargets,
     live,
     isChildOf,
-    sendToExtension,
     routeCdpCommand,
     policyBlocks,
     namedPages,

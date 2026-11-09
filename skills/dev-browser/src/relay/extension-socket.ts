@@ -13,7 +13,6 @@ type UpgradeWebSocket = NodeWebSocket["upgradeWebSocket"];
 export function registerExtensionSocket(app: Hono, upgradeWebSocket: UpgradeWebSocket, ctx: RelayContext): void {
   const {
     dialogPolicy,
-    startedAt,
     registry,
     childTargets,
     beforeUnloadPolicies,
@@ -34,7 +33,6 @@ export function registerExtensionSocket(app: Hono, upgradeWebSocket: UpgradeWebS
     sendToExtension,
     connectedTargets,
     namedPages,
-    sessions,
     log,
   } = ctx;
 

@@ -2,7 +2,7 @@
  * Extension mode client: HTTP RPC to the relay, with CDPPage pages (no Playwright).
  */
 
-import type { Browser, ElementHandle } from "patchright";
+import type { ElementHandle } from "patchright";
 import type { GetPageRequest, GetPageResponse, ListPagesResponse } from "../types";
 import type { Page } from "../page.js";
 import { CDPPage } from "../cdp-page.js";
