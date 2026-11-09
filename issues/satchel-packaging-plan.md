@@ -1,7 +1,7 @@
 # Plan: package dev-browser with Satchel
 
 **Date:** 2026-11-09 (rewritten after the research recorded below)
-**Status:** approved by Parker on 2026-11-09, with Q1 to Q3 settled as the plan assumed (D6 to D8).
+**Status:** implemented 2026-11-09 (approved the same day, with Q1 to Q3 settled as the plan assumed, D6 to D8).
 **Owner:** Parker
 
 ## Problem
@@ -281,3 +281,11 @@ already uses with its loopback MCP server.
   3. verify A3;
   4. retire the skill symlink, the `~/.claude.json` entry, the agent copy, and
      the running `start.sh` relay, asking Parker before each.
+     **Done 2026-11-09.** Installed from GitHub in Claude Code and Codex, ran
+     setup with `--link`, and passed A3 in both hosts (navigate, screenshot,
+     close through the plugin). Retired five manual copies with Parker's OK:
+     `~/.claude/skills/dev-browser`, `~/.agents/skills/dev-browser`,
+     `~/.codex/skills/dev-browser`, `~/.claude/agents/webfetch.md`, and the
+     user-level `dev-browser` MCP entry. The relay started by the old `start.sh`
+     still runs; `dev-browser start` and `stop` manage it through the same pid
+     file.
