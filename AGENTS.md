@@ -46,7 +46,11 @@ This is a browser automation tool designed for developers and AI agents. It solv
 All source code lives in `skills/dev-browser/`:
 
 - `src/index.ts` - Server: launches persistent Chromium context, exposes HTTP API for page management
-- `src/relay.ts` - Relay server for extension mode: bridges Chrome extension to Playwright clients
+- `src/relay.ts` - Relay server for extension mode: `serveRelay()` builds the context, auth middleware, and routes, then starts the server
+- `src/relay/context.ts` - `createRelayContext()`: the relay's shared state (including the `live` connection state), CDP routing to the extension, page recovery, idle cleanup, policy checks
+- `src/relay/routes-*.ts` - HTTP route groups, each `register*(app, ctx)`: status, pages, tabs, cdp, capture (console and HAR), snapshot
+- `src/relay/extension-socket.ts` - The extension's WebSocket: connection, recovery, and forwarded CDP events
+- `src/relay/types.ts` - Relay options, results, and extension message types
 - `src/relay-registry.ts` - Target registry: manages page/session/target lifecycle state (4 Maps, explicit state machine)
 - `src/client.ts` - Client: `connect()` and the public client types; picks a mode and re-exports the helpers below
 - `src/client/standalone.ts` - Standalone client: Playwright connected over CDP to the server
