@@ -9,9 +9,7 @@ import type { Page, Locator, Keyboard, Mouse } from "./page.js";
 import {
   resolveKey,
   parseKeyCombo,
-  computeModifiers,
   elementCenterExpression,
-  mouseButton,
 } from "./cdp-helpers.js";
 import { authHeaders } from "./auth.js";
 import { resolve as resolvePath } from "node:path";
@@ -1246,12 +1244,11 @@ type LocatorStrategy =
 
 /**
  * Build a JS `.filter()` predicate for text matching against a property accessor.
- * @param varName - the filter callback variable name (e.g. "el")
  * @param accessor - JS expression for the text value (e.g. "el.textContent || ''")
  * @param text - string or RegExp to match against
  * @param exact - if true, use strict equality instead of includes
  */
-function textFilterExpr(varName: string, accessor: string, text: string | RegExp, exact?: boolean): string {
+function textFilterExpr(accessor: string, text: string | RegExp, exact?: boolean): string {
   if (text instanceof RegExp) {
     return `new RegExp(${JSON.stringify(text.source)}, ${JSON.stringify(text.flags)}).test(${accessor})`;
   }
@@ -1279,7 +1276,7 @@ export class CDPLocator implements Locator {
       case "css": {
         const sel = JSON.stringify(s.selector);
         if (s.testIdPattern) {
-          const pred = textFilterExpr("el", "el.getAttribute('data-testid') || ''", s.testIdPattern);
+          const pred = textFilterExpr("el.getAttribute('data-testid') || ''", s.testIdPattern);
           return `Array.from(document.querySelectorAll('[data-testid]')).filter(el => ${pred})`;
         }
         return `Array.from(document.querySelectorAll(${sel}))`;
@@ -1289,19 +1286,19 @@ export class CDPLocator implements Locator {
         if (!s.name) {
           return `Array.from(document.querySelectorAll(${roleSel}))`;
         }
-        const pred = textFilterExpr("el", "(el.getAttribute('aria-label') || el.textContent || '').trim()", s.name, s.exact);
+        const pred = textFilterExpr("(el.getAttribute('aria-label') || el.textContent || '').trim()", s.name, s.exact);
         return `Array.from(document.querySelectorAll(${roleSel})).filter(el => ${pred})`;
       }
       case "text": {
-        const pred = textFilterExpr("el", "el.textContent || ''", s.text, s.exact);
+        const pred = textFilterExpr("el.textContent || ''", s.text, s.exact);
         return `Array.from(document.querySelectorAll('*')).filter(el => el.children.length === 0 && ${pred})`;
       }
       case "label": {
-        const pred = textFilterExpr("l", "l.textContent || ''", s.text, s.exact);
+        const pred = textFilterExpr("l.textContent || ''", s.text, s.exact);
         return `Array.from(document.querySelectorAll('label')).filter(l => ${pred}).map(l => l.htmlFor ? document.getElementById(l.htmlFor) : l.querySelector('input,textarea,select')).filter(Boolean)`;
       }
       case "placeholder": {
-        const pred = textFilterExpr("el", "el.getAttribute('placeholder') || ''", s.text, s.exact);
+        const pred = textFilterExpr("el.getAttribute('placeholder') || ''", s.text, s.exact);
         return `Array.from(document.querySelectorAll('[placeholder]')).filter(el => ${pred})`;
       }
     }

@@ -236,9 +236,6 @@ export function registerExtensionSocket(app: Hono, upgradeWebSocket: UpgradeWebS
               const target = connectedTargets.get(cdpSessionId);
               const targetId = target?.targetId;
 
-              // Find the owning agent session before cleanup
-              const agentSession = registry.getOwner(cdpSessionId);
-
               // DON'T delete from connectedTargets immediately!
               // Keep it so reattachment logic can find the old session info.
               // It will be deleted either:
@@ -272,12 +269,10 @@ export function registerExtensionSocket(app: Hono, upgradeWebSocket: UpgradeWebS
               }
             } else if (method === "Target.targetInfoChanged") {
               const infoParams = params as { targetInfo: TargetInfo };
-              let agentSession: string | undefined;
 
               for (const target of connectedTargets.values()) {
                 if (target.targetId === infoParams.targetInfo.targetId) {
                   target.targetInfo = infoParams.targetInfo;
-                  agentSession = registry.getOwner(target.sessionId);
                   break;
                 }
               }
