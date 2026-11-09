@@ -35,16 +35,39 @@ import { describeAction } from "./action-labels.js";
 import { navigateHandlingLeaveDialog } from "./leave-dialog.js";
 import { PRESETS } from "../../skills/dev-browser/src/emulation.js";
 import { PreviewManager } from "./preview.js";
+import { defaultPort, start } from "./daemon.js";
 
 export type BrowserMode = "standalone" | "extension";
 
-const PORTS: Record<BrowserMode, number> = { standalone: 9222, extension: 9224 };
+/** The port each mode's server listens on (DEV_BROWSER_SERVE_PORT / DEV_BROWSER_RELAY_PORT override). */
+const serverPort = (mode: BrowserMode): number =>
+  defaultPort(mode === "standalone" ? "serve" : "relay");
+
+/** One in-process start at a time; daemon.start also locks across processes. */
+let startingStandalone: Promise<void> | undefined;
+
+/** Start the standalone server in the background (headless, profile in ~/.dev-browser). */
+async function ensureStandaloneServer(): Promise<void> {
+  startingStandalone ??= start("serve")
+    .then(() => undefined)
+    .catch((err: unknown) => {
+      throw new Error(
+        `No dev-browser server was running, and starting the standalone server failed: ${
+          err instanceof Error ? err.message : String(err)
+        }`
+      );
+    })
+    .finally(() => {
+      startingStandalone = undefined;
+    });
+  await startingStandalone;
+}
 const DEFAULT_PAGE = "main";
 
 export interface ServerOptions {
   /** Force a mode; default probes extension (9224) then standalone (9222). */
   mode?: BrowserMode;
-  /** Agent session id; default CLAUDE_SESSION_ID or a generated id. */
+  /** Agent session id; default CLAUDE_SESSION_ID, then Claude Code's CLAUDE_CODE_SESSION_ID, or a generated id. */
   session?: string;
 }
 
@@ -89,6 +112,7 @@ export function createState(options: ServerOptions = {}): BrowserState {
     session:
       options.session ??
       process.env.CLAUDE_SESSION_ID ??
+      process.env.CLAUDE_CODE_SESSION_ID ??
       `mcp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     clients: new Map(),
   };
@@ -99,7 +123,7 @@ async function probeHealth(mode: BrowserMode): Promise<Record<string, unknown> |
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 1500);
   try {
-    const res = await fetch(`http://127.0.0.1:${PORTS[mode]}/health`, {
+    const res = await fetch(`http://127.0.0.1:${serverPort(mode)}/health`, {
       headers: authHeaders(),
       signal: controller.signal,
     });
@@ -131,18 +155,20 @@ async function resolveMode(state: BrowserState): Promise<BrowserMode> {
     state.activeMode = "extension";
     return "extension";
   }
-  throw new Error(
-    "No dev-browser server is running. Start one with `dev-browser serve` " +
-      "(standalone Chromium on :9222) or `dev-browser relay` (Chrome " +
-      "extension mode on :9224)."
-  );
+  // Nothing is running: getClient starts the standalone server
+  state.activeMode = "standalone";
+  return "standalone";
 }
 
 async function getClient(state: BrowserState): Promise<DevBrowserClient> {
   const mode = await resolveMode(state);
   let client = state.clients.get(mode);
   if (!client) {
-    client = await connect({ mode, session: state.session });
+    if (mode === "standalone" && !(await probeHealth("standalone"))) await ensureStandaloneServer();
+    client = await connect(`http://127.0.0.1:${serverPort(mode)}`, {
+      mode,
+      session: state.session,
+    });
     state.clients.set(mode, client);
   }
   return client;
@@ -834,11 +860,15 @@ export function buildServer(state: BrowserState): McpServer {
     { mode: z.enum(["standalone", "extension"]) },
     async (args) => {
       const mode = args.mode as BrowserMode;
-      const health = await probeHealth(mode);
+      let health = await probeHealth(mode);
+      if (!health && mode === "standalone") {
+        await ensureStandaloneServer();
+        health = await probeHealth(mode);
+      }
       if (!health) {
         throw new Error(
-          `No ${mode} server reachable on :${PORTS[mode]}. Start it with ` +
-            `\`dev-browser ${mode === "extension" ? "relay" : "serve"}\`.`
+          `No ${mode} server reachable on :${serverPort(mode)}. Start it with ` +
+            `\`dev-browser start ${mode === "extension" ? "relay" : "serve"}\`.`
         );
       }
       state.forcedMode = mode;

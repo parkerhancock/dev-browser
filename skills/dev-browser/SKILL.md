@@ -3,24 +3,6 @@ name: dev-browser
 description: Browser automation with persistent page state. Use when users ask to navigate websites, fill forms, take screenshots, generate PDFs, extract web data, test web apps, or automate browser workflows. Trigger phrases include "go to [url]", "click on", "fill out the form", "take a screenshot", "save as PDF", "scrape", "automate", "test the website", "log into", or any browser interaction request.
 ---
 
-<!--
-TODO: Move session ID hook back to frontmatter when fixed
-======================================================
-Skill-scoped hooks in SKILL.md frontmatter don't work (Claude Code bug).
-Tracking: https://github.com/anthropics/claude-code/issues/17688
-
-When resolved, restore this frontmatter and remove from ~/.claude/settings.json:
-
-hooks:
-  PreToolUse:
-    - matcher: Bash
-      hooks:
-        - type: command
-          command: "$HOME/.claude/skills/dev-browser/scripts/inject-session-id.sh"
-
-Current workaround: Hook is in ~/.claude/settings.json (global PreToolUse)
--->
-
 # Dev Browser Skill
 
 Browser automation that maintains page state across script executions. Write small, focused scripts to accomplish tasks incrementally. Once you've proven out part of a workflow and there is repeated work to be done, you can write a script to do the repeated work in a single execution.
@@ -88,13 +70,13 @@ if (!info.extensionConnected) {
 
 **Password managers block the debugger.** When a field gets focus, a password manager such as 1Password can show its inline menu in a frame inside the page. While another extension's frame is in the page, Chrome detaches dev-browser's debugger and refuses its commands ("Cannot access a chrome-extension:// URL of different extension"). The extension reattaches as soon as Chrome lets it, but commands on that tab fail until the menu closes. Close the menu (press Escape in the browser, or click elsewhere), fill those fields in standalone mode, or, on pages you control, add `data-1p-ignore` to fields 1Password shouldn't decorate.
 
-**Automatic session persistence:** The skill includes a SessionStart hook that exposes `CLAUDE_SESSION_ID` as an environment variable. When running in Claude Code:
+**Automatic session persistence:** Claude Code gives every session a `CLAUDE_CODE_SESSION_ID`, and `connect()` uses it (or `CLAUDE_SESSION_ID`, if something sets that) as the session. When running in Claude Code:
 
 - Pages automatically persist across script executions within the same session
 - Each Claude Code session gets its own isolated page namespace
 - No explicit session ID needed - just call `connect()` and pages will persist
 
-**Multi-agent support:** Multiple Claude Code instances can safely share the same server. Each session is automatically isolated via `CLAUDE_SESSION_ID`. To share pages between agents, use an explicit session:
+**Multi-agent support:** Multiple Claude Code instances can safely share the same server. Each session is automatically isolated by its session ID. To share pages between agents, use an explicit session:
 
 ```typescript
 const client = await connect({ mode: "extension", session: "shared-workspace" });
@@ -135,7 +117,7 @@ From a script, `fetchPage(client, url, options)` in `@/fetch.js` and `httpFetch(
 
 | Type                                        | Pages persist? | When to use                                            |
 | ------------------------------------------- | -------------- | ------------------------------------------------------ |
-| **Automatic** (`CLAUDE_SESSION_ID` set)     | Yes            | Default in Claude Code - pages survive across scripts  |
+| **Automatic** (agent session ID set)        | Yes            | Default in Claude Code - pages survive across scripts  |
 | **Explicit** (`session: "name"`)            | Yes            | Share pages between agents or name your workspace      |
 | **Ephemeral** (`ephemeral: true`)           | No             | Quick one-off lookups that shouldn't leave tabs behind |
 | **Auto-generated** (no session, no env var) | No             | Standalone scripts outside Claude Code                 |
@@ -358,9 +340,9 @@ dev-browser restart [relay|serve|mcp]  # stop, then start (default: relay)
 dev-browser status [--json]            # each server's port, pid, and state
 ```
 
-`--mcp` mounts the MCP streamable-HTTP endpoint at `/mcp` on the same port, behind the server's token auth, so one process serves both the library HTTP API and MCP. Over HTTP, each MCP connection gets its own dev-browser session (`mcp-<id>`), the HTTP equivalent of the per-conversation isolation `CLAUDE_SESSION_ID` gives stdio.
+`--mcp` mounts the MCP streamable-HTTP endpoint at `/mcp` on the same port, behind the server's token auth, so one process serves both the library HTTP API and MCP. Over HTTP, each MCP connection gets its own dev-browser session (`mcp-<id>`), the HTTP equivalent of the per-conversation isolation the session ID gives stdio; an `X-DevBrowser-Session` header on the initialize request pins a session instead. `dev-browser mcp --http PORT` listens on 127.0.0.1, requires the token like the servers, and rejects requests from web pages.
 
-Run it from `mcp-server/` with `node bin/dev-browser.mjs <cmd>` (or install the package to get the `dev-browser` bin). The MCP server auto-detects the mode: extension relay first (if its extension is connected), standalone otherwise; `switch_browser` changes it at runtime. The session defaults to `CLAUDE_SESSION_ID` for per-conversation isolation.
+Run it from `mcp-server/` with `node bin/dev-browser.mjs <cmd>` (or install the package to get the `dev-browser` bin). The MCP server auto-detects the mode: extension relay first (if its extension is connected), standalone otherwise; `switch_browser` changes it at runtime. The session defaults to `CLAUDE_SESSION_ID`, then `CLAUDE_CODE_SESSION_ID`, for per-conversation isolation. If no server is running when a tool needs one, the MCP server starts the standalone server in the background (headless, profile in `~/.dev-browser`), and `switch_browser` to standalone does the same.
 
 Vendor tool → dev-browser mapping (every MCP tool is a thin wrapper over the client API, which stays the engine):
 

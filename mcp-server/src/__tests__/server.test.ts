@@ -11,6 +11,17 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { buildServer, createState, type BrowserState } from "../server.js";
 import type { DevBrowserClient } from "../../../skills/dev-browser/src/client.js";
+import { start } from "../daemon.js";
+
+// Never launch a real background server from these tests: the MCP server
+// starts the standalone server on demand, and these run against the
+// machine's real ~/.dev-browser and ports
+vi.mock("../daemon.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../daemon.js")>()),
+  start: vi.fn(async () => {
+    throw new Error("background start refused in tests");
+  }),
+}));
 
 async function connectedClient(
   state: BrowserState = createState({ session: "mcp-test" })
@@ -90,7 +101,7 @@ describe("dev-browser MCP server", () => {
     expect(parsed).toHaveProperty("extension");
   });
 
-  test("tools report errors instead of throwing when no browser is running", async () => {
+  test("with no server running, tools try to start the standalone server and report failure", async () => {
     // Fail the health probes so this can't reach a server running on this
     // machine, where navigate would open a real tab.
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("connection refused")));
@@ -100,8 +111,9 @@ describe("dev-browser MCP server", () => {
       arguments: { url: "https://example.com" },
     });
     expect(result.isError).toBe(true);
+    expect(start).toHaveBeenCalledWith("serve");
     const content = result.content as Array<{ type: string; text: string }>;
-    expect(content[0]!.text).toContain("No dev-browser server is running");
+    expect(content[0]!.text).toContain("starting the standalone server failed");
   });
 
   test("javascript evaluates in REPL mode so top-level await works", async () => {

@@ -10,7 +10,16 @@
  */
 
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, openSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import {
+  closeSync,
+  existsSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { connect as tcpConnect } from "node:net";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -20,7 +29,18 @@ export type ServiceName = "relay" | "serve" | "mcp";
 
 export const SERVICE_NAMES: ServiceName[] = ["relay", "serve", "mcp"];
 
-export const DEFAULT_PORTS: Record<ServiceName, number> = { relay: 9224, serve: 9222, mcp: 9225 };
+const PORT_DEFAULTS: Record<ServiceName, { env: string; port: number }> = {
+  relay: { env: "DEV_BROWSER_RELAY_PORT", port: 9224 },
+  serve: { env: "DEV_BROWSER_SERVE_PORT", port: 9222 },
+  mcp: { env: "DEV_BROWSER_MCP_PORT", port: 9225 },
+};
+
+/** A server's port: its DEV_BROWSER_*_PORT variable, or the standard port. */
+export function defaultPort(name: ServiceName): number {
+  const { env, port } = PORT_DEFAULTS[name];
+  const fromEnv = Number(process.env[env]);
+  return Number.isInteger(fromEnv) && fromEnv > 0 && fromEnv < 65536 ? fromEnv : port;
+}
 
 const DESCRIPTIONS: Record<ServiceName, string> = {
   relay: "extension relay",
@@ -107,12 +127,16 @@ function readPid(name: ServiceName): number | undefined {
   }
 }
 
-function removePidFile(name: ServiceName): void {
+function removeFile(path: string): void {
   try {
-    unlinkSync(pidFile(name));
+    unlinkSync(path);
   } catch {
     // Already gone
   }
+}
+
+function removePidFile(name: ServiceName): void {
+  removeFile(pidFile(name));
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -121,7 +145,7 @@ export async function status(
   name: ServiceName,
   options: ServiceOptions = {}
 ): Promise<ServiceStatus> {
-  const port = options.port ?? DEFAULT_PORTS[name];
+  const port = options.port ?? defaultPort(name);
   const pid = readPid(name);
   const alive = pid !== undefined && isAlive(pid);
   return {
@@ -139,7 +163,45 @@ export async function start(
   name: ServiceName,
   options: ServiceOptions = {}
 ): Promise<ServiceStatus & { started: boolean }> {
-  const port = options.port ?? DEFAULT_PORTS[name];
+  const timeoutMs = options.timeoutMs ?? 60000;
+  // One starter at a time per server, across processes: a second caller
+  // waits, then finds the first one's server answering
+  const lock = join(devBrowserDir(), `${name}.starting`);
+  mkdirSync(devBrowserDir(), { recursive: true });
+  const lockDeadline = Date.now() + timeoutMs + 10000;
+  for (;;) {
+    try {
+      closeSync(openSync(lock, "wx"));
+      break;
+    } catch {
+      let age = 0;
+      try {
+        age = Date.now() - statSync(lock).mtimeMs;
+      } catch {
+        continue; // Released between our attempt and the check
+      }
+      if (age > timeoutMs + 10000 || Date.now() > lockDeadline) {
+        removeFile(lock); // A starter that died
+        continue;
+      }
+      if (await portAnswers(options.port ?? defaultPort(name), 300)) {
+        return { ...(await status(name, options)), started: false };
+      }
+      await sleep(300);
+    }
+  }
+  try {
+    return await startUnlocked(name, options);
+  } finally {
+    removeFile(lock);
+  }
+}
+
+async function startUnlocked(
+  name: ServiceName,
+  options: ServiceOptions
+): Promise<ServiceStatus & { started: boolean }> {
+  const port = options.port ?? defaultPort(name);
   const current = await status(name, options);
   if (current.running) return { ...current, started: false };
   if (!current.managed) removePidFile(name);
@@ -182,7 +244,7 @@ export type StopResult = "stopped" | "not running" | "not managed";
  * pid file is reported as "not managed" and left alone.
  */
 export async function stop(name: ServiceName, options: ServiceOptions = {}): Promise<StopResult> {
-  const port = options.port ?? DEFAULT_PORTS[name];
+  const port = options.port ?? defaultPort(name);
   const pid = readPid(name);
   if (pid === undefined || !isAlive(pid)) {
     removePidFile(name);

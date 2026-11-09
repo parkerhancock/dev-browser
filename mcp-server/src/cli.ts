@@ -22,9 +22,9 @@ import { parseArgs } from "node:util";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { createServer as createHttpServer } from "node:http";
 import { buildServer, createState, type BrowserMode } from "./server.js";
-import { createMcpNodeHandler } from "./http.js";
+import { checkMcpRequest, createMcpNodeHandler } from "./http.js";
 import {
-  DEFAULT_PORTS,
+  defaultPort,
   SERVICE_NAMES,
   start,
   status,
@@ -48,7 +48,7 @@ function usage(): never {
       "  relay      Start the Chrome-extension relay (:9224)",
       "             --port N, --mcp (mount MCP at /mcp)",
       "  mcp        Start the MCP server (stdio by default)",
-      "             --http PORT (streamable HTTP), --mode standalone|extension, --session ID",
+      "             --http PORT (streamable HTTP on 127.0.0.1, token required), --mode standalone|extension, --session ID",
       "  browsers   Show which dev-browser servers are reachable",
       "",
       "Background servers (relay :9224, serve :9222, mcp :9225; logs and pids in ~/.dev-browser):",
@@ -136,7 +136,15 @@ async function main(): Promise<void> {
           mode: values.mode as BrowserMode | undefined,
           session: values.session,
         });
+        const { loadOrCreateToken } = await import("../../skills/dev-browser/src/auth.js");
+        const token = loadOrCreateToken();
         const httpServer = createHttpServer((req, res) => {
+          const refusal = checkMcpRequest(req, token);
+          if (refusal) {
+            res.writeHead(refusal.status, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ error: refusal.message }));
+            return;
+          }
           void handler(req, res);
         });
         httpServer.listen(port, "127.0.0.1", () => {
@@ -238,7 +246,7 @@ async function background(
 
   let failed = false;
   for (const name of names) {
-    const port = options.port ?? DEFAULT_PORTS[name];
+    const port = options.port ?? defaultPort(name);
     if (command === "stop" || command === "restart") {
       const result = await stop(name, options);
       if (command === "stop" || result !== "not running") {

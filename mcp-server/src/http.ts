@@ -9,7 +9,9 @@
  * Stateful: each MCP initialize creates its own transport + MCP server with
  * its own dev-browser session (`mcp-<id>`), so concurrent agents sharing one
  * endpoint keep separate page namespaces — the HTTP equivalent of what
- * CLAUDE_SESSION_ID gives each stdio process.
+ * CLAUDE_SESSION_ID gives each stdio process. An initialize request carrying
+ * X-DevBrowser-Session pins that session instead, so a client (the plugin's
+ * stdio shim) can keep one agent session's pages across connections.
  */
 
 import { randomUUID } from "node:crypto";
@@ -17,6 +19,38 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { buildServer, createState, type BrowserMode } from "./server.js";
+import { TOKEN_HEADER, tokensMatch } from "../../skills/dev-browser/src/auth.js";
+
+export const SESSION_HEADER = "x-devbrowser-session";
+const VALID_SESSION = /^[A-Za-z0-9._:-]{1,128}$/;
+
+/**
+ * Auth for a standalone MCP endpoint (`dev-browser mcp --http`), matching the
+ * relay: reject web pages by Origin (a page can send simple cross-site POSTs
+ * to loopback), then require the shared token in X-DevBrowser-Token or
+ * ?token=. Returns the refusal, or null to allow.
+ */
+export function checkMcpRequest(
+  req: IncomingMessage,
+  token: string
+): { status: number; message: string } | null {
+  const origin = req.headers.origin;
+  if (origin && /^https?:\/\//i.test(origin)) {
+    return {
+      status: 403,
+      message: "Forbidden: web origins may not use the dev-browser MCP endpoint",
+    };
+  }
+  const header = req.headers[TOKEN_HEADER.toLowerCase()];
+  const fromQuery = new URL(req.url ?? "/", "http://127.0.0.1").searchParams.get("token");
+  const candidate = (Array.isArray(header) ? header[0] : header) ?? fromQuery ?? undefined;
+  if (candidate && tokensMatch(candidate, token)) return null;
+  return {
+    status: 401,
+    message:
+      "Unauthorized: missing or invalid X-DevBrowser-Token (read it from ~/.dev-browser/token)",
+  };
+}
 
 export interface McpHttpOptions {
   /** Force a browser mode; default probes extension then standalone. */
@@ -87,10 +121,21 @@ export function createMcpNodeHandler(options: McpHttpOptions = {}): McpNodeHandl
         return;
       }
 
+      const pinned = req.headers[SESSION_HEADER];
+      const requested = Array.isArray(pinned) ? pinned[0] : pinned;
+      if (requested !== undefined && !VALID_SESSION.test(requested)) {
+        jsonError(
+          res,
+          400,
+          "Invalid X-DevBrowser-Session: use 1-128 letters, digits, '.', '_', ':', or '-'"
+        );
+        return;
+      }
+
       const newSid = randomUUID();
       const state = createState({
         mode: options.mode,
-        session: options.session ?? `mcp-${newSid.slice(0, 8)}`,
+        session: options.session ?? requested ?? `mcp-${newSid.slice(0, 8)}`,
       });
       const server = buildServer(state);
       const transport = new StreamableHTTPServerTransport({

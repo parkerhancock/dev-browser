@@ -42,6 +42,30 @@ describe("Remote-ready standalone server", () => {
     await server.stop();
   });
 
+  test("the session falls back to Claude Code's own session ID", async () => {
+    const saved = { a: process.env.CLAUDE_SESSION_ID, b: process.env.CLAUDE_CODE_SESSION_ID };
+    try {
+      delete process.env.CLAUDE_SESSION_ID;
+      process.env.CLAUDE_CODE_SESSION_ID = "from-claude-code";
+      const fallback = await connect(`http://127.0.0.1:${port}`, { token: loadToken()! });
+      expect(fallback.getSession()).toBe("from-claude-code");
+      await fallback.disconnect();
+
+      process.env.CLAUDE_SESSION_ID = "from-hook";
+      const preferred = await connect(`http://127.0.0.1:${port}`, { token: loadToken()! });
+      expect(preferred.getSession()).toBe("from-hook");
+      await preferred.disconnect();
+    } finally {
+      for (const [key, value] of [
+        ["CLAUDE_SESSION_ID", saved.a],
+        ["CLAUDE_CODE_SESSION_ID", saved.b],
+      ] as const) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
+
   test("rejects requests without the token", async () => {
     const res = await fetch(`http://127.0.0.1:${port}/health`);
     expect(res.status).toBe(401);
