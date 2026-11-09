@@ -42,3 +42,6 @@ profiles/
 # WXT generated files
 .wxt/
 .output/
+
+# Stray scratch scripts (write them under tmp/ instead)
+skills/dev-browser/tmp-*
