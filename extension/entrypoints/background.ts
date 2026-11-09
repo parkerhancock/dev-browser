@@ -88,7 +88,7 @@ export default defineBackground(() => {
     if (!tabId) return;
 
     logger.debug(`Debugger detached for tab ${tabId}: ${reason}`);
-    tabManager.handleDebuggerDetach(tabId);
+    void tabManager.handleDebuggerDetach(tabId, reason);
   }
 
   // Handle messages from popup

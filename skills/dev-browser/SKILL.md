@@ -85,6 +85,8 @@ if (!info.extensionConnected) {
 }
 ```
 
+**Password managers block the debugger.** When a field gets focus, a password manager such as 1Password can show its inline menu in a frame inside the page. While another extension's frame is in the page, Chrome detaches dev-browser's debugger and refuses its commands ("Cannot access a chrome-extension:// URL of different extension"). The extension reattaches as soon as Chrome lets it, but commands on that tab fail until the menu closes. Close the menu (press Escape in the browser, or click elsewhere), fill those fields in standalone mode, or, on pages you control, add `data-1p-ignore` to fields 1Password shouldn't decorate.
+
 **Automatic session persistence:** The skill includes a SessionStart hook that exposes `CLAUDE_SESSION_ID` as an environment variable. When running in Claude Code:
 - Pages automatically persist across script executions within the same session
 - Each Claude Code session gets its own isolated page namespace

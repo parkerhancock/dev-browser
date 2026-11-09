@@ -28,6 +28,7 @@ export class TabManager {
   private tabs = new Map<number, TabInfo>();
   private childSessions = new Map<string, number>(); // sessionId -> parentTabId
   private attachingTabs = new Set<number>(); // Guard against concurrent attach
+  private reattaches = new Map<number, number[]>(); // tabId -> recent reattach times
   private nextSessionId = 1;
   private logger: Logger;
   private sendMessage: SendMessageFn;
@@ -219,8 +220,36 @@ export class TabManager {
   /**
    * Handle debugger detach event from Chrome.
    */
-  handleDebuggerDetach(tabId: number): void {
+  async handleDebuggerDetach(tabId: number, reason?: string): Promise<void> {
+    const wasTracked = this.tabs.has(tabId);
     this.removeTab(tabId);
+
+    // Chrome also reports target_closed when it drops the debugger from a tab
+    // that stays open, for example after another extension (a password
+    // manager's inline menu) injects a frame into the page. Reattach, and the
+    // relay hands the named page to the new session (it waits 500 ms for one).
+    if (!wasTracked || reason !== "target_closed" || !this.mayReattach(tabId)) return;
+    try {
+      await chrome.tabs.get(tabId);
+    } catch {
+      return; // The tab really closed
+    }
+    try {
+      await this.attach(tabId);
+      this.logger.log("Reattached debugger to tab:", tabId);
+    } catch (err) {
+      this.logger.debug("Could not reattach debugger to tab:", tabId, err);
+    }
+  }
+
+  /** At most three reattaches per tab in 30 s, so a page that keeps evicting the debugger can't loop. */
+  private mayReattach(tabId: number): boolean {
+    const now = Date.now();
+    const recent = (this.reattaches.get(tabId) ?? []).filter((t) => now - t < 30000);
+    if (recent.length >= 3) return false;
+    recent.push(now);
+    this.reattaches.set(tabId, recent);
+    return true;
   }
 
   /**

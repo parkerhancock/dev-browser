@@ -143,6 +143,56 @@ describe("TabManager", () => {
     });
   });
 
+  describe("handleDebuggerDetach", () => {
+    const track = () =>
+      tabManager.set(123, { sessionId: "session-1", targetId: "target-1", state: "connected" });
+
+    it("reattaches when Chrome drops the debugger from a tab that is still open", async () => {
+      vi.stubGlobal("chrome", { tabs: { get: vi.fn().mockResolvedValue({ id: 123 }) } });
+      const attach = vi.spyOn(tabManager, "attach").mockResolvedValue({} as never);
+      track();
+
+      await tabManager.handleDebuggerDetach(123, "target_closed");
+
+      expect(mockSendMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ params: expect.objectContaining({ method: "Target.detachedFromTarget" }) })
+      );
+      expect(attach).toHaveBeenCalledWith(123);
+    });
+
+    it("doesn't reattach when the tab really closed", async () => {
+      vi.stubGlobal("chrome", { tabs: { get: vi.fn().mockRejectedValue(new Error("No tab")) } });
+      const attach = vi.spyOn(tabManager, "attach").mockResolvedValue({} as never);
+      track();
+
+      await tabManager.handleDebuggerDetach(123, "target_closed");
+
+      expect(attach).not.toHaveBeenCalled();
+      expect(tabManager.has(123)).toBe(false);
+    });
+
+    it("doesn't reattach after the user cancels debugging or for tabs it never tracked", async () => {
+      vi.stubGlobal("chrome", { tabs: { get: vi.fn().mockResolvedValue({ id: 123 }) } });
+      const attach = vi.spyOn(tabManager, "attach").mockResolvedValue({} as never);
+      track();
+      await tabManager.handleDebuggerDetach(123, "canceled_by_user");
+      await tabManager.handleDebuggerDetach(456, "target_closed");
+
+      expect(attach).not.toHaveBeenCalled();
+    });
+
+    it("stops after three reattaches in 30 seconds", async () => {
+      vi.stubGlobal("chrome", { tabs: { get: vi.fn().mockResolvedValue({ id: 123 }) } });
+      const attach = vi.spyOn(tabManager, "attach").mockResolvedValue({} as never);
+      for (let i = 0; i < 5; i++) {
+        track();
+        await tabManager.handleDebuggerDetach(123, "target_closed");
+      }
+
+      expect(attach).toHaveBeenCalledTimes(3);
+    });
+  });
+
   describe("clear", () => {
     it("should clear all tabs and child sessions", () => {
       tabManager.set(1, { state: "connected" });
