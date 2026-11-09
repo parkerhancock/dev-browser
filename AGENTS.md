@@ -48,7 +48,12 @@ All source code lives in `skills/dev-browser/`:
 - `src/index.ts` - Server: launches persistent Chromium context, exposes HTTP API for page management
 - `src/relay.ts` - Relay server for extension mode: bridges Chrome extension to Playwright clients
 - `src/relay-registry.ts` - Target registry: manages page/session/target lifecycle state (4 Maps, explicit state machine)
-- `src/client.ts` - Client: connects to server, retrieves pages by name via CDP
+- `src/client.ts` - Client: `connect()` and the public client types; picks a mode and re-exports the helpers below
+- `src/client/standalone.ts` - Standalone client: Playwright connected over CDP to the server
+- `src/client/extension.ts` - Extension client: HTTP RPC to the relay, pages are `CDPPage`
+- `src/client/shared.ts` - Helpers both clients use (server HTTP calls, text/Markdown, find, origin state, downloads)
+- `src/client/navigation.ts` - `waitForPageLoad()` and `navigateTo()`
+- `src/client/archive.ts` - `saveWacz()` and `saveArchive()`
 - `src/page.ts` - Unified `Page`, `Locator`, `Keyboard`, `Mouse` interfaces (Playwright-compatible subset)
 - `src/cdp-page.ts` - `CDPPage` implementation: full Page interface via CDP over HTTP RPC (extension mode)
 - `src/cdp-helpers.ts` - Key code mapping, element coordinate resolution, modifier bitmask utilities
