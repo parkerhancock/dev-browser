@@ -109,7 +109,7 @@ beforeAll(async () => {
   mcp = new Client({ name: "live-test", version: "0.0.1" });
   await mcp.connect(clientTransport);
   await call("navigate", { url: `${origin}/form` });
-});
+}, 60000); // Launching Chromium can pass the 10 s default while other test files run
 
 afterAll(async () => {
   for (const s of previews?.list() ?? []) await previews.stop(s.id);
