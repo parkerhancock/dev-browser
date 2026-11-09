@@ -252,8 +252,9 @@ already uses with its loopback MCP server.
 - T4 (R1, R2, R9, R12, R13, A1). Add `satchel.yaml`, `.mcp.json`, the Claude
   hook, and the setup command. Generate outputs, replacing the upstream
   `marketplace.json`. **Done 2026-11-09.** Notes:
-  agents are left undeclared because Satchel 0.4.0 writes `"agents": "./agents/"`,
-  which `claude plugin validate` rejects; Claude finds `agents/` by default. The
+  agents were briefly undeclared because Satchel wrote `"agents": "./agents/"`,
+  which `claude plugin validate` rejects; fixed in Satchel `c9a7dfe`, which
+  lists the `.md` files. The
   Claude marketplace uses a GitHub source so `satchel check --release` passes.
   Because `.mcp.json` sits at the repo root, Claude Code also offers it as a
   project MCP server in this repo. No plugin icon yet (a validator warning).

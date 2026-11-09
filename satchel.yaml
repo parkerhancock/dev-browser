@@ -20,9 +20,8 @@ keywords:
 components:
   skills:
     path: ./skills
-  # agents/ is left undeclared: Claude Code finds it by default, Codex has no
-  # agents, and Satchel's generated "agents": "./agents/" fails
-  # `claude plugin validate` (it wants .md file paths)
+  agents:
+    path: ./agents
   commands:
     path: ./commands
   mcp:

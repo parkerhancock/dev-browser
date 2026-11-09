@@ -22,5 +22,8 @@
   "skills": "./skills/",
   "commands": "./commands/",
   "hooks": "./hooks/hooks.json",
-  "mcpServers": "./.mcp.json"
+  "mcpServers": "./.mcp.json",
+  "agents": [
+    "./agents/webfetch.md"
+  ]
 }
