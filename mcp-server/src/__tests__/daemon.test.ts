@@ -58,6 +58,8 @@ describe("background servers", () => {
   test("serve starts a browser server, and stop takes the browser with it", async () => {
     const s = await start("serve", { port: ports.serve });
     expect(s.started).toBe(true);
+    // The profile lives in DEV_BROWSER_DIR, not the directory start ran from
+    expect(existsSync(join(process.env.DEV_BROWSER_DIR!, "browser-data"))).toBe(true);
     expect(await stop("serve", { port: ports.serve })).toBe("stopped");
     expect(await portAnswers(ports.serve)).toBe(false);
     expect(await portAnswers(ports.serve + 1)).toBe(false); // its CDP port closed too

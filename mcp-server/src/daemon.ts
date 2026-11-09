@@ -58,13 +58,16 @@ function commandArgs(name: ServiceName, port: number, options: ServiceOptions): 
     case "relay":
       return ["relay", "--port", String(port)];
     case "serve":
-      // CDP on the next port, so a second server on another port doesn't collide on 9223
+      // CDP on the next port, so a second server on another port doesn't collide
+      // on 9223, and one profile in ~/.dev-browser wherever start runs from
       return [
         "serve",
         "--port",
         String(port),
         "--cdp-port",
         String(port + 1),
+        "--profile-dir",
+        devBrowserDir(),
         ...(options.headed ? ["--headed"] : []),
       ];
     case "mcp":
