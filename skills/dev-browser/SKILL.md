@@ -42,13 +42,13 @@ Two modes available on different ports. **Both can run simultaneously** - useful
 
 ### Standalone Mode (Default)
 
-Launches a new Chromium browser for fresh automation sessions.
+Launches a new Chromium browser for fresh automation sessions. From this skill's directory:
 
 ```bash
-./skills/dev-browser/server.sh &
+node ../../mcp-server/bin/dev-browser.mjs start serve
 ```
 
-Add `--headless` flag if user requests it. **Wait for the `Ready` message before running scripts.**
+It runs in the background, headless by default; add `--headed` if the user wants to see the window. The command returns once the server answers, and running it again while it's up just reports "already running".
 
 ### Extension Mode
 
@@ -59,21 +59,22 @@ Connects to user's existing Chrome browser. Use this when:
 
 **Important**: The core flow is still the same. You create named pages inside of their browser. Use `connect({ mode: "extension" })` to connect.
 
-**Start the relay server:**
+**Start the relay server** (from this skill's directory):
 
 ```bash
-./skills/dev-browser/start.sh
+node ../../mcp-server/bin/dev-browser.mjs start relay
 ```
 
-The script is idempotent - safe to run multiple times. It starts the relay if not running, or confirms it's already running.
+It's safe to run more than once: it starts the relay in the background if it isn't running, or reports that it already is, and returns once the relay answers. If the extension hasn't connected yet, tell the user to launch and activate it. Download link: https://github.com/SawyerHood/dev-browser/releases
 
-Wait for `Relay ready` before running scripts. If the extension hasn't connected yet, tell the user to launch and activate it. Download link: https://github.com/SawyerHood/dev-browser/releases
-
-**Stop the relay (optional):**
+**Check or stop the servers (optional):**
 
 ```bash
-./skills/dev-browser/stop.sh
+node ../../mcp-server/bin/dev-browser.mjs status
+node ../../mcp-server/bin/dev-browser.mjs stop relay
 ```
+
+Background servers log to `~/.dev-browser/<name>.log` (`relay.log`, `serve.log`, `mcp.log`).
 
 **Verify extension is connected** before running scripts:
 
@@ -347,10 +348,14 @@ await page.mouse.wheel(0, 300); // Scroll down
 `mcp-server/` (repo root) packages the client as model-facing MCP tools and a single CLI:
 
 ```bash
-dev-browser serve     # standalone Chromium server on :9222 (--headed, --profile NAME, --browser chrome|msedge, --port, --host, --mcp)
+dev-browser serve     # standalone Chromium server on :9222 (--headed, --profile NAME, --browser chrome|msedge, --port, --cdp-port, --host, --mcp)
 dev-browser relay     # Chrome-extension relay on :9224 (--port, --mcp)
 dev-browser mcp       # MCP server on stdio (--http PORT for streamable HTTP, --mode, --session)
 dev-browser browsers  # show which servers are reachable
+dev-browser start [relay|serve|mcp]    # run in the background; idempotent (default: relay)
+dev-browser stop [relay|serve|mcp]     # stop what start launched (default: all)
+dev-browser restart [relay|serve|mcp]  # stop, then start (default: relay)
+dev-browser status [--json]            # each server's port, pid, and state
 ```
 
 `--mcp` mounts the MCP streamable-HTTP endpoint at `/mcp` on the same port, behind the server's token auth, so one process serves both the library HTTP API and MCP. Over HTTP, each MCP connection gets its own dev-browser session (`mcp-<id>`), the HTTP equivalent of the per-conversation isolation `CLAUDE_SESSION_ID` gives stdio.

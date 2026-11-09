@@ -239,7 +239,7 @@ already uses with its loopback MCP server.
 ## Tasks
 
 - T1 (R7, A6). CLI `start`, `stop`, `restart`, and `status`; retire the shell
-  scripts. Independent; can go first.
+  scripts. **Done 2026-11-09.**
 - T2 (R4, R5, R10, A4). Harden `mcp --http`, honor `X-DevBrowser-Session`, add
   on-demand standalone start, and add the `CLAUDE_CODE_SESSION_ID` fallback.
 - T3 (R3, A2). Write `mcp-shim.mjs` and a schema snapshot of the tools, with a

@@ -111,10 +111,10 @@ Multiple Claude Code instances can share the same relay server without conflicts
 **Start the shared relay:**
 
 ```bash
-./skills/dev-browser/start.sh
+node mcp-server/bin/dev-browser.mjs start relay
 ```
 
-The script is idempotent - run it from any Claude Code instance and it will either start the relay or confirm it's already running.
+It's idempotent: run it from any Claude Code instance and it either starts the relay in the background or reports that it's already running.
 
 **Session isolation:**
 
@@ -130,8 +130,10 @@ const client = await connect("http://localhost:9222", { session: "shared-workspa
 **Stop the relay:**
 
 ```bash
-./skills/dev-browser/stop.sh
+node mcp-server/bin/dev-browser.mjs stop relay
 ```
+
+`node mcp-server/bin/dev-browser.mjs status` shows every dev-browser server and whether `start` launched it.
 
 ## Permissions
 
