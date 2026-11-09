@@ -266,6 +266,15 @@ already uses with its loopback MCP server.
   caches; the shim against it handshook in 173 ms and drove the browser.
 - T6 (R11, A7). Add the extension release job and fix the download links. **Done 2026-11-09** (workflow
   steps simulated locally; the first real run happens on the first tag push).
+- T7 findings (2026-11-09): Codex ignores Satchel's `"source": "github"`
+  plugin entries (carrel is affected too), so the Codex marketplace uses a
+  `url` Git source; and Codex neither sets a working directory nor exports
+  `PLUGIN_ROOT` to MCP servers, so `.mcp.json` sets `"cwd": "./"`. Claude
+  Code ignores that and the loader reads `CLAUDE_PLUGIN_ROOT`. Both verified:
+  Claude Code connects (27 tools, agent `dev-browser:webfetch`, command
+  `/dev-browser:setup`), and Codex ran `preview_list` through the plugin.
+  `claude plugin details` reports Agents (0) even so; a session's init event
+  lists the agent.
 - T7. Move this Mac over:
   1. install the plugin in Claude Code and Codex;
   2. run setup with `--link` to the checkout;

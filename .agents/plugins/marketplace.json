@@ -7,9 +7,8 @@
     {
       "name": "dev-browser",
       "source": {
-        "source": "github",
-        "repo": "parkerhancock/dev-browser",
-        "ref": "main"
+        "source": "url",
+        "url": "https://github.com/parkerhancock/dev-browser.git"
       },
       "policy": {
         "installation": "AVAILABLE",

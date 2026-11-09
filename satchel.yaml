@@ -50,10 +50,10 @@ targets:
       path: ./.agents/plugins/marketplace.json
       name: dev-browser
       displayName: Dev Browser
+      # Codex ignores "github" plugin sources; it takes a Git URL
       source:
-        source: github
-        repo: parkerhancock/dev-browser
-        ref: main
+        source: url
+        url: https://github.com/parkerhancock/dev-browser.git
       category: Developer Tools
       installation: AVAILABLE
       authentication: ON_INSTALL
