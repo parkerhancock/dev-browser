@@ -49,7 +49,7 @@ Connects to user's existing Chrome browser. Use this when:
 ~/.dev-browser/bin/dev-browser start relay
 ```
 
-It's safe to run more than once: it starts the relay in the background if it isn't running, or reports that it already is, and returns once the relay answers. If the extension hasn't connected yet, tell the user to launch and activate it. Download link: https://github.com/SawyerHood/dev-browser/releases
+It's safe to run more than once: it starts the relay in the background if it isn't running, or reports that it already is, and returns once the relay answers. If the extension hasn't connected yet, tell the user to launch and activate it. Download `dev-browser-extension-<version>.zip` from https://github.com/parkerhancock/dev-browser/releases, unzip it, and load the folder with "Load unpacked" in chrome://extensions (Developer mode on).
 
 **Check or stop the servers (optional):**
 

@@ -71,7 +71,7 @@ The Chrome extension allows Dev Browser to control your existing Chrome browser 
 
 **Installation:**
 
-1. Download the extension zip from the [latest release](https://github.com/parkerhancock/dev-browser/releases/latest)
+1. Download `dev-browser-extension-<version>.zip` from the [latest release](https://github.com/parkerhancock/dev-browser/releases/latest)
 2. Unzip the file to a permanent location (e.g., `~/.dev-browser-extension`)
 3. Open Chrome and go to `chrome://extensions`
 4. Enable "Developer mode" (toggle in top right)

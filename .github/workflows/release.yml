@@ -1,0 +1,61 @@
+name: Release
+
+# Push a tag matching the plugin version (v0.1.0 for satchel.yaml's 0.1.0) to
+# publish a GitHub release with the Chrome extension attached. Users unzip it
+# and load the folder unpacked in chrome://extensions.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  extension:
+    name: Extension release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Check the tag matches the plugin version
+        id: version
+        run: |
+          version=$(node -p "require('./.claude-plugin/plugin.json').version")
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "Tag $GITHUB_REF_NAME doesn't match the plugin version $version (satchel.yaml)"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Install dependencies
+        working-directory: extension
+        run: npm ci
+
+      - name: Test
+        working-directory: extension
+        run: npm run test:run
+
+      - name: Build and zip
+        working-directory: extension
+        run: |
+          npm run build
+          # manifest.json at the top of the zip, so the unzipped folder loads as is
+          (cd .output/chrome-mv3 && zip -r "$GITHUB_WORKSPACE/dev-browser-extension-${{ steps.version.outputs.version }}.zip" .)
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ZIP: dev-browser-extension-${{ steps.version.outputs.version }}.zip
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" "$ZIP" --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" "$ZIP" --title "dev-browser $GITHUB_REF_NAME" --generate-notes
+          fi

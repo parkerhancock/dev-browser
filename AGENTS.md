@@ -87,6 +87,7 @@ Outside the skill, at the repo root:
 - `.mcp.json` - The plugin's MCP server: a `node -e` loader that runs `mcp-shim.mjs` from `CLAUDE_PLUGIN_ROOT` or `PLUGIN_ROOT` (or the working directory), so one file works under both hosts
 - `scripts/setup.mjs` - Dependency-free setup: copies the runtime to `~/.dev-browser/app/<version>` (or `--link`s a checkout), installs dependencies and the browser, writes `~/.dev-browser/bin/dev-browser`, optional login item (`--service`), `--update`, `--uninstall [--purge]`. Tests set `DEV_BROWSER_SETUP_DRY=1`
 - `commands/setup.md` - `/dev-browser:setup` (Claude Code)
+- `.github/workflows/release.yml` - On a `v<version>` tag matching `satchel.yaml`'s version, builds the extension and attaches `dev-browser-extension-<version>.zip` to the GitHub release
 - `hooks/session-start.mjs` - Reruns setup in the background when the plugin's version and the installed runtime's differ
 
 ### Path Aliases

@@ -264,7 +264,8 @@ already uses with its loopback MCP server.
   Repoint the docs and the agent to `~/.dev-browser/app/current`. **Done 2026-11-09.** A real
   copied install into a temporary folder took 9 s with warm npm and browser
   caches; the shim against it handshook in 173 ms and drove the browser.
-- T6 (R11, A7). Add the extension release job and fix the download links.
+- T6 (R11, A7). Add the extension release job and fix the download links. **Done 2026-11-09** (workflow
+  steps simulated locally; the first real run happens on the first tag push).
 - T7. Move this Mac over:
   1. install the plugin in Claude Code and Codex;
   2. run setup with `--link` to the checkout;
