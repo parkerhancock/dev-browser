@@ -493,6 +493,12 @@ function isLink(path) {
 
 export async function main(argv = process.argv.slice(2)) {
   const options = parseArgs(argv);
+  const major = Number(process.versions.node.split(".")[0]);
+  if (major < 22 && !options.uninstall) {
+    throw new Error(
+      `dev-browser needs Node.js 22 or later (it uses Node's built-in WebSocket); this is ${process.version}.`
+    );
+  }
   if (options.help) {
     console.log(
       readFileSync(fileURLToPath(import.meta.url), "utf8")

@@ -238,11 +238,15 @@ describe.each(["standalone", "extension"] as const)("computer tool (%s)", (mode)
     expect(await pw.inputValue("#area")).toBe("ab");
   });
 
-  test("cmd+a selects the field", async () => {
+  test("the platform's select-all shortcut selects the field", async () => {
     await open();
     await computerAction(page, { action: "left_click", coordinate: [350, 110] });
     await computerAction(page, { action: "type", text: "abc" });
-    await computerAction(page, { action: "key", text: "cmd+a" });
+    // Cmd+A on macOS, Ctrl+A elsewhere (Chrome on Linux ignores Cmd+A)
+    await computerAction(page, {
+      action: "key",
+      text: process.platform === "darwin" ? "cmd+a" : "ctrl+a",
+    });
     const selected = await pw.evaluate(() => {
       const area = document.getElementById("area");
       return area.value.slice(area.selectionStart, area.selectionEnd);

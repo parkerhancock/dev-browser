@@ -43,7 +43,7 @@ For maximum stealth (real browser fingerprint, existing cookies), install the Ch
 ## Prerequisites
 
 - [Claude Code](https://docs.anthropic.com/en/docs/claude-code) or Codex
-- [Node.js](https://nodejs.org) 20 or later with npm
+- [Node.js](https://nodejs.org) 22 or later with npm (dev-browser uses Node's built-in WebSocket)
 - macOS or Linux
 
 ## Installation
