@@ -188,6 +188,12 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
   // Read-only Map references for lookups (mutations go through registry methods)
   const { targets: connectedTargets, namedPages, sessions } = registry;
   const childTargets = new Map<string, ChildTarget>();
+  /**
+   * Per-session handling for the next "Leave site?" (beforeunload) dialogs,
+   * set by DevBrowser.setBeforeUnloadPolicy around a navigation. Without an
+   * entry, beforeunload follows the dialog policy like any other dialog.
+   */
+  const beforeUnloadPolicies = new Map<string, { accept: boolean; until: number; dialogs: number }>();
   // Waiters for target attachment (event-driven replacement for sleep after createTarget)
   const pendingTargetWaiters = new Map<string, { resolve: () => void }>();
   let extensionWs: WSContext | null = null;
@@ -577,6 +583,21 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
 
       case "Target.setDiscoverTargets":
         return {};
+
+      case "DevBrowser.setBeforeUnloadPolicy": {
+        // Accept or dismiss "Leave site?" dialogs for the next 30 s
+        if (!sessionId) return {};
+        beforeUnloadPolicies.set(sessionId, { accept: params?.accept === true, until: Date.now() + 30000, dialogs: 0 });
+        return {};
+      }
+
+      case "DevBrowser.takeBeforeUnloadDialogs": {
+        // How many "Leave site?" dialogs appeared since setBeforeUnloadPolicy; clears the policy
+        if (!sessionId) return { dialogs: 0 };
+        const entry = beforeUnloadPolicies.get(sessionId);
+        beforeUnloadPolicies.delete(sessionId);
+        return { dialogs: entry?.dialogs ?? 0 };
+      }
 
       case "DevBrowser.getChildTargets": {
         if (!sessionId) return { targetInfos: [] };
@@ -2247,17 +2268,20 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
 
             } else if (method === "Page.javascriptDialogOpening") {
               // Auto-handle JS dialogs so they never wedge automation
-              if (dialogPolicy !== "ignore" && sessionId) {
-                const dialogParams = params as { message?: string; type?: string };
-                log(
-                  `Auto-${dialogPolicy === "accept" ? "accepting" : "dismissing"} ${dialogParams.type ?? "dialog"}: ${dialogParams.message ?? ""}`
-                );
+              const dialogParams = params as { message?: string; type?: string };
+              const leave =
+                dialogParams.type === "beforeunload" && sessionId ? beforeUnloadPolicies.get(sessionId) : undefined;
+              const pending = leave && Date.now() < leave.until ? leave : undefined;
+              if (pending) pending.dialogs++;
+              if ((pending || dialogPolicy !== "ignore") && sessionId) {
+                const accept = pending ? pending.accept : dialogPolicy === "accept";
+                log(`Auto-${accept ? "accepting" : "dismissing"} ${dialogParams.type ?? "dialog"}: ${dialogParams.message ?? ""}`);
                 sendToExtension({
                   method: "forwardCDPCommand",
                   params: {
                     sessionId,
                     method: "Page.handleJavaScriptDialog",
-                    params: { accept: dialogPolicy === "accept" },
+                    params: { accept },
                   },
                   timeout: 5000,
                 }).catch((err) => log(`Failed to handle JS dialog: ${err}`));

@@ -354,7 +354,7 @@ Vendor tool → dev-browser mapping (every MCP tool is a thin wrapper over the c
 | MCP tool | Backed by |
 |---|---|
 | `tabs_context` | `client.list()` + `client.allTargets()` + `getServerInfo()` |
-| `navigate` | `client.page(name)` + `page.goto()` / `goBack()` / `goForward()` |
+| `navigate` | `client.page(name)` + `page.goto()` / `goBack()` / `goForward()`. If the page shows a "Leave site?" dialog for unsaved changes, it stays and the tool reports it; `force: true` discards the changes and navigates |
 | `read_page` | `client.getAISnapshot(name)` + `filterSnapshot()` (`filter: "interactive"`, `depth`, `ref_id`, `max_chars`) |
 | `get_page_text` | `client.text(name)` / `client.markdown(name)` |
 | `find` | `client.find(name, query)` |
@@ -370,7 +370,7 @@ Vendor tool → dev-browser mapping (every MCP tool is a thin wrapper over the c
 | `tabs_create` / `tabs_close` / `tabs_select` | `client.page(name)` / `client.close(name)` / `Page.bringToFront` |
 | `read_console_messages` | `client.getConsoleMessages(name, { pattern, since })`, plus `only_errors` and `limit` |
 | `read_network_requests` | `client.getNetworkRequests(name, { pattern, since })`; `request_id` returns headers and body from `client.getHarEntries()` |
-| `gif_creator` | `encodeGif(frames)` (`src/gif.ts`): records a frame after each action on the page, with click markers, and exports a GIF |
+| `gif_creator` | `encodeGif(frames)` (`src/gif.ts`): records a frame after each action on the page and exports a GIF with an orange ring at clicks, a red arrow along drags, a label naming each action, and a progress bar. Export's `options` (`showClickIndicators`, `showDragPaths`, `showActionLabels`, `showProgressBar`) turn each off |
 | `upload_image` | Set a file on a file input by ref, or drop it on an element by ref or coordinate (`dropFile()` in `src/ref-actions.ts`) |
 | `preview_start` / `preview_list` / `preview_logs` / `preview_stop` | Dev servers from the project's `.claude/launch.json` (`mcp-server/src/preview.ts`): start or reuse one, open it in a page, read its output, stop it |
 | `switch_browser` / `list_connected_browsers` | `/health` probes on :9222 and :9224 (includes the `browser` label) |
@@ -390,7 +390,7 @@ Chromium's own CDP debug port stays on loopback inside the container; the only w
 
 - **Token auth**: both servers generate `~/.dev-browser/token` (0600) on first start and require it (`X-DevBrowser-Token` header or `?token=`) on every HTTP request and WS upgrade. The client reads the same file automatically — nothing to configure on the same machine; remotely, pass `token` to `connect()` or set `DEV_BROWSER_TOKEN`. `/extension` upgrades also accept a `chrome-extension://` Origin in place of the token and always reject http(s) Origins.
 - **Policy**: `~/.dev-browser/policy.json` (optional) is enforced at the relay before any CDP command is routed. `{"defaultMode": "strict", "allowedDomains": ["example.com"], "blockedDomains": [...], "cdpMethodAllowlist": [...], "fullCdpAccessOrigins": [...], "sessions": {"<id>": {...}}}`. Strict mode fails closed: navigation only to allowlisted domains, raw CDP limited to the safe set unless the page's origin has full access. No file means permissive (plus the blocklist still applies if present); a malformed file fails closed.
-- **JS dialogs** are auto-dismissed at the relay (`DEV_BROWSER_DIALOG_POLICY=dismiss|accept|ignore`).
+- **JS dialogs** are auto-dismissed at the relay (`DEV_BROWSER_DIALOG_POLICY=dismiss|accept|ignore`). "Leave site?" (beforeunload) dialogs follow the same policy, except during an MCP `navigate`, which tells the relay how to answer them (`DevBrowser.setBeforeUnloadPolicy`). In standalone mode a script's own `page.on("dialog")` listener decides; with none, dialogs are answered as Playwright does (accept "Leave site?", dismiss the rest).
 
 ## Navigation & Waiting
 

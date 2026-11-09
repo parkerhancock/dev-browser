@@ -110,6 +110,21 @@ describe("Remote-ready standalone server", () => {
     expect(await first.evaluate<string>("document.visibilityState")).toBe("visible");
   });
 
+  test("scripts still leave a page with unsaved changes, and alerts don't block", async () => {
+    const page = await client!.page("unsaved");
+    await page.goto(
+      "data:text/html,<textarea id=t></textarea><script>addEventListener('beforeunload', (e) => { e.preventDefault(); e.returnValue = ''; })</script>"
+    );
+    await page.click("#t");
+    await page.keyboard.type("draft");
+    await page.goto("data:text/html,<h1>next</h1>");
+    expect(await page.locator("h1").textContent()).toBe("next");
+    // An alert with no listener anywhere is answered, at the latest by the server's fallback
+    await page.evaluate("setTimeout(() => alert('hi'), 0)");
+    await page.evaluate("1");
+    await client!.close("unsaved");
+  });
+
   test("tracks downloads server-side and serves the bytes", async () => {
     const page = await client!.page("proxied");
     await page.goto(

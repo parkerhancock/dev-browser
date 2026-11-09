@@ -58,6 +58,14 @@ const js = async (code: string): Promise<unknown> => JSON.parse(await call("java
 
 beforeAll(async () => {
   site = createServer((req, res) => {
+    if (req.url === "/unsaved") {
+      res.writeHead(200, { "content-type": "text/html" });
+      res.end(
+        "<title>Draft</title><textarea id=draft></textarea>" +
+          "<script>addEventListener('beforeunload', (e) => { e.preventDefault(); e.returnValue = ''; });</script>"
+      );
+      return;
+    }
     if (req.url === "/data.json") {
       res.writeHead(200, { "content-type": "application/json" });
       res.end('{"answer":42}');
@@ -190,14 +198,30 @@ describe("MCP tools on a live standalone browser", () => {
   test("gif_creator records actions and exports a GIF", async () => {
     await call("gif_creator", { action: "start_recording" });
     await call("computer", { action: "left_click", coordinate: [100, 350] });
+    await call("computer", { action: "left_click_drag", start_coordinate: [50, 50], coordinate: [300, 120] });
     await call("navigate", { url: `${origin}/form` });
-    expect(JSON.parse(await call("gif_creator", { action: "stop_recording" })).frames).toBe(4);
+    expect(JSON.parse(await call("gif_creator", { action: "stop_recording" })).frames).toBe(5);
     const path = join(process.env.DEV_BROWSER_DIR!, "out.gif");
     const exported = JSON.parse(await call("gif_creator", { action: "export", path }));
-    expect(exported).toMatchObject({ path, frames: 4 });
+    expect(exported).toMatchObject({ path, frames: 5 });
     expect(readFileSync(path).subarray(0, 6).toString()).toBe("GIF89a");
     await call("gif_creator", { action: "clear" });
     await expect(call("gif_creator", { action: "export" })).rejects.toThrow(/No frames/);
+  });
+
+  test("navigate keeps a page with unsaved changes unless forced", async () => {
+    await call("navigate", { url: `${origin}/unsaved`, page: "draft" });
+    // A real keystroke gives the page the user activation that arms the dialog
+    await call("computer", { action: "left_click", ref: await refFor(/textbox/), page: "draft" }).catch(() => {});
+    await call("computer", { action: "type", text: "notes", page: "draft" });
+    await expect(call("navigate", { url: `${origin}/form`, page: "draft" })).rejects.toThrow(/unsaved changes/);
+    expect(JSON.parse(await call("javascript", { code: "JSON.stringify(location.pathname)", page: "draft" }))).toBe(
+      "/unsaved"
+    );
+    const forced = JSON.parse(await call("navigate", { url: `${origin}/form`, page: "draft", force: true }));
+    expect(forced).toMatchObject({ discardedUnsavedChanges: true });
+    expect(forced.url).toBe(`${origin}/form`);
+    await call("tabs_close", { page: "draft" });
   });
 
   test("tabs_select and scaled screenshots work", async () => {

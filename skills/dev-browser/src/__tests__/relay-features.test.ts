@@ -291,6 +291,42 @@ describe("Relay features (health, batch, console, dialogs)", () => {
       .at(-1)!;
     expect(handled.params?.accept).toBe(false); // default policy: dismiss
   });
+
+  test("a before-unload policy decides the next Leave site dialogs and counts them", async () => {
+    await createPage(port, "leave-session", "leave-page");
+    const cdp = (method: string, params?: Record<string, unknown>) =>
+      fetchJson(port, "/cdp", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ page: "leave-page", method, params }),
+        session: "leave-session",
+      });
+    // Learn the page's CDP session from a forwarded command
+    await cdp("Runtime.evaluate", { expression: "1" });
+    const sessionId = ext.forwardedCdpCommands().at(-1)!.sessionId!;
+    const dialogAnswers = () =>
+      ext.forwardedCdpCommands().filter((c) => c.method === "Page.handleJavaScriptDialog" && c.sessionId === sessionId);
+    const openDialog = async (type: string) => {
+      const before = dialogAnswers().length;
+      ext.ws.send(
+        JSON.stringify({
+          method: "forwardCDPEvent",
+          params: { sessionId, method: "Page.javascriptDialogOpening", params: { message: "", type } },
+        })
+      );
+      await waitFor(() => dialogAnswers().length > before, 3000);
+      return dialogAnswers().at(-1)!.params?.accept;
+    };
+
+    expect((await cdp("DevBrowser.setBeforeUnloadPolicy", { accept: true })).status).toBe(200);
+    expect(await openDialog("beforeunload")).toBe(true);
+    expect(await openDialog("confirm")).toBe(false); // other dialogs keep the dialog policy
+    expect((await cdp("DevBrowser.takeBeforeUnloadDialogs")).body.result).toEqual({ dialogs: 1 });
+
+    // Taking the count clears the policy, so the dialog policy applies again
+    expect(await openDialog("beforeunload")).toBe(false);
+    expect((await cdp("DevBrowser.takeBeforeUnloadDialogs")).body.result).toEqual({ dialogs: 0 });
+  });
 });
 
 describe("Relay policy enforcement", () => {

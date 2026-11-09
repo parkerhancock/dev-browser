@@ -139,6 +139,20 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
   }
   console.log("Browser launched with persistent profile...");
 
+  // Every Playwright connection that has no dialog listener answers dialogs
+  // on its own, so this server's connection would race connected clients.
+  // Listening here turns that off; the server then answers only as a
+  // fallback (the same way Playwright would: accept "Leave site?", dismiss
+  // the rest), after clients have had time to answer themselves.
+  const answerDialogsLate = (page: Page) =>
+    page.on("dialog", (dialog) => {
+      setTimeout(() => {
+        void (dialog.type() === "beforeunload" ? dialog.accept() : dialog.dismiss()).catch(() => {});
+      }, 500);
+    });
+  context.pages().forEach(answerDialogsLate);
+  context.on("page", answerDialogsLate);
+
   // Get the CDP WebSocket endpoint from Chrome's JSON API
   const cdpResponse = await fetchWithRetry(`http://127.0.0.1:${cdpPort}/json/version`);
   const cdpInfo = (await cdpResponse.json()) as { webSocketDebuggerUrl: string };

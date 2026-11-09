@@ -30,7 +30,9 @@ import {
 } from "../../skills/dev-browser/src/computer.js";
 import { filterSnapshot } from "../../skills/dev-browser/src/snapshot/filter.js";
 import { dropFile, isFileInputRef, setRefValue } from "../../skills/dev-browser/src/ref-actions.js";
-import { encodeGif, type GifFrame } from "../../skills/dev-browser/src/gif.js";
+import { encodeGif, type GifFrame, type GifOptions } from "../../skills/dev-browser/src/gif.js";
+import { describeAction } from "./action-labels.js";
+import { navigateHandlingLeaveDialog } from "./leave-dialog.js";
 import { PRESETS } from "../../skills/dev-browser/src/emulation.js";
 import { PreviewManager } from "./preview.js";
 
@@ -297,24 +299,30 @@ export function buildServer(state: BrowserState): McpServer {
 
   const recordings = () => (state.recordings ??= new Map());
 
-  async function captureFrame(name: string, marker?: { x: number; y: number }): Promise<void> {
+  async function captureFrame(name: string, overlay: Omit<GifFrame, "png"> = {}): Promise<void> {
     const recording = recordings().get(name);
     if (!recording?.active || recording.frames.length >= MAX_GIF_FRAMES) return;
     const client = await getClient(state);
     const page = await client.page(name);
-    recording.frames.push({ png: await page.screenshot({ scale: "css" }), marker });
+    recording.frames.push({ png: await page.screenshot({ scale: "css" }), ...overlay });
   }
 
   /** While a page is recording, add a frame after each action on it. */
   async function recordFrame(tool: string, args: Record<string, unknown>, result: ToolResult): Promise<void> {
     if (tool === "computer" && ["screenshot", "zoom", "wait"].includes(String(args.action))) return;
-    let marker: { x: number; y: number } | undefined;
+    const overlay: Omit<GifFrame, "png"> = { label: describeAction(tool, args) };
     if (tool === "computer" && /click/.test(String(args.action))) {
       const text = result.content.find((c) => c.type === "text");
       const at = text && "text" in text ? /at \((-?[\d.]+), (-?[\d.]+)\)/.exec(text.text) : null;
-      if (at) marker = { x: Number(at[1]), y: Number(at[2]) };
+      if (at) overlay.marker = { x: Number(at[1]), y: Number(at[2]) };
     }
-    await captureFrame(pageName(args), marker);
+    const from = args.start_coordinate;
+    const to = args.coordinate;
+    if (tool === "computer" && args.action === "left_click_drag" && Array.isArray(from) && Array.isArray(to)) {
+      overlay.drag = { from: { x: Number(from[0]), y: Number(from[1]) }, to: { x: Number(to[0]), y: Number(to[1]) } };
+      delete overlay.marker;
+    }
+    await captureFrame(pageName(args), overlay);
   }
 
   // --------------------------------------------------------------------
@@ -344,21 +352,42 @@ export function buildServer(state: BrowserState): McpServer {
 
   tool(
     "navigate",
-    "Navigate a named page to a URL (creates the page if needed). Also accepts \"back\" and \"forward\". Reports a bot challenge or block page (Cloudflare, DataDome, captcha, short 403) when it detects one.",
+    "Navigate a named page to a URL (creates the page if needed). Also accepts \"back\" and \"forward\". Reports a bot challenge or block page (Cloudflare, DataDome, captcha, short 403) when it detects one. " +
+      "If the page asks to confirm leaving because of unsaved changes, the page stays and the tool reports it; pass force to discard the changes and navigate anyway.",
     {
       url: z.string().describe('URL to open, or "back" / "forward"'),
+      force: z
+        .boolean()
+        .optional()
+        .describe('If the page shows a "Leave site?" dialog for unsaved changes, discard them and navigate anyway (default false)'),
       page: pageParam,
     },
     async (args) => {
       const client = await getClient(state);
       const p = await client.page(pageName(args));
       const url = String(args.url);
-      let response = null;
-      if (url === "back") await p.goBack();
-      else if (url === "forward") await p.goForward();
-      else response = await p.goto(hasScheme(url) ? url : `https://${url}`);
-      const challenge = await detectChallenge(p, response).catch(() => null);
-      return textResult({ url: p.url(), title: await p.title(), ...(challenge ? { challenge } : {}) });
+      const force = args.force === true;
+      const from = p.url();
+      const outcome = await navigateHandlingLeaveDialog(p, force, async () => {
+        if (url === "back") return p.goBack();
+        if (url === "forward") return p.goForward();
+        return p.goto(hasScheme(url) ? url : `https://${url}`);
+      });
+      if (outcome.error) throw outcome.error;
+      if (outcome.dialogs > 0 && !force) {
+        throw new Error(
+          `The page asked to confirm leaving because of unsaved changes, so it stayed on ${from}. ` +
+            "Pass force: true to discard the changes and navigate anyway."
+        );
+      }
+      const response = url === "back" || url === "forward" ? null : (outcome.result ?? null);
+      const challenge = await detectChallenge(p, response as Parameters<typeof detectChallenge>[1]).catch(() => null);
+      return textResult({
+        url: p.url(),
+        title: await p.title(),
+        ...(outcome.dialogs > 0 ? { discardedUnsavedChanges: true } : {}),
+        ...(challenge ? { challenge } : {}),
+      });
     }
   );
 
@@ -886,12 +915,23 @@ export function buildServer(state: BrowserState): McpServer {
   tool(
     "gif_creator",
     "Record the page as an animated GIF. start_recording captures a frame now and after each action on the page " +
-      "(navigate, computer, ref_action, form_input, uploads, resize_window, javascript), with a red marker on clicks; " +
-      "stop_recording adds a last frame; export writes the GIF and returns its path; clear discards the frames.",
+      "(navigate, computer, ref_action, form_input, uploads, resize_window, javascript); " +
+      "stop_recording adds a last frame; export writes the GIF and returns its path; clear discards the frames. " +
+      "Frames carry overlays: an orange ring at clicks, a red arrow along drags, a label naming each action, and a progress bar; " +
+      "turn any of them off with export's options.",
     {
       action: z.enum(["start_recording", "stop_recording", "export", "clear"]),
       path: z.string().optional().describe("Where export writes the GIF (default ~/.dev-browser/recordings)"),
       max_width: z.number().optional().describe("Scale frames down to this width (default 800)"),
+      options: z
+        .object({
+          showClickIndicators: z.boolean().optional().describe("Rings at click locations (default true)"),
+          showDragPaths: z.boolean().optional().describe("Arrows along drags (default true)"),
+          showActionLabels: z.boolean().optional().describe("Labels describing each action (default true)"),
+          showProgressBar: z.boolean().optional().describe("Progress bar along the bottom (default true)"),
+        })
+        .optional()
+        .describe("Overlay options for export"),
       page: pageParam,
     },
     async (args) => {
@@ -909,7 +949,10 @@ export function buildServer(state: BrowserState): McpServer {
           return textResult({ recording: false, page: name, frames: recording.frames.length });
         case "export": {
           if (!recording?.frames.length) throw new Error(`No frames recorded for page "${name}"`);
-          const gif = encodeGif(recording.frames, { maxWidth: args.max_width as number | undefined });
+          const gif = encodeGif(recording.frames, {
+            ...(args.options as GifOptions | undefined),
+            maxWidth: args.max_width as number | undefined,
+          });
           const path =
             typeof args.path === "string"
               ? args.path
