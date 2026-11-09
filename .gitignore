@@ -36,8 +36,10 @@ coverage/
 tmp/
 temp/
 
-# Browser profiles
+# Browser profiles (serve defaults to .browser-data in the directory it runs from)
 profiles/
+.browser-data/
+.browser-data-*/
 
 # WXT generated files
 .wxt/
