@@ -47,13 +47,71 @@ jobs:
         working-directory: skills/dev-browser
         run: npm install
 
-      - name: Install Playwright browsers
+      - name: Install browsers
         working-directory: skills/dev-browser
-        run: npx playwright install --with-deps chromium
+        run: npx patchright install --with-deps chromium
 
       - name: Run tests
         working-directory: skills/dev-browser
         run: npm test
+
+  mcp-server:
+    name: MCP server
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      # The MCP server imports the library's sources, which resolve their
+      # dependencies from skills/dev-browser/node_modules
+      - name: Install library dependencies
+        working-directory: skills/dev-browser
+        run: npm install
+
+      - name: Install browsers
+        working-directory: skills/dev-browser
+        run: npx patchright install --with-deps chromium
+
+      - name: Install dependencies
+        working-directory: mcp-server
+        run: npm ci
+
+      - name: TypeScript check
+        working-directory: mcp-server
+        run: npx tsc --noEmit
+
+      - name: Run tests
+        working-directory: mcp-server
+        run: npm test
+
+  extension:
+    name: Extension
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install dependencies
+        working-directory: extension
+        run: npm ci
+
+      - name: TypeScript check
+        working-directory: extension
+        run: npx wxt prepare && npx tsc --noEmit
+
+      - name: Run tests
+        working-directory: extension
+        run: npm run test:run
 
   format:
     name: Formatting
