@@ -109,9 +109,11 @@ following carrel's SessionStart `bootstrap-runtime` hook.
 - D2. Don't publish npm packages. There's one user, the `dev-browser` name may
   clash with upstream, and publishing is public. The plugin carries the source
   instead.
-- D3. Drop `expose-session-id.sh`. Claude Code already sets
-  `CLAUDE_SESSION_ID` in the Bash environment; it's set in this session with
-  the hook unregistered.
+- D3. Drop `expose-session-id.sh`, and have the client fall back to
+  `CLAUDE_CODE_SESSION_ID`. Claude Code sets that variable natively in Bash,
+  hook, and stdio MCP subprocesses (env-vars docs). `CLAUDE_SESSION_ID` is not
+  native; on this Mac it comes from Parker's global
+  `~/.claude/hooks/set-session-env.sh`.
 - D4. Keep `node_modules` inside the plugin root, where the relative imports
   expect it. A plugin update replaces the root, and the stamp check reinstalls.
   Patchright's browsers live in the shared cache
@@ -125,14 +127,61 @@ following carrel's SessionStart `bootstrap-runtime` hook.
 - Q2. Hard fork? Generating the marketplace under Parker's name makes it one in
   practice. The plan assumes yes, so upstream merges stop.
 - Q3. Targets: Claude and Codex (assumed), or Claude only?
-- Q4. Does Claude Code copy a local-directory marketplace plugin into its cache
-  or use it in place? T5 answers this. If it copies, development uses the
-  checkout's own MCP entry instead.
-- Q5. Is the first-run `npm ci` (about a minute) within the MCP startup
-  timeout? If not, `run-mcp` serves a stub that tells the user to retry, and
-  the hook's background install finishes the job.
-- Q6. Codex's variable for the plugin root in MCP configs and hooks. Satchel
-  normalizes some of these; `satchel check --host` confirms.
+- Q4 (researched 2026-11-09). Local-directory installs:
+  - **Claude Code docs:** a plugin with a relative-path `source` in a marketplace
+    added from a local path loads in place, and edits apply at the next session
+    or `/reload-plugins` (code.claude.com/docs/en/plugins/loading).
+    `--plugin-dir` also loads in place, for one session.
+  - **Conflicting evidence on this Mac:** `gcp-enterprise-ocr` (source `./`,
+    directory marketplace) sits as a copy in
+    `~/.claude/plugins/cache/gcp-enterprise-ocr-marketplace/gcp-enterprise-ocr/0.5.1`,
+    installed September 2. That may be older behavior. T5 checks it on Claude
+    Code 2.1.306.
+  - **Codex:** copies local plugins to
+    `~/.codex/plugins/cache/<marketplace>/<plugin>/local/` and picks up edits
+    only after you update the source and restart.
+- Q5 (researched). Startup timeouts:
+  - **Claude Code:** `MCP_TIMEOUT` defaults to 30 s. A stdio server that misses it
+    is marked failed, not retried; `/mcp` can reconnect it.
+  - **Codex:** `startup_timeout_sec` defaults to 10 s, and a plugin can't raise it
+    for its own server.
+
+  A first-run `npm ci` plus a Chromium download fits neither. R2–R4 need
+  rework (see "Revision under consideration").
+
+- Q6 (researched). Variables:
+  - **Codex:** hooks get `PLUGIN_ROOT` and `PLUGIN_DATA`, plus
+    `CLAUDE_PLUGIN_ROOT` and `CLAUDE_PLUGIN_DATA` for compatibility. Its binary
+    expands `${PLUGIN_ROOT}` and `${PLUGIN_DATA}` in MCP configs. A stdio
+    `command` must be a bare executable or a contained `./` path, and `cwd` must
+    be `./`, `${PLUGIN_ROOT}`, or `${PLUGIN_DATA}`. Codex runs plugin hooks only
+    for plugins installed manually in the desktop app, and only after the user
+    trusts them; a changed script needs another review.
+  - **Claude Code:** expands `${CLAUDE_PLUGIN_ROOT}` and `${CLAUDE_PLUGIN_DATA}`
+    in hooks, MCP stdio command, args, and env, and inline in skill and agent
+    Markdown. The Bash tool doesn't get them.
+  - **Data folders:** `CLAUDE_PLUGIN_DATA` is
+    `~/.claude/plugins/data/<id>/` and survives plugin updates; Codex keeps
+    `~/.codex/plugins/data/…` the same way.
+
+## Revision under consideration
+
+Installing at MCP startup can't fit 10 s on Codex, and hooks are unreliable
+there. One option is the pattern `gcp-enterprise-ocr` uses: the plugin ships
+only light files, and the heavy runtime is installed once, outside the host's
+startup path.
+
+- The plugin's MCP entry is a dependency-free stdio shim, `node ./mcp-shim.mjs`,
+  using Node built-ins only. It starts in well under a second and forwards MCP
+  messages to the local server's `/mcp` endpoint, reading the token from
+  `~/.dev-browser/token`. When the server isn't installed or running, every
+  tool returns "run `dev-browser setup`".
+- `dev-browser setup` (run once, and again after updates) installs the runtime
+  into a stable folder, `~/.dev-browser/app`, installs the patchright browser,
+  and starts the server, optionally as a login item.
+- On Claude Code, a SessionStart hook can run setup in the background when the
+  runtime's version doesn't match the plugin's. That's a convenience, not a
+  requirement.
 
 ## Tasks
 
