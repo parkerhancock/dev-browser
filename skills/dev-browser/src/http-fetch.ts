@@ -18,10 +18,23 @@ export interface HttpFetchOptions {
   format?: "markdown" | "html" | "text";
 }
 
-export async function httpFetch(url: string, options: HttpFetchOptions = {}): Promise<FetchPageResult> {
+export async function httpFetch(
+  url: string,
+  options: HttpFetchOptions = {}
+): Promise<FetchPageResult> {
   const format = options.format ?? "markdown";
-  const base = { url, format, engine: "http" as const, screenshotPath: undefined, waczPath: undefined };
-  const impit = new Impit({ browser: "chrome", proxyUrl: options.proxyUrl, timeout: options.timeout ?? 30000 });
+  const base = {
+    url,
+    format,
+    engine: "http" as const,
+    screenshotPath: undefined,
+    waczPath: undefined,
+  };
+  const impit = new Impit({
+    browser: "chrome",
+    proxyUrl: options.proxyUrl,
+    timeout: options.timeout ?? 30000,
+  });
 
   let response;
   let body: string;

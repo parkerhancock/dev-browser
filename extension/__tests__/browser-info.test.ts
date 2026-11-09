@@ -43,16 +43,12 @@ describe("detectBrowser", () => {
   });
 
   test("falls back to user-agent sniffing", () => {
-    expect(
-      detectBrowser({ userAgent: "Mozilla/5.0 Chrome/131.0.0.0 Edg/131.0.0.0" })
-        .browser
-    ).toBe("msedge");
-    expect(
-      detectBrowser({ userAgent: "Mozilla/5.0 Chrome/131.0.0.0 Safari/537.36" })
-        .browser
-    ).toBe("chrome");
-    expect(detectBrowser({ userAgent: "SomethingElse/1.0" }).browser).toBe(
-      "unknown"
+    expect(detectBrowser({ userAgent: "Mozilla/5.0 Chrome/131.0.0.0 Edg/131.0.0.0" }).browser).toBe(
+      "msedge"
     );
+    expect(detectBrowser({ userAgent: "Mozilla/5.0 Chrome/131.0.0.0 Safari/537.36" }).browser).toBe(
+      "chrome"
+    );
+    expect(detectBrowser({ userAgent: "SomethingElse/1.0" }).browser).toBe("unknown");
   });
 });

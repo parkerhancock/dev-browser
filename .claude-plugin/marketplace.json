@@ -10,7 +10,15 @@
       "source": "./",
       "description": "Browser automation skill with persistent page state for developers and AI agents",
       "strict": false,
-      "keywords": ["browser", "playwright", "automation", "testing", "debugging", "fetch", "stealth"],
+      "keywords": [
+        "browser",
+        "playwright",
+        "automation",
+        "testing",
+        "debugging",
+        "fetch",
+        "stealth"
+      ],
       "skills": ["./skills/dev-browser"],
       "agents": ["./agents"]
     }

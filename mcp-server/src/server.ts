@@ -95,9 +95,7 @@ export function createState(options: ServerOptions = {}): BrowserState {
 }
 
 /** Probe a dev-browser server's /health with a short timeout. */
-async function probeHealth(
-  mode: BrowserMode
-): Promise<Record<string, unknown> | null> {
+async function probeHealth(mode: BrowserMode): Promise<Record<string, unknown> | null> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 1500);
   try {
@@ -154,15 +152,13 @@ async function getClient(state: BrowserState): Promise<DevBrowserClient> {
 
 type ToolResult = {
   content: Array<
-    | { type: "text"; text: string }
-    | { type: "image"; data: string; mimeType: string }
+    { type: "text"; text: string } | { type: "image"; data: string; mimeType: string }
   >;
   isError?: boolean;
 };
 
 function textResult(value: unknown): ToolResult {
-  const text =
-    typeof value === "string" ? value : JSON.stringify(value, null, 2);
+  const text = typeof value === "string" ? value : JSON.stringify(value, null, 2);
   return { content: [{ type: "text", text }] };
 }
 
@@ -246,9 +242,7 @@ async function setRefFiles(
 
 function errorResult(err: unknown): ToolResult {
   return {
-    content: [
-      { type: "text", text: `Error: ${err instanceof Error ? err.message : String(err)}` },
-    ],
+    content: [{ type: "text", text: `Error: ${err instanceof Error ? err.message : String(err)}` }],
     isError: true,
   };
 }
@@ -293,9 +287,7 @@ export function buildServer(state: BrowserState): McpServer {
   }
 
   const pageName = (args: Record<string, unknown>): string =>
-    typeof args.page === "string" && args.page.length > 0
-      ? args.page
-      : DEFAULT_PAGE;
+    typeof args.page === "string" && args.page.length > 0 ? args.page : DEFAULT_PAGE;
 
   const recordings = () => (state.recordings ??= new Map());
 
@@ -308,7 +300,11 @@ export function buildServer(state: BrowserState): McpServer {
   }
 
   /** While a page is recording, add a frame after each action on it. */
-  async function recordFrame(tool: string, args: Record<string, unknown>, result: ToolResult): Promise<void> {
+  async function recordFrame(
+    tool: string,
+    args: Record<string, unknown>,
+    result: ToolResult
+  ): Promise<void> {
     if (tool === "computer" && ["screenshot", "zoom", "wait"].includes(String(args.action))) return;
     const overlay: Omit<GifFrame, "png"> = { label: describeAction(tool, args) };
     if (tool === "computer" && /click/.test(String(args.action))) {
@@ -318,8 +314,16 @@ export function buildServer(state: BrowserState): McpServer {
     }
     const from = args.start_coordinate;
     const to = args.coordinate;
-    if (tool === "computer" && args.action === "left_click_drag" && Array.isArray(from) && Array.isArray(to)) {
-      overlay.drag = { from: { x: Number(from[0]), y: Number(from[1]) }, to: { x: Number(to[0]), y: Number(to[1]) } };
+    if (
+      tool === "computer" &&
+      args.action === "left_click_drag" &&
+      Array.isArray(from) &&
+      Array.isArray(to)
+    ) {
+      overlay.drag = {
+        from: { x: Number(from[0]), y: Number(from[1]) },
+        to: { x: Number(to[0]), y: Number(to[1]) },
+      };
       delete overlay.marker;
     }
     await captureFrame(pageName(args), overlay);
@@ -352,14 +356,16 @@ export function buildServer(state: BrowserState): McpServer {
 
   tool(
     "navigate",
-    "Navigate a named page to a URL (creates the page if needed). Also accepts \"back\" and \"forward\". Reports a bot challenge or block page (Cloudflare, DataDome, captcha, short 403) when it detects one. " +
+    'Navigate a named page to a URL (creates the page if needed). Also accepts "back" and "forward". Reports a bot challenge or block page (Cloudflare, DataDome, captcha, short 403) when it detects one. ' +
       "If the page asks to confirm leaving because of unsaved changes, the page stays and the tool reports it; pass force to discard the changes and navigate anyway.",
     {
       url: z.string().describe('URL to open, or "back" / "forward"'),
       force: z
         .boolean()
         .optional()
-        .describe('If the page shows a "Leave site?" dialog for unsaved changes, discard them and navigate anyway (default false)'),
+        .describe(
+          'If the page shows a "Leave site?" dialog for unsaved changes, discard them and navigate anyway (default false)'
+        ),
       page: pageParam,
     },
     async (args) => {
@@ -381,7 +387,10 @@ export function buildServer(state: BrowserState): McpServer {
         );
       }
       const response = url === "back" || url === "forward" ? null : (outcome.result ?? null);
-      const challenge = await detectChallenge(p, response as Parameters<typeof detectChallenge>[1]).catch(() => null);
+      const challenge = await detectChallenge(
+        p,
+        response as Parameters<typeof detectChallenge>[1]
+      ).catch(() => null);
       return textResult({
         url: p.url(),
         title: await p.title(),
@@ -421,7 +430,7 @@ export function buildServer(state: BrowserState): McpServer {
 
   tool(
     "get_page_text",
-    "Extract the page's visible text (or Markdown with format=\"markdown\").",
+    'Extract the page\'s visible text (or Markdown with format="markdown").',
     {
       page: pageParam,
       format: z.enum(["text", "markdown"]).optional().describe("Default: text"),
@@ -459,7 +468,7 @@ export function buildServer(state: BrowserState): McpServer {
 
   tool(
     "ref_action",
-    "Click or fill an element by its ref from read_page/find (e.g. \"e12\").",
+    'Click or fill an element by its ref from read_page/find (e.g. "e12").',
     {
       action: z.enum(["click", "fill"]),
       ref: z.string().describe("Ref id like e12"),
@@ -508,10 +517,7 @@ export function buildServer(state: BrowserState): McpServer {
         return textResult({ success: true, ref: args.ref, result: done });
       }
       if (!args.fields) throw new Error("Pass ref and value, or fields");
-      await client.fillForm(
-        pageName(args),
-        args.fields as Record<string, string>
-      );
+      await client.fillForm(pageName(args), args.fields as Record<string, string>);
       return textResult({ success: true, filled: Object.keys(args.fields as object) });
     }
   );
@@ -581,10 +587,7 @@ export function buildServer(state: BrowserState): McpServer {
       scroll_direction: z.enum(["up", "down", "left", "right"]).optional(),
       scroll_amount: z.number().optional().describe("Wheel ticks for scroll (default 3)"),
       duration: z.number().optional().describe("Seconds for wait (0-10)"),
-      region: z
-        .array(z.number())
-        .optional()
-        .describe("[x0, y0, x1, y1] viewport region for zoom"),
+      region: z.array(z.number()).optional().describe("[x0, y0, x1, y1] viewport region for zoom"),
       scale: z
         .number()
         .optional()
@@ -620,7 +623,9 @@ export function buildServer(state: BrowserState): McpServer {
       const preset = args.preset as keyof typeof PRESETS | "desktop" | undefined;
       // Explicit width/height override a preset's size
       const given = Object.fromEntries(
-        (["width", "height"] as const).filter((k) => typeof args[k] === "number").map((k) => [k, args[k] as number])
+        (["width", "height"] as const)
+          .filter((k) => typeof args[k] === "number")
+          .map((k) => [k, args[k] as number])
       );
       let size: { width?: number; height?: number; mobile?: boolean } = { ...given };
       if (preset === "desktop") size = { width: 1440, height: 900, mobile: false, ...given };
@@ -672,16 +677,11 @@ export function buildServer(state: BrowserState): McpServer {
     }
   );
 
-  tool(
-    "tabs_close",
-    "Close a named page/tab.",
-    { page: z.string() },
-    async (args) => {
-      const client = await getClient(state);
-      await client.close(String(args.page));
-      return textResult({ success: true, closed: args.page });
-    }
-  );
+  tool("tabs_close", "Close a named page/tab.", { page: z.string() }, async (args) => {
+    const client = await getClient(state);
+    await client.close(String(args.page));
+    return textResult({ success: true, closed: args.page });
+  });
 
   tool(
     "tabs_select",
@@ -713,7 +713,8 @@ export function buildServer(state: BrowserState): McpServer {
         pattern: args.pattern as string | undefined,
         since: args.since as number | undefined,
       });
-      const kept = args.only_errors === true ? messages.filter((m) => m.level === "error") : messages;
+      const kept =
+        args.only_errors === true ? messages.filter((m) => m.level === "error") : messages;
       const limit = typeof args.limit === "number" ? args.limit : 100;
       return textResult({ messages: kept.slice(-limit), matched: kept.length, total });
     }
@@ -750,7 +751,10 @@ export function buildServer(state: BrowserState): McpServer {
           responseHeaders: entry.response.headers,
           mimeType: content?.mimeType,
           encoding: content?.encoding,
-          body: body.length > maxChars ? `${body.slice(0, maxChars)}\n[truncated: ${body.length} chars total]` : body,
+          body:
+            body.length > maxChars
+              ? `${body.slice(0, maxChars)}\n[truncated: ${body.length} chars total]`
+              : body,
         });
       }
       const { requests, total } = await client.getNetworkRequests(name, {
@@ -794,9 +798,7 @@ export function buildServer(state: BrowserState): McpServer {
         }
         const result = await handler(action.input ?? {});
         images.push(...result.content.filter((c) => c.type === "image"));
-        const text = result.content
-          .map((c) => (c.type === "text" ? c.text : "[image]"))
-          .join("\n");
+        const text = result.content.map((c) => (c.type === "text" ? c.text : "[image]")).join("\n");
         if (result.isError) {
           results.push({ tool: action.tool, error: text });
           break;
@@ -822,9 +824,7 @@ export function buildServer(state: BrowserState): McpServer {
     async (args) => {
       const client = await getClient(state);
       await client.page(pageName(args));
-      return textResult(
-        await client.batch(pageName(args), args.ops as BatchOp[])
-      );
+      return textResult(await client.batch(pageName(args), args.ops as BatchOp[]));
     }
   );
 
@@ -870,15 +870,17 @@ export function buildServer(state: BrowserState): McpServer {
       const client = await getClient(state);
       const p = await client.page(pageName(args));
       await p.goto(url);
-      return textResult({ ...(server ? { server } : {}), page: pageName(args), url: p.url(), title: await p.title() });
+      return textResult({
+        ...(server ? { server } : {}),
+        page: pageName(args),
+        url: p.url(),
+        title: await p.title(),
+      });
     }
   );
 
-  tool(
-    "preview_list",
-    "List dev servers started with preview_start.",
-    {},
-    async () => textResult(previews().list())
+  tool("preview_list", "List dev servers started with preview_start.", {}, async () =>
+    textResult(previews().list())
   );
 
   tool(
@@ -921,14 +923,26 @@ export function buildServer(state: BrowserState): McpServer {
       "turn any of them off with export's options.",
     {
       action: z.enum(["start_recording", "stop_recording", "export", "clear"]),
-      path: z.string().optional().describe("Where export writes the GIF (default ~/.dev-browser/recordings)"),
+      path: z
+        .string()
+        .optional()
+        .describe("Where export writes the GIF (default ~/.dev-browser/recordings)"),
       max_width: z.number().optional().describe("Scale frames down to this width (default 800)"),
       options: z
         .object({
-          showClickIndicators: z.boolean().optional().describe("Rings at click locations (default true)"),
+          showClickIndicators: z
+            .boolean()
+            .optional()
+            .describe("Rings at click locations (default true)"),
           showDragPaths: z.boolean().optional().describe("Arrows along drags (default true)"),
-          showActionLabels: z.boolean().optional().describe("Labels describing each action (default true)"),
-          showProgressBar: z.boolean().optional().describe("Progress bar along the bottom (default true)"),
+          showActionLabels: z
+            .boolean()
+            .optional()
+            .describe("Labels describing each action (default true)"),
+          showProgressBar: z
+            .boolean()
+            .optional()
+            .describe("Progress bar along the bottom (default true)"),
         })
         .optional()
         .describe("Overlay options for export"),
@@ -956,7 +970,11 @@ export function buildServer(state: BrowserState): McpServer {
           const path =
             typeof args.path === "string"
               ? args.path
-              : join(devBrowserDir(), "recordings", `${name}-${new Date().toISOString().replace(/[:.]/g, "-")}.gif`);
+              : join(
+                  devBrowserDir(),
+                  "recordings",
+                  `${name}-${new Date().toISOString().replace(/[:.]/g, "-")}.gif`
+                );
           mkdirSync(dirname(path), { recursive: true });
           writeFileSync(path, gif);
           return textResult({ path, frames: recording.frames.length, bytes: gif.length });

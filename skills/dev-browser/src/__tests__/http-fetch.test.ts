@@ -13,7 +13,10 @@ describe("HTML helpers", () => {
   });
 
   test("signalsFromHtml finds iframes", () => {
-    const s = signalsFromHtml(200, `<iframe src="https://geo.captcha-delivery.com/captcha/?x"></iframe>`);
+    const s = signalsFromHtml(
+      200,
+      `<iframe src="https://geo.captcha-delivery.com/captcha/?x"></iframe>`
+    );
     expect(s.frames).toEqual(["https://geo.captcha-delivery.com/captcha/?x"]);
   });
 });
@@ -22,15 +25,29 @@ describe("detectChallengeFromHttp", () => {
   const page = `<title>Real</title>${"<p>content</p>".repeat(2000)}`;
 
   test("a real page is not a challenge, even with a reCAPTCHA script", () => {
-    expect(detectChallengeFromHttp(200, {}, `${page}<script src="https://www.google.com/recaptcha/api.js"></script>`)).toBeNull();
+    expect(
+      detectChallengeFromHttp(
+        200,
+        {},
+        `${page}<script src="https://www.google.com/recaptcha/api.js"></script>`
+      )
+    ).toBeNull();
   });
 
   test("body-only signals", () => {
-    expect(detectChallengeFromHttp(200, {}, `<script src="https://js.datado.me/x.js"></script>`)?.vendor).toBe("datadome");
-    expect(detectChallengeFromHttp(429, {}, `<div class="h-captcha" data-src="https://hcaptcha.com/1"></div>`)?.vendor).toBe(
-      "hcaptcha"
+    expect(
+      detectChallengeFromHttp(200, {}, `<script src="https://js.datado.me/x.js"></script>`)?.vendor
+    ).toBe("datadome");
+    expect(
+      detectChallengeFromHttp(
+        429,
+        {},
+        `<div class="h-captcha" data-src="https://hcaptcha.com/1"></div>`
+      )?.vendor
+    ).toBe("hcaptcha");
+    expect(detectChallengeFromHttp(403, { "cf-mitigated": "challenge" }, page)?.vendor).toBe(
+      "cloudflare"
     );
-    expect(detectChallengeFromHttp(403, { "cf-mitigated": "challenge" }, page)?.vendor).toBe("cloudflare");
   });
 });
 
@@ -47,7 +64,9 @@ describe("httpFetch", () => {
         res.end('<title>App</title><div id="root"></div><script src="/app.js"></script>');
       } else {
         res.writeHead(200, { "content-type": "text/html" });
-        res.end(`<title>Doc</title><h1>Heading</h1><p>${"Words here. ".repeat(30)}<a href="/x">x</a></p>`);
+        res.end(
+          `<title>Doc</title><h1>Heading</h1><p>${"Words here. ".repeat(30)}<a href="/x">x</a></p>`
+        );
       }
     });
     await new Promise<void>((resolve) => site.listen(0, "127.0.0.1", resolve));

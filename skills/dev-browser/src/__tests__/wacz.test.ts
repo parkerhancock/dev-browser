@@ -44,7 +44,10 @@ function createMockHar(entries: PartialEntry[] = []): HarLog {
   type HarEntry = HarLog["log"]["entries"][0];
 
   // Deep merge function for HAR entries - merges partial into base
-  function mergeEntry(base: ReturnType<typeof createDefaultEntry>, partial: PartialEntry): HarEntry {
+  function mergeEntry(
+    base: ReturnType<typeof createDefaultEntry>,
+    partial: PartialEntry
+  ): HarEntry {
     const merged = { ...base };
 
     if (partial.startedDateTime) merged.startedDateTime = partial.startedDateTime;
@@ -80,9 +83,10 @@ function createMockHar(entries: PartialEntry[] = []): HarLog {
     log: {
       version: "1.2",
       creator: { name: "test", version: "1.0" },
-      entries: entries.length > 0
-        ? entries.map((e) => mergeEntry(createDefaultEntry(), e))
-        : [createDefaultEntry() as unknown as HarEntry],
+      entries:
+        entries.length > 0
+          ? entries.map((e) => mergeEntry(createDefaultEntry(), e))
+          : [createDefaultEntry() as unknown as HarEntry],
     },
   };
 }
@@ -254,7 +258,10 @@ describe("WACZ Creation", () => {
     await createWaczFromHar(har, waczPath);
 
     const pages = execSync(`unzip -p "${waczPath}" pages/pages.jsonl`, { encoding: "utf-8" });
-    const lines = pages.trim().split("\n").map((l) => JSON.parse(l));
+    const lines = pages
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l));
 
     // Should only include HTML pages, not CSS
     expect(lines.length).toBe(2);

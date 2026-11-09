@@ -28,10 +28,7 @@ export interface McpHttpOptions {
   session?: string;
 }
 
-export type McpNodeHandler = (
-  req: IncomingMessage,
-  res: ServerResponse
-) => Promise<void>;
+export type McpNodeHandler = (req: IncomingMessage, res: ServerResponse) => Promise<void>;
 
 async function readJsonBody(req: IncomingMessage): Promise<unknown> {
   const chunks: Buffer[] = [];
@@ -47,11 +44,7 @@ async function readJsonBody(req: IncomingMessage): Promise<unknown> {
   }
 }
 
-function jsonError(
-  res: ServerResponse,
-  status: number,
-  message: string
-): void {
+function jsonError(res: ServerResponse, status: number, message: string): void {
   res.writeHead(status, { "Content-Type": "application/json" });
   res.end(
     JSON.stringify({
@@ -62,9 +55,7 @@ function jsonError(
   );
 }
 
-export function createMcpNodeHandler(
-  options: McpHttpOptions = {}
-): McpNodeHandler {
+export function createMcpNodeHandler(options: McpHttpOptions = {}): McpNodeHandler {
   const transports = new Map<string, StreamableHTTPServerTransport>();
 
   return async (req, res) => {

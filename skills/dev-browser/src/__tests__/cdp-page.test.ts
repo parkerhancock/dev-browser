@@ -49,11 +49,9 @@ function createMockRelay() {
     if (expr === "document.documentElement.outerHTML")
       return runtimeResult("<html><body>test</body></html>");
     // Element center resolution
-    if (expr.includes("getBoundingClientRect"))
-      return runtimeResult({ x: 100, y: 200 });
+    if (expr.includes("getBoundingClientRect")) return runtimeResult({ x: 100, y: 200 });
     // Selector existence checks
-    if (expr.includes("document.querySelector"))
-      return runtimeResult(true);
+    if (expr.includes("document.querySelector")) return runtimeResult(true);
     return runtimeResult(undefined);
   });
   cdpHandlers.set("Page.navigate", () => ({ frameId: "main" }));
@@ -71,50 +69,48 @@ function createMockRelay() {
 
   const originalFetch = globalThis.fetch;
 
-  globalThis.fetch = vi.fn(
-    async (input: string | URL | Request, init?: RequestInit) => {
-      const url = String(input);
-      const httpMethod = init?.method ?? "GET";
-      const body = init?.body ? JSON.parse(init.body as string) : undefined;
+  globalThis.fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    const httpMethod = init?.method ?? "GET";
+    const body = init?.body ? JSON.parse(init.body as string) : undefined;
 
-      // CDP endpoint
-      if (url === `${RELAY_URL}/cdp` && body) {
-        cdpCalls.push({
-          method: body.method,
-          params: body.params,
-          targetId: body.targetId,
-        });
-        const handler = cdpHandlers.get(body.method);
-        if (!handler) {
-          return new Response(
-            JSON.stringify({ error: { message: `Unknown CDP method: ${body.method}` } }),
-            { status: 400 }
-          );
-        }
-        return new Response(JSON.stringify({ result: handler(body.params) }), {
+    // CDP endpoint
+    if (url === `${RELAY_URL}/cdp` && body) {
+      cdpCalls.push({
+        method: body.method,
+        params: body.params,
+        targetId: body.targetId,
+      });
+      const handler = cdpHandlers.get(body.method);
+      if (!handler) {
+        return new Response(
+          JSON.stringify({ error: { message: `Unknown CDP method: ${body.method}` } }),
+          { status: 400 }
+        );
+      }
+      return new Response(JSON.stringify({ result: handler(body.params) }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+
+    // Page deletion
+    if (url.startsWith(`${RELAY_URL}/pages/`) && httpMethod === "DELETE") {
+      return new Response(JSON.stringify({ success: true }), { status: 200 });
+    }
+
+    // Named endpoints (snapshot, ref-action)
+    for (const [path, response] of endpointResponses) {
+      if (url === `${RELAY_URL}${path}`) {
+        return new Response(JSON.stringify(response), {
           status: 200,
           headers: { "Content-Type": "application/json" },
         });
       }
-
-      // Page deletion
-      if (url.startsWith(`${RELAY_URL}/pages/`) && httpMethod === "DELETE") {
-        return new Response(JSON.stringify({ success: true }), { status: 200 });
-      }
-
-      // Named endpoints (snapshot, ref-action)
-      for (const [path, response] of endpointResponses) {
-        if (url === `${RELAY_URL}${path}`) {
-          return new Response(JSON.stringify(response), {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          });
-        }
-      }
-
-      return new Response("{}", { status: 200 });
     }
-  ) as any;
+
+    return new Response("{}", { status: 200 });
+  }) as any;
 
   return {
     cdpCalls,
@@ -197,17 +193,14 @@ describe("CDPPage", () => {
         frameId: "main",
         errorText: "net::ERR_NAME_NOT_RESOLVED",
       }));
-      await expect(page.goto("https://bad.example")).rejects.toThrow(
-        "Navigation failed"
-      );
+      await expect(page.goto("https://bad.example")).rejects.toThrow("Navigation failed");
     });
 
     it("goto syncs cached URL after navigation", async () => {
       relay.onCdp("Runtime.evaluate", (params) => {
         if (params?.expression === "location.href")
           return runtimeResult("https://example.com/landed");
-        if (params?.expression === "document.readyState")
-          return runtimeResult("complete");
+        if (params?.expression === "document.readyState") return runtimeResult("complete");
         return runtimeResult(undefined);
       });
 
@@ -219,9 +212,7 @@ describe("CDPPage", () => {
       await page.goBack();
 
       const evalCalls = relay.callsFor("Runtime.evaluate");
-      const historyCall = evalCalls.find((c) =>
-        c.params?.expression?.includes("history.back()")
-      );
+      const historyCall = evalCalls.find((c) => c.params?.expression?.includes("history.back()"));
       expect(historyCall).toBeDefined();
     });
 
@@ -274,8 +265,7 @@ describe("CDPPage", () => {
 
     it("innerHTML() queries selector and returns innerHTML", async () => {
       relay.onCdp("Runtime.evaluate", (params) => {
-        if (params?.expression?.includes("innerHTML"))
-          return runtimeResult("<span>inner</span>");
+        if (params?.expression?.includes("innerHTML")) return runtimeResult("<span>inner</span>");
         return runtimeResult("complete");
       });
 
@@ -289,8 +279,7 @@ describe("CDPPage", () => {
 
     it("innerText() queries selector and returns innerText", async () => {
       relay.onCdp("Runtime.evaluate", (params) => {
-        if (params?.expression?.includes("innerText"))
-          return runtimeResult("Hello World");
+        if (params?.expression?.includes("innerText")) return runtimeResult("Hello World");
         return runtimeResult("complete");
       });
 
@@ -300,8 +289,7 @@ describe("CDPPage", () => {
 
     it("textContent() returns null when element not found", async () => {
       relay.onCdp("Runtime.evaluate", (params) => {
-        if (params?.expression?.includes("textContent"))
-          return runtimeResult(null);
+        if (params?.expression?.includes("textContent")) return runtimeResult(null);
         return runtimeResult("complete");
       });
 
@@ -372,9 +360,7 @@ describe("CDPPage", () => {
       relay.onCdp("Page.createIsolatedWorld", () => ({ executionContextId: 42 }));
       relay.onCdp("Runtime.evaluate", () => runtimeResult("Embedded"));
 
-      const child = (await page.frames()).find(
-        (frame) => frame.frameId() === "local-frame"
-      );
+      const child = (await page.frames()).find((frame) => frame.frameId() === "local-frame");
       await expect(child?.title()).resolves.toBe("Embedded");
 
       expect(relay.lastCall("Page.createIsolatedWorld")?.params).toMatchObject({
@@ -423,13 +409,9 @@ describe("CDPPage", () => {
     });
 
     it("evaluate throws on CDP exception details", async () => {
-      relay.onCdp("Runtime.evaluate", () =>
-        runtimeError("ReferenceError: foo is not defined")
-      );
+      relay.onCdp("Runtime.evaluate", () => runtimeError("ReferenceError: foo is not defined"));
 
-      await expect(page.evaluate("foo()")).rejects.toThrow(
-        "ReferenceError: foo is not defined"
-      );
+      await expect(page.evaluate("foo()")).rejects.toThrow("ReferenceError: foo is not defined");
     });
 
     it("evaluate throws for non-string/function pageFunction", async () => {
@@ -494,7 +476,7 @@ describe("CDPPage", () => {
 
       const call = relay.lastCall("Runtime.evaluate");
       const expr = call?.params?.expression ?? "";
-      expect(expr).toContain('input#email');
+      expect(expr).toContain("input#email");
       expect(expr).toContain(".focus()");
       expect(expr).toContain('.value = "test@example.com"');
       expect(expr).toContain("input");
@@ -506,9 +488,7 @@ describe("CDPPage", () => {
 
       // Should focus first
       const evalCalls = relay.callsFor("Runtime.evaluate");
-      const focusCall = evalCalls.find((c) =>
-        c.params?.expression?.includes(".focus()")
-      );
+      const focusCall = evalCalls.find((c) => c.params?.expression?.includes(".focus()"));
       expect(focusCall).toBeDefined();
 
       // Then dispatch key events: for each char (keyDown, char, keyUp) × 2 chars = 6
@@ -545,8 +525,7 @@ describe("CDPPage", () => {
 
     it("selectOption evaluates in-browser selection logic", async () => {
       relay.onCdp("Runtime.evaluate", (params) => {
-        if (params?.expression?.includes("opt.selected"))
-          return runtimeResult(["opt1", "opt2"]);
+        if (params?.expression?.includes("opt.selected")) return runtimeResult(["opt1", "opt2"]);
         return runtimeResult("complete");
       });
 
@@ -566,9 +545,7 @@ describe("CDPPage", () => {
       const enterDown = keyCalls.find(
         (c) => c.params?.type === "keyDown" && c.params?.key === "Enter"
       );
-      const enterUp = keyCalls.find(
-        (c) => c.params?.type === "keyUp" && c.params?.key === "Enter"
-      );
+      const enterUp = keyCalls.find((c) => c.params?.type === "keyUp" && c.params?.key === "Enter");
       expect(enterDown).toBeDefined();
       expect(enterUp).toBeDefined();
     });
@@ -603,22 +580,21 @@ describe("CDPPage", () => {
 
     it("waitForSelector throws on timeout", async () => {
       relay.onCdp("Runtime.evaluate", (params) => {
-        if (params?.expression?.includes("offsetParent"))
-          return runtimeResult(false); // never found
+        if (params?.expression?.includes("offsetParent")) return runtimeResult(false); // never found
         return runtimeResult("complete");
       });
 
-      await expect(
-        page.waitForSelector(".never", { timeout: 300 })
-      ).rejects.toThrow("not found after 300ms");
+      await expect(page.waitForSelector(".never", { timeout: 300 })).rejects.toThrow(
+        "not found after 300ms"
+      );
     });
 
     it("waitForLoadState resolves when readyState is complete", async () => {
       await page.waitForLoadState("load");
       // Should have checked readyState
-      const call = relay.callsFor("Runtime.evaluate").find(
-        (c) => c.params?.expression === "document.readyState"
-      );
+      const call = relay
+        .callsFor("Runtime.evaluate")
+        .find((c) => c.params?.expression === "document.readyState");
       expect(call).toBeDefined();
     });
 
@@ -666,14 +642,13 @@ describe("CDPPage", () => {
 
     it("waitForFunction throws on timeout", async () => {
       relay.onCdp("Runtime.evaluate", (params) => {
-        if (params?.expression?.includes("neverTrue"))
-          return runtimeResult(false);
+        if (params?.expression?.includes("neverTrue")) return runtimeResult(false);
         return runtimeResult("complete");
       });
 
-      await expect(
-        page.waitForFunction("neverTrue", undefined, { timeout: 300 })
-      ).rejects.toThrow("timed out after 300ms");
+      await expect(page.waitForFunction("neverTrue", undefined, { timeout: 300 })).rejects.toThrow(
+        "timed out after 300ms"
+      );
     });
   });
 
@@ -707,7 +682,10 @@ describe("CDPPage", () => {
 
       const call = relay.lastCall("Page.captureScreenshot");
       expect(call?.params?.clip).toMatchObject({
-        x: 0, y: 0, width: 1920, height: 5000,
+        x: 0,
+        y: 0,
+        width: 1920,
+        height: 5000,
       });
     });
 
@@ -753,8 +731,7 @@ describe("CDPPage", () => {
 
       // Should have sent DELETE /pages/<name>
       const deleteFetch = (globalThis.fetch as any).mock.calls.find(
-        (c: any[]) =>
-          String(c[0]).includes("/pages/") && c[1]?.method === "DELETE"
+        (c: any[]) => String(c[0]).includes("/pages/") && c[1]?.method === "DELETE"
       );
       expect(deleteFetch).toBeDefined();
     });
@@ -776,7 +753,10 @@ describe("CDPPage", () => {
 
       const call = relay.lastCall("Emulation.setDeviceMetricsOverride");
       expect(call?.params).toMatchObject({
-        width: 1024, height: 768, deviceScaleFactor: 1, mobile: false,
+        width: 1024,
+        height: 768,
+        deviceScaleFactor: 1,
+        mobile: false,
       });
       expect(page.viewportSize()).toEqual({ width: 1024, height: 768 });
     });
@@ -787,8 +767,7 @@ describe("CDPPage", () => {
 
     it("syncUrl() updates cached URL from page", async () => {
       relay.onCdp("Runtime.evaluate", (params) => {
-        if (params?.expression === "location.href")
-          return runtimeResult("https://redirected.test");
+        if (params?.expression === "location.href") return runtimeResult("https://redirected.test");
         return runtimeResult("complete");
       });
 
@@ -807,8 +786,8 @@ describe("CDPPage", () => {
       const snap = await page.snapshot();
       expect(snap).toBe("- button: Click me [ref=e1]");
 
-      const snapFetch = (globalThis.fetch as any).mock.calls.find(
-        (c: any[]) => String(c[0]).includes("/snapshot")
+      const snapFetch = (globalThis.fetch as any).mock.calls.find((c: any[]) =>
+        String(c[0]).includes("/snapshot")
       );
       expect(snapFetch).toBeDefined();
     });
@@ -816,8 +795,8 @@ describe("CDPPage", () => {
     it("clickRef() calls relay /ref-action with click action", async () => {
       await page.clickRef("e1");
 
-      const refFetch = (globalThis.fetch as any).mock.calls.find(
-        (c: any[]) => String(c[0]).includes("/ref-action")
+      const refFetch = (globalThis.fetch as any).mock.calls.find((c: any[]) =>
+        String(c[0]).includes("/ref-action")
       );
       const body = JSON.parse(refFetch[1].body);
       expect(body).toMatchObject({ action: "click", ref: "e1" });
@@ -826,8 +805,8 @@ describe("CDPPage", () => {
     it("fillRef() calls relay /ref-action with fill action and value", async () => {
       await page.fillRef("e2", "hello");
 
-      const refFetch = (globalThis.fetch as any).mock.calls.find(
-        (c: any[]) => String(c[0]).includes("/ref-action")
+      const refFetch = (globalThis.fetch as any).mock.calls.find((c: any[]) =>
+        String(c[0]).includes("/ref-action")
       );
       const body = JSON.parse(refFetch[1].body);
       expect(body).toMatchObject({ action: "fill", ref: "e2", value: "hello" });
@@ -836,16 +815,12 @@ describe("CDPPage", () => {
     it("cdp() is public for escape hatch", async () => {
       relay.onCdp("DOM.getDocument", () => ({ root: { nodeId: 1 } }));
 
-      const result = await page.cdp<{ root: { nodeId: number } }>(
-        "DOM.getDocument"
-      );
+      const result = await page.cdp<{ root: { nodeId: number } }>("DOM.getDocument");
       expect(result.root.nodeId).toBe(1);
     });
 
     it("on() throws loudly pointing at getHarEntries", () => {
-      expect(() => page.on("request", () => {})).toThrow(
-        /not supported in extension mode/
-      );
+      expect(() => page.on("request", () => {})).toThrow(/not supported in extension mode/);
       expect(() => page.on("response")).toThrow(/client\.getHarEntries\(name\)/);
       expect(() => page.on("request")).toThrow(/stopHarRecording/);
     });
@@ -859,15 +834,10 @@ describe("CDPPage", () => {
     it("cdp() throws on HTTP error", async () => {
       (globalThis.fetch as any).mockImplementationOnce(
         async () =>
-          new Response(
-            JSON.stringify({ error: { message: "Target not found" } }),
-            { status: 500 }
-          )
+          new Response(JSON.stringify({ error: { message: "Target not found" } }), { status: 500 })
       );
 
-      await expect(page.cdp("Page.navigate", { url: "x" })).rejects.toThrow(
-        "Target not found"
-      );
+      await expect(page.cdp("Page.navigate", { url: "x" })).rejects.toThrow("Target not found");
     });
 
     it("snapshot throws on relay error", async () => {
@@ -914,9 +884,7 @@ describe("CDPKeyboard", () => {
   it("press with named key sends correct keyCode", async () => {
     await page.keyboard.press("Enter");
 
-    const down = relay
-      .callsFor("Input.dispatchKeyEvent")
-      .find((c) => c.params?.type === "keyDown");
+    const down = relay.callsFor("Input.dispatchKeyEvent").find((c) => c.params?.type === "keyDown");
     expect(down?.params?.key).toBe("Enter");
     expect(down?.params?.windowsVirtualKeyCode).toBe(13);
   });
@@ -940,12 +908,8 @@ describe("CDPKeyboard", () => {
     // At least keyDown+keyUp per char = 4 calls minimum
     expect(keyCalls.length).toBeGreaterThanOrEqual(4);
 
-    const hDown = keyCalls.find(
-      (c) => c.params?.type === "keyDown" && c.params?.key === "h"
-    );
-    const iDown = keyCalls.find(
-      (c) => c.params?.type === "keyDown" && c.params?.key === "i"
-    );
+    const hDown = keyCalls.find((c) => c.params?.type === "keyDown" && c.params?.key === "h");
+    const iDown = keyCalls.find((c) => c.params?.type === "keyDown" && c.params?.key === "i");
     expect(hDown).toBeDefined();
     expect(iDown).toBeDefined();
   });
@@ -964,9 +928,7 @@ describe("CDPKeyboard", () => {
 
     const keyCalls = relay.callsFor("Input.dispatchKeyEvent");
     // The 'a' press should have Shift modifier bit (8)
-    const aDown = keyCalls.find(
-      (c) => c.params?.type === "keyDown" && c.params?.key === "a"
-    );
+    const aDown = keyCalls.find((c) => c.params?.type === "keyDown" && c.params?.key === "a");
     expect(aDown?.params?.modifiers).toBe(8);
   });
 });
@@ -1069,8 +1031,9 @@ describe("CDPLocator", () => {
       // Should use the fast path (page.click with CSS selector)
       const evalCalls = relay.callsFor("Runtime.evaluate");
       const centerCall = evalCalls.find(
-        (c) => c.params?.expression?.includes("button.submit") &&
-               c.params?.expression?.includes("getBoundingClientRect")
+        (c) =>
+          c.params?.expression?.includes("button.submit") &&
+          c.params?.expression?.includes("getBoundingClientRect")
       );
       expect(centerCall).toBeDefined();
     });
@@ -1085,8 +1048,7 @@ describe("CDPLocator", () => {
 
     it("locator().textContent() returns element text", async () => {
       relay.onCdp("Runtime.evaluate", (params) => {
-        if (params?.expression?.includes("textContent"))
-          return runtimeResult("Hello");
+        if (params?.expression?.includes("textContent")) return runtimeResult("Hello");
         return runtimeResult("complete");
       });
 
@@ -1096,7 +1058,10 @@ describe("CDPLocator", () => {
 
     it("locator().count() returns number of matches", async () => {
       relay.onCdp("Runtime.evaluate", (params) => {
-        if (params?.expression?.includes("querySelectorAll") && params?.expression?.includes(".length"))
+        if (
+          params?.expression?.includes("querySelectorAll") &&
+          params?.expression?.includes(".length")
+        )
           return runtimeResult(5);
         return runtimeResult("complete");
       });
@@ -1107,8 +1072,7 @@ describe("CDPLocator", () => {
 
     it("locator().isVisible() returns boolean", async () => {
       relay.onCdp("Runtime.evaluate", (params) => {
-        if (params?.expression?.includes("offsetParent"))
-          return runtimeResult(true);
+        if (params?.expression?.includes("offsetParent")) return runtimeResult(true);
         return runtimeResult("complete");
       });
 
@@ -1119,8 +1083,7 @@ describe("CDPLocator", () => {
       const loc = page.locator("li").first();
 
       relay.onCdp("Runtime.evaluate", (params) => {
-        if (params?.expression?.includes("els[0]"))
-          return runtimeResult("first item");
+        if (params?.expression?.includes("els[0]")) return runtimeResult("first item");
         return runtimeResult("complete");
       });
 
@@ -1132,8 +1095,7 @@ describe("CDPLocator", () => {
       const loc = page.locator("li").last();
 
       relay.onCdp("Runtime.evaluate", (params) => {
-        if (params?.expression?.includes("els[els.length - 1]"))
-          return runtimeResult("last item");
+        if (params?.expression?.includes("els[els.length - 1]")) return runtimeResult("last item");
         return runtimeResult("complete");
       });
 
@@ -1145,8 +1107,7 @@ describe("CDPLocator", () => {
       const loc = page.locator("li").nth(3);
 
       relay.onCdp("Runtime.evaluate", (params) => {
-        if (params?.expression?.includes("els[3]"))
-          return runtimeResult("fourth item");
+        if (params?.expression?.includes("els[3]")) return runtimeResult("fourth item");
         return runtimeResult("complete");
       });
 
@@ -1158,8 +1119,7 @@ describe("CDPLocator", () => {
   describe("getByTestId", () => {
     it("generates data-testid CSS selector", async () => {
       relay.onCdp("Runtime.evaluate", (params) => {
-        if (params?.expression?.includes("data-testid"))
-          return runtimeResult("test content");
+        if (params?.expression?.includes("data-testid")) return runtimeResult("test content");
         return runtimeResult("complete");
       });
 
@@ -1179,14 +1139,11 @@ describe("CDPLocator", () => {
         // Expression contains JSON-escaped quotes: [role=\"button\"]
         if (expr.includes("role=") && expr.includes("button") && expr.includes("Submit"))
           return runtimeResult("Submit");
-        if (expr.includes("getBoundingClientRect"))
-          return runtimeResult({ x: 50, y: 50 });
+        if (expr.includes("getBoundingClientRect")) return runtimeResult({ x: 50, y: 50 });
         return runtimeResult("complete");
       });
 
-      const text = await page
-        .getByRole("button", { name: "Submit" })
-        .textContent();
+      const text = await page.getByRole("button", { name: "Submit" }).textContent();
       expect(text).toBe("Submit");
     });
 
@@ -1280,8 +1237,7 @@ describe("CDPLocator", () => {
       const loc = page.getByPlaceholder("Enter email");
 
       relay.onCdp("Runtime.evaluate", (params) => {
-        if (params?.expression?.includes("Enter email"))
-          return runtimeResult("user@test.com");
+        if (params?.expression?.includes("Enter email")) return runtimeResult("user@test.com");
         return runtimeResult("complete");
       });
 
@@ -1298,8 +1254,7 @@ describe("CDPLocator", () => {
           callCount++;
           return runtimeResult(callCount >= 2 ? 1 : 0);
         }
-        if (params?.expression?.includes("offsetParent"))
-          return runtimeResult(true);
+        if (params?.expression?.includes("offsetParent")) return runtimeResult(true);
         return runtimeResult("complete");
       });
 
@@ -1308,14 +1263,13 @@ describe("CDPLocator", () => {
 
     it("waitFor throws on timeout", async () => {
       relay.onCdp("Runtime.evaluate", (params) => {
-        if (params?.expression?.includes(".length"))
-          return runtimeResult(0);
+        if (params?.expression?.includes(".length")) return runtimeResult(0);
         return runtimeResult("complete");
       });
 
-      await expect(
-        page.locator(".never").waitFor({ timeout: 300 })
-      ).rejects.toThrow('timed out after 300ms');
+      await expect(page.locator(".never").waitFor({ timeout: 300 })).rejects.toThrow(
+        "timed out after 300ms"
+      );
     });
   });
 });

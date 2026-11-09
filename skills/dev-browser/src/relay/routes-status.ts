@@ -84,10 +84,7 @@ export function registerStatusRoutes(app: Hono, ctx: RelayContext): void {
       return c.json({ error: "Download not found" }, 404);
     }
     if (record.state !== "completed" || !record.path) {
-      return c.json(
-        { error: `Download not complete (state: ${record.state})` },
-        409
-      );
+      return c.json({ error: `Download not complete (state: ${record.state})` }, 409);
     }
     try {
       const data = readFileSync(record.path);

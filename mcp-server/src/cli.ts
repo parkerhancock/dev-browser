@@ -76,9 +76,7 @@ async function main(): Promise<void> {
         proxy: proxyUrl ? parseProxyUrl(proxyUrl, values["proxy-bypass"]) : undefined,
         locale: values.locale,
         timezoneId: values.timezone,
-        mcpHandler: values.mcp
-          ? createMcpNodeHandler({ mode: "standalone" })
-          : undefined,
+        mcpHandler: values.mcp ? createMcpNodeHandler({ mode: "standalone" }) : undefined,
       });
       break;
     }
@@ -94,9 +92,7 @@ async function main(): Promise<void> {
       const { serveRelay } = await import("../../skills/dev-browser/src/relay.js");
       await serveRelay({
         port: values.port ? Number(values.port) : undefined,
-        mcpHandler: values.mcp
-          ? createMcpNodeHandler({ mode: "extension" })
-          : undefined,
+        mcpHandler: values.mcp ? createMcpNodeHandler({ mode: "extension" }) : undefined,
       });
       break;
     }

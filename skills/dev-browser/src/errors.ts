@@ -11,8 +11,7 @@ function resolveErrorDir(): string {
 function writeErrorToFile(err: unknown, context: string): string {
   const ts = new Date().toISOString().replace(/[:.]/g, "-");
   const path = join(resolveErrorDir(), `error-${ts}.txt`);
-  const stack =
-    err instanceof Error ? (err.stack ?? err.message) : String(err);
+  const stack = err instanceof Error ? (err.stack ?? err.message) : String(err);
   const content = `Context: ${context}\nTime: ${new Date().toISOString()}\n\n${stack}\n`;
   try {
     writeFileSync(path, content);
@@ -32,10 +31,7 @@ function writeErrorToFile(err: unknown, context: string): string {
  * Example error message:
  *   "Element not found: button.submit [details: /tmp/claude-skills/dev-browser/errors/error-2026-02-23T....txt]"
  */
-export function wrapWithCleanErrors<T extends object>(
-  target: T,
-  contextPrefix: string
-): T {
+export function wrapWithCleanErrors<T extends object>(target: T, contextPrefix: string): T {
   return new Proxy(target, {
     get(obj, prop, receiver) {
       const val = Reflect.get(obj, prop, receiver);
@@ -45,19 +41,13 @@ export function wrapWithCleanErrors<T extends object>(
         try {
           result = val.apply(obj, args);
         } catch (err) {
-          const path = writeErrorToFile(
-            err,
-            `${contextPrefix}.${String(prop)}`
-          );
+          const path = writeErrorToFile(err, `${contextPrefix}.${String(prop)}`);
           const msg = err instanceof Error ? err.message : String(err);
           throw new Error(`${msg} [details: ${path}]`);
         }
         if (result instanceof Promise) {
           return result.catch((err: unknown) => {
-            const path = writeErrorToFile(
-              err,
-              `${contextPrefix}.${String(prop)}`
-            );
+            const path = writeErrorToFile(err, `${contextPrefix}.${String(prop)}`);
             const msg = err instanceof Error ? err.message : String(err);
             throw new Error(`${msg} [details: ${path}]`);
           });

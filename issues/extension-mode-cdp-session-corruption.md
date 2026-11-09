@@ -24,7 +24,7 @@ Together these prevent any browser automation via extension mode. Pages are crea
 
 **Files:** `extension/services/ConnectionManager.ts:228-244`, `skills/dev-browser/src/relay.ts:1337-1351`
 
-The relay's `/extension` WebSocket handler closes the existing connection when a new one arrives (code 4001, "Extension Replaced"). The extension's `onclose` handler sees the close, checks `this.shouldMaintain`, and immediately calls `startMaintaining()` → `runReconnectCycle()` → `tryConnect()`. The 3-second `RECONNECT_INTERVAL` only applies to *failed* retries, not the initial attempt from `startMaintaining()`. So the successful-then-immediately-closed pattern bypasses any delay.
+The relay's `/extension` WebSocket handler closes the existing connection when a new one arrives (code 4001, "Extension Replaced"). The extension's `onclose` handler sees the close, checks `this.shouldMaintain`, and immediately calls `startMaintaining()` → `runReconnectCycle()` → `tryConnect()`. The 3-second `RECONNECT_INTERVAL` only applies to _failed_ retries, not the initial attempt from `startMaintaining()`. So the successful-then-immediately-closed pattern bypasses any delay.
 
 **Loop:** Extension connects → relay closes old connection (4001) → extension onclose fires → immediate reconnect → relay closes previous → repeat forever.
 
@@ -113,6 +113,7 @@ EOF
 ## Suggested Fix Direction
 
 The CDP response routing needs to ensure that:
+
 1. Responses are never sent to a client that didn't originate the request
 2. When a Playwright client disconnects and reconnects, pending CDP commands from the old client are properly cancelled (not forwarded to the new client)
 3. The relay's CDP session-to-client mapping is rebuilt cleanly on each new Playwright connection, not carried over from previous connections

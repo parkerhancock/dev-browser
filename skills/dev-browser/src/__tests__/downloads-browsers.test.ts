@@ -14,9 +14,7 @@ import { serveRelay, type RelayServer, type DownloadRecord } from "../relay.js";
 import { loadToken, TOKEN_HEADER } from "../auth.js";
 import { MockExtension, randomPort, fetchJson } from "./mock-extension.js";
 
-process.env.DEV_BROWSER_DIR = mkdtempSync(
-  join(tmpdir(), "dev-browser-downloads-test-")
-);
+process.env.DEV_BROWSER_DIR = mkdtempSync(join(tmpdir(), "dev-browser-downloads-test-"));
 
 describe("Browser labeling (#10b) and downloads (#8)", () => {
   let relay: RelayServer;
@@ -154,9 +152,7 @@ describe("Browser labeling (#10b) and downloads (#8)", () => {
     ext2.sendBrowserInfo("chrome", "131.0.0.0");
     await new Promise((r) => setTimeout(r, 100));
     const after = await fetchJson(port, "/browsers");
-    expect((after.body.browsers as Array<{ browser: string }>)[0]!.browser).toBe(
-      "chrome"
-    );
+    expect((after.body.browsers as Array<{ browser: string }>)[0]!.browser).toBe("chrome");
 
     // Download metadata survives the reconnect
     const dl = await fetchJson(port, "/downloads");

@@ -88,6 +88,7 @@ All of these are labeled "Partner preview."
 
   The tool result shall never contain the `appLink`, the grant `reference`,
   or any token.
+
 - R5. When `autofill_credential(page, handle)` is called, the server shall:
   - enable Agentic Mode for that tab;
   - resolve the tab's Chrome tab ID;
@@ -98,6 +99,7 @@ All of these are labeled "Partner preview."
 
   It shall return only a status or error code (`fill_submitted`,
   `noExistingCredentials`, `autosubmitFailed`, and so on).
+
 - R6. While a page is locked, every MCP tool that reads or drives that page
   shall wait for the lock, and fail with "page busy signing in" if the lock
   lasts longer than the fill timeout. That covers `screenshot`, `computer`,

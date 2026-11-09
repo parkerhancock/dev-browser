@@ -14,7 +14,10 @@ declare module "turndown" {
       key: string,
       rule: {
         filter: string | string[];
-        replacement: (content: string, node: { getAttribute(name: string): string | null }) => string;
+        replacement: (
+          content: string,
+          node: { getAttribute(name: string): string | null }
+        ) => string;
       }
     ): this;
   }

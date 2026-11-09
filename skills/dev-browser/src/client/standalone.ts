@@ -153,7 +153,9 @@ export async function connectStandaloneMode(
         // This connection answers proxy auth challenges too (patchright
         // intercepts every request), so it needs the proxy's credentials
         if (info.proxyCredentials) {
-          await Promise.all(browser.contexts().map((c) => c.setHTTPCredentials(info.proxyCredentials!)));
+          await Promise.all(
+            browser.contexts().map((c) => c.setHTTPCredentials(info.proxyCredentials!))
+          );
         }
         return browser;
       } finally {
@@ -404,7 +406,9 @@ export async function connectStandaloneMode(
     // Wait for any pending body fetches to complete (with timeout)
     if (state.pendingBodyFetches > 0) {
       await Promise.race([
-        new Promise<void>((resolve) => { state.bodyFetchDone = resolve; }),
+        new Promise<void>((resolve) => {
+          state.bodyFetchDone = resolve;
+        }),
         new Promise<void>((resolve) => setTimeout(resolve, 5000)),
       ]);
     }
@@ -510,10 +514,7 @@ export async function connectStandaloneMode(
         await Promise.race([
           page.evaluate(() => true),
           new Promise<never>((_, reject) =>
-            setTimeout(
-              () => reject(new Error("health check timeout")),
-              healthCheckTimeout
-            )
+            setTimeout(() => reject(new Error("health check timeout")), healthCheckTimeout)
           ),
         ]);
       } catch {
@@ -705,7 +706,10 @@ export async function connectStandaloneMode(
         }
       } else if (options.mobile === false) {
         // Detaching drops every override the session set
-        await emulationSessions.get(name)?.detach().catch(() => {});
+        await emulationSessions
+          .get(name)
+          ?.detach()
+          .catch(() => {});
         emulationSessions.delete(name);
       }
       if (!options.mobile && options.width && options.height) {
@@ -733,20 +737,13 @@ export async function connectStandaloneMode(
       return pageInnerText(page as unknown as Page);
     },
 
-    async grantPermissions(
-      name: string,
-      origin: string,
-      permissions: string[]
-    ): Promise<void> {
+    async grantPermissions(name: string, origin: string, permissions: string[]): Promise<void> {
       const page = await getPage(name);
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       await page.context().grantPermissions(permissions as any, { origin });
     },
 
-    async clearBrowsingData(
-      name: string,
-      options?: { origin?: string }
-    ): Promise<void> {
+    async clearBrowsingData(name: string, options?: { origin?: string }): Promise<void> {
       const page = await getPage(name);
       const cdpSession = await page.context().newCDPSession(page);
       try {

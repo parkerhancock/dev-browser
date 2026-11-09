@@ -200,17 +200,20 @@ export default defineBackground(() => {
   });
 
   // Initialize from stored state
-  stateManager.getState().then((state) => {
-    updateBadge(state.isActive);
-    if (state.isActive) {
-      // Create keep-alive alarm only when extension is active
-      chrome.alarms.create(KEEPALIVE_ALARM, { periodInMinutes: 0.5 });
-      connectionManager.startMaintaining();
-    }
-  }).catch((err) => {
-    logger.debug("Error loading initial state, defaulting to inactive:", err);
-    updateBadge(false);
-  });
+  stateManager
+    .getState()
+    .then((state) => {
+      updateBadge(state.isActive);
+      if (state.isActive) {
+        // Create keep-alive alarm only when extension is active
+        chrome.alarms.create(KEEPALIVE_ALARM, { periodInMinutes: 0.5 });
+        connectionManager.startMaintaining();
+      }
+    })
+    .catch((err) => {
+      logger.debug("Error loading initial state, defaulting to inactive:", err);
+      updateBadge(false);
+    });
 
   // Set up Chrome Alarms keep-alive listener
   // This ensures the connection is maintained even after service worker unloads

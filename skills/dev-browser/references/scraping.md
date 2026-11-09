@@ -10,10 +10,10 @@ Scrolling is slow, unreliable, and wastes time. APIs return structured data with
 
 The two modes capture traffic differently:
 
-| Mode | Capture method | Why |
-|------|---------------|-----|
-| **Standalone** (port 9222) | `page.on("request"/"response")` | Real Playwright page — event listeners work |
-| **Extension** (port 9224) | HAR recording + `client.getHarEntries()` | `page.on()` **throws** in extension mode |
+| Mode                       | Capture method                           | Why                                         |
+| -------------------------- | ---------------------------------------- | ------------------------------------------- |
+| **Standalone** (port 9222) | `page.on("request"/"response")`          | Real Playwright page — event listeners work |
+| **Extension** (port 9224)  | HAR recording + `client.getHarEntries()` | `page.on()` **throws** in extension mode    |
 
 In extension mode, calling `page.on(...)` throws:
 
@@ -68,9 +68,7 @@ console.log(`${total} entries captured so far`);
 
 // Find JSON API calls (XHR/fetch traffic)
 const apiCalls = entries.filter(
-  (e) =>
-    e.response.content.mimeType?.includes("json") &&
-    e.request.url.includes("/api/")
+  (e) => e.response.content.mimeType?.includes("json") && e.request.url.includes("/api/")
 );
 
 for (const e of apiCalls) {
@@ -121,7 +119,7 @@ fs.writeFileSync("tmp/session.har", JSON.stringify({ log: har }, null, 2));
 Other HAR client methods, for reference:
 
 ```typescript
-await client.isRecordingHar("app");    // async — queries the relay, sees recordings from earlier runs
+await client.isRecordingHar("app"); // async — queries the relay, sees recordings from earlier runs
 await client.startHarRecording("app"); // no-op success if already recording (extension mode)
 ```
 
@@ -263,15 +261,15 @@ await client.disconnect();
 
 ## Key Patterns
 
-| Pattern                        | Mode       | Description                                            |
-| ------------------------------ | ---------- | ------------------------------------------------------ |
-| `client.getHarEntries(name)`   | Both       | Peek at captured traffic without stopping recording    |
-| `client.stopHarRecording(name)`| Both       | Collect the full HAR and reset the recorder            |
-| `page.on('request')`           | Standalone | Capture outgoing request URL + headers                 |
-| `page.on('response')`          | Standalone | Capture response data to understand schema             |
-| `page.evaluate(fetch)`         | Both       | Replay requests in browser context (inherits auth)     |
-| `Map` for deduplication        | Both       | APIs often return overlapping data across pages        |
-| Cursor-based pagination        | Both       | Look for `cursor`, `next_token`, `offset` in responses |
+| Pattern                         | Mode       | Description                                            |
+| ------------------------------- | ---------- | ------------------------------------------------------ |
+| `client.getHarEntries(name)`    | Both       | Peek at captured traffic without stopping recording    |
+| `client.stopHarRecording(name)` | Both       | Collect the full HAR and reset the recorder            |
+| `page.on('request')`            | Standalone | Capture outgoing request URL + headers                 |
+| `page.on('response')`           | Standalone | Capture response data to understand schema             |
+| `page.evaluate(fetch)`          | Both       | Replay requests in browser context (inherits auth)     |
+| `Map` for deduplication         | Both       | APIs often return overlapping data across pages        |
+| Cursor-based pagination         | Both       | Look for `cursor`, `next_token`, `offset` in responses |
 
 ## Tips
 

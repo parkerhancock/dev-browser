@@ -51,6 +51,7 @@ const sessionId = client.getSession();
 ## Suspected cause
 
 The page name to tab ID mapping may be stored in memory only and lost when:
+
 - The relay server process has some internal state reset
 - The WebSocket connection between client and server cycles
 - Some timeout or cleanup process runs
@@ -68,6 +69,7 @@ Pages created via `client.page()` should persist for the lifetime of the relay s
 ## Workaround
 
 Re-navigate to URLs each time, but this:
+
 - Loses page state (scroll position, form data, navigation history)
 - Requires re-authentication if session cookies aren't shared (see related issue below)
 

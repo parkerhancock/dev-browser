@@ -48,7 +48,11 @@ const SET_VALUE_SCRIPT = (ref: string, value: string | number | boolean): string
 })()`;
 
 /** Set the form control at `ref` to `value`; returns what was done. */
-export async function setRefValue(page: Page, ref: string, value: string | number | boolean): Promise<string> {
+export async function setRefValue(
+  page: Page,
+  ref: string,
+  value: string | number | boolean
+): Promise<string> {
   return page.evaluate<string>(SET_VALUE_SCRIPT(ref, value));
 }
 

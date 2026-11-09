@@ -20,11 +20,7 @@ import { MockExtension, randomPort, fetchJson, waitFor } from "./mock-extension.
 
 process.env.DEV_BROWSER_DIR = mkdtempSync(join(tmpdir(), "dev-browser-features-test-"));
 
-async function createPage(
-  port: number,
-  session: string,
-  name: string
-): Promise<void> {
+async function createPage(port: number, session: string, name: string): Promise<void> {
   const { status } = await fetchJson(port, "/pages", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -258,9 +254,7 @@ describe("Relay features (health, batch, console, dialogs)", () => {
     await createPage(port, "dialog-session", "dialog-page");
 
     const forwarded = ext.forwardedCdpCommands();
-    const before = forwarded.filter(
-      (c) => c.method === "Page.handleJavaScriptDialog"
-    ).length;
+    const before = forwarded.filter((c) => c.method === "Page.handleJavaScriptDialog").length;
 
     // Use any live session id from a previous createTarget
     const anySession = forwarded.find((c) => c.sessionId)?.sessionId ?? "pw-session-target-1";
@@ -278,10 +272,8 @@ describe("Relay features (health, batch, console, dialogs)", () => {
 
     await waitFor(
       () =>
-        ext
-          .forwardedCdpCommands()
-          .filter((c) => c.method === "Page.handleJavaScriptDialog").length >
-        before,
+        ext.forwardedCdpCommands().filter((c) => c.method === "Page.handleJavaScriptDialog")
+          .length > before,
       3000
     );
 
@@ -305,13 +297,19 @@ describe("Relay features (health, batch, console, dialogs)", () => {
     await cdp("Runtime.evaluate", { expression: "1" });
     const sessionId = ext.forwardedCdpCommands().at(-1)!.sessionId!;
     const dialogAnswers = () =>
-      ext.forwardedCdpCommands().filter((c) => c.method === "Page.handleJavaScriptDialog" && c.sessionId === sessionId);
+      ext
+        .forwardedCdpCommands()
+        .filter((c) => c.method === "Page.handleJavaScriptDialog" && c.sessionId === sessionId);
     const openDialog = async (type: string) => {
       const before = dialogAnswers().length;
       ext.ws.send(
         JSON.stringify({
           method: "forwardCDPEvent",
-          params: { sessionId, method: "Page.javascriptDialogOpening", params: { message: "", type } },
+          params: {
+            sessionId,
+            method: "Page.javascriptDialogOpening",
+            params: { message: "", type },
+          },
         })
       );
       await waitFor(() => dialogAnswers().length > before, 3000);

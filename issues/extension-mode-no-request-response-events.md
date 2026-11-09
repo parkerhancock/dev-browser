@@ -19,7 +19,7 @@ the capture silently produces nothing.
 
 ```typescript
 const client = await connect({ mode: "extension" });
-const page = await client.page("x") as CDPPage;
+const page = (await client.page("x")) as CDPPage;
 console.log(typeof (page as any).on); // "undefined"
 ```
 
@@ -70,7 +70,7 @@ Pick one (in rough order of value):
 
 2. **If `.on()` won't be implemented in extension mode,** add a clear guard: have
    `CDPPage.on` throw `"page.on() is not supported in extension mode — use HAR
-   recording (client.startHarRecording) or inject a fetch/XHR interceptor"`, and
+recording (client.startHarRecording) or inject a fetch/XHR interceptor"`, and
    update `scraping.md` with an explicit extension-mode section showing the
    supported path.
 

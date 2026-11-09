@@ -28,22 +28,39 @@ export interface Page {
     pageFunction: string | ((...args: any[]) => R | Promise<R>),
     ...args: any[]
   ): Promise<R>;
-  evaluateHandle(
-    pageFunction: string | ((...args: any[]) => any),
-    ...args: any[]
-  ): Promise<any>;
+  evaluateHandle(pageFunction: string | ((...args: any[]) => any), ...args: any[]): Promise<any>;
 
   // ---- Interaction ----
-  click(selector: string, options?: { timeout?: number; button?: "left" | "right" | "middle"; clickCount?: number; delay?: number }): Promise<void>;
+  click(
+    selector: string,
+    options?: {
+      timeout?: number;
+      button?: "left" | "right" | "middle";
+      clickCount?: number;
+      delay?: number;
+    }
+  ): Promise<void>;
   dblclick(selector: string, options?: { timeout?: number }): Promise<void>;
   fill(selector: string, value: string, options?: { timeout?: number }): Promise<void>;
-  type(selector: string, text: string, options?: { delay?: number; timeout?: number }): Promise<void>;
+  type(
+    selector: string,
+    text: string,
+    options?: { delay?: number; timeout?: number }
+  ): Promise<void>;
   hover(selector: string, options?: { timeout?: number }): Promise<void>;
   selectOption(selector: string, values: any, options?: { timeout?: number }): Promise<string[]>;
-  setInputFiles(selector: string, files: string | string[], options?: { timeout?: number }): Promise<void>;
+  setInputFiles(
+    selector: string,
+    files: string | string[],
+    options?: { timeout?: number }
+  ): Promise<void>;
   check(selector: string, options?: { timeout?: number }): Promise<void>;
   uncheck(selector: string, options?: { timeout?: number }): Promise<void>;
-  press(selector: string, key: string, options?: { delay?: number; timeout?: number }): Promise<void>;
+  press(
+    selector: string,
+    key: string,
+    options?: { delay?: number; timeout?: number }
+  ): Promise<void>;
   focus(selector: string, options?: { timeout?: number }): Promise<void>;
 
   // ---- Locators ----
@@ -56,10 +73,20 @@ export interface Page {
 
   // ---- Waiting ----
   waitForSelector(selector: string, options?: { timeout?: number; state?: string }): Promise<any>;
-  waitForLoadState(state?: "load" | "domcontentloaded" | "networkidle", options?: { timeout?: number }): Promise<void>;
-  waitForFunction(pageFunction: string | ((...args: any[]) => any), arg?: any, options?: { timeout?: number; polling?: number }): Promise<any>;
+  waitForLoadState(
+    state?: "load" | "domcontentloaded" | "networkidle",
+    options?: { timeout?: number }
+  ): Promise<void>;
+  waitForFunction(
+    pageFunction: string | ((...args: any[]) => any),
+    arg?: any,
+    options?: { timeout?: number; polling?: number }
+  ): Promise<any>;
   waitForTimeout(timeout: number): Promise<void>;
-  waitForURL(url: string | RegExp | ((url: URL) => boolean), options?: { timeout?: number }): Promise<void>;
+  waitForURL(
+    url: string | RegExp | ((url: URL) => boolean),
+    options?: { timeout?: number }
+  ): Promise<void>;
 
   // ---- Input Devices ----
   keyboard: Keyboard;
@@ -74,11 +101,7 @@ export interface Page {
     /** "css" makes one image pixel equal one CSS pixel on HiDPI displays. */
     scale?: "css" | "device";
   }): Promise<Buffer>;
-  pdf(options?: {
-    format?: string;
-    printBackground?: boolean;
-    path?: string;
-  }): Promise<Buffer>;
+  pdf(options?: { format?: string; printBackground?: boolean; path?: string }): Promise<Buffer>;
 
   // ---- State ----
   close(options?: { runBeforeUnload?: boolean }): Promise<void>;
@@ -115,7 +138,10 @@ export interface Locator {
   nth(index: number): Locator;
 
   // ---- Waiting ----
-  waitFor(options?: { state?: "attached" | "detached" | "visible" | "hidden"; timeout?: number }): Promise<void>;
+  waitFor(options?: {
+    state?: "attached" | "detached" | "visible" | "hidden";
+    timeout?: number;
+  }): Promise<void>;
 }
 
 export interface Keyboard {
@@ -127,8 +153,16 @@ export interface Keyboard {
 }
 
 export interface Mouse {
-  click(x: number, y: number, options?: { button?: "left" | "right" | "middle"; clickCount?: number; delay?: number }): Promise<void>;
-  dblclick(x: number, y: number, options?: { button?: "left" | "right" | "middle"; delay?: number }): Promise<void>;
+  click(
+    x: number,
+    y: number,
+    options?: { button?: "left" | "right" | "middle"; clickCount?: number; delay?: number }
+  ): Promise<void>;
+  dblclick(
+    x: number,
+    y: number,
+    options?: { button?: "left" | "right" | "middle"; delay?: number }
+  ): Promise<void>;
   move(x: number, y: number, options?: { steps?: number }): Promise<void>;
   down(options?: { button?: "left" | "right" | "middle"; clickCount?: number }): Promise<void>;
   up(options?: { button?: "left" | "right" | "middle"; clickCount?: number }): Promise<void>;

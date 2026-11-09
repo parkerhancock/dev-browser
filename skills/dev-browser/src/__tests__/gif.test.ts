@@ -5,7 +5,8 @@ import { drawOverlays, encodeGif } from "../gif.js";
 const W = 400;
 const H = 300;
 const blank = () => new Uint8Array(W * H * 4).fill(255);
-const pixel = (px: Uint8Array, x: number, y: number) => Array.from(px.subarray((y * W + x) * 4, (y * W + x) * 4 + 3));
+const pixel = (px: Uint8Array, x: number, y: number) =>
+  Array.from(px.subarray((y * W + x) * 4, (y * W + x) * 4 + 3));
 const ORANGE = [217, 119, 6];
 const RED = [220, 38, 38];
 const WHITE = [255, 255, 255];
@@ -56,10 +57,19 @@ describe("drawOverlays", () => {
       px,
       W,
       H,
-      { marker: { x: 100, y: 100 }, drag: { from: { x: 0, y: 10 }, to: { x: 300, y: 10 } }, label: "Drag" },
+      {
+        marker: { x: 100, y: 100 },
+        drag: { from: { x: 0, y: 10 }, to: { x: 300, y: 10 } },
+        label: "Drag",
+      },
       1,
       1,
-      { showClickIndicators: false, showDragPaths: false, showActionLabels: false, showProgressBar: false }
+      {
+        showClickIndicators: false,
+        showDragPaths: false,
+        showActionLabels: false,
+        showProgressBar: false,
+      }
     );
     expect(px.every((v) => v === 255)).toBe(true);
   });

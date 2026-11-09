@@ -155,7 +155,9 @@ describe("TabManager", () => {
       await tabManager.handleDebuggerDetach(123, "target_closed");
 
       expect(mockSendMessage).toHaveBeenCalledWith(
-        expect.objectContaining({ params: expect.objectContaining({ method: "Target.detachedFromTarget" }) })
+        expect.objectContaining({
+          params: expect.objectContaining({ method: "Target.detachedFromTarget" }),
+        })
       );
       expect(attach).toHaveBeenCalledWith(123);
     });

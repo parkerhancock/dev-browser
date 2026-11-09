@@ -15,7 +15,8 @@ const COMPUTER_VERBS: Record<string, string> = {
   scroll_to: "Scroll to",
 };
 
-const str = (value: unknown): string | undefined => (typeof value === "string" && value.length > 0 ? value : undefined);
+const str = (value: unknown): string | undefined =>
+  typeof value === "string" && value.length > 0 ? value : undefined;
 
 export function describeAction(tool: string, args: Record<string, unknown>): string | undefined {
   switch (tool) {
@@ -43,18 +44,22 @@ export function describeAction(tool: string, args: Record<string, unknown>): str
     case "form_input": {
       const ref = str(args.ref);
       if (ref) return `Set ${ref}`;
-      const count = args.fields && typeof args.fields === "object" ? Object.keys(args.fields).length : 0;
+      const count =
+        args.fields && typeof args.fields === "object" ? Object.keys(args.fields).length : 0;
       return `Fill ${count} field${count === 1 ? "" : "s"}`;
     }
     case "file_upload": {
-      const files = Array.isArray(args.files) ? (args.files as unknown[]).map((f) => basename(String(f))) : [];
+      const files = Array.isArray(args.files)
+        ? (args.files as unknown[]).map((f) => basename(String(f)))
+        : [];
       return `Upload ${files.join(", ")}`;
     }
     case "upload_image":
       return `Upload ${str(args.filename) ?? basename(String(args.path ?? ""))}`;
     case "resize_window": {
       const parts: string[] = [];
-      if (typeof args.width === "number" && typeof args.height === "number") parts.push(`${args.width}x${args.height}`);
+      if (typeof args.width === "number" && typeof args.height === "number")
+        parts.push(`${args.width}x${args.height}`);
       else if (str(args.preset)) parts.push(String(args.preset));
       if (str(args.color_scheme)) parts.push(`${String(args.color_scheme)} mode`);
       return `Resize to ${parts.join(", ")}`;

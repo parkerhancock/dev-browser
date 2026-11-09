@@ -44,6 +44,8 @@ describe("filterSnapshot", () => {
   });
 
   test("truncates to maxChars", () => {
-    expect(filterSnapshot(SNAPSHOT, { maxChars: 10 })).toMatch(/^- generic \n\n\[truncated: \d+ chars total\]$/);
+    expect(filterSnapshot(SNAPSHOT, { maxChars: 10 })).toMatch(
+      /^- generic \n\n\[truncated: \d+ chars total\]$/
+    );
   });
 });

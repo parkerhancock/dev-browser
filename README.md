@@ -34,10 +34,10 @@ This plugin includes a stealth web fetcher that replaces Claude Code's built-in 
 
 **Mode priority:**
 
-| Mode | Port | Stealth Level | Notes |
-|------|------|---------------|-------|
-| Extension | 9224 | Best | Uses your real Chrome with logged-in sessions |
-| Standalone | 9222 | Good | Auto-starts fresh Chromium if extension unavailable |
+| Mode       | Port | Stealth Level | Notes                                               |
+| ---------- | ---- | ------------- | --------------------------------------------------- |
+| Extension  | 9224 | Best          | Uses your real Chrome with logged-in sessions       |
+| Standalone | 9222 | Good          | Auto-starts fresh Chromium if extension unavailable |
 
 For maximum stealth (real browser fingerprint, existing cookies), install the Chrome extension.
 
@@ -102,6 +102,7 @@ When active, Claude can control your existing Chrome tabs with all your logged-i
 Multiple Claude Code instances can share the same relay server without conflicts. Each instance automatically gets an isolated session with its own page namespace.
 
 > **Note:** This plugin includes a SessionStart hook that enables automatic session persistence. Due to a [Claude Code limitation](https://github.com/anthropics/claude-code/issues/12634), plugin hooks aren't discovered on updates—only on fresh installs. If you're updating from a previous version and pages aren't persisting across scripts, uninstall and reinstall the plugin:
+>
 > ```
 > /plugin uninstall dev-browser@dev-browser
 > /plugin install dev-browser@dev-browser
@@ -203,11 +204,11 @@ This solves the common problem where `page.goto()` hangs for 30 seconds on sites
 
 HAR recording starts automatically when you call `client.page()`. When you're done, `saveArchive()` bundles everything into a single `.zip`:
 
-| File | Contents | Use case |
-|------|----------|----------|
-| `<name>.wacz` | WARC network archive | Archival replay, provenance |
-| `<name>.html` | Rendered DOM snapshot | Full-text search indexing |
-| `<name>.pdf` | PDF rendering (Letter) | Human-readable reference |
+| File          | Contents               | Use case                    |
+| ------------- | ---------------------- | --------------------------- |
+| `<name>.wacz` | WARC network archive   | Archival replay, provenance |
+| `<name>.html` | Rendered DOM snapshot  | Full-text search indexing   |
+| `<name>.pdf`  | PDF rendering (Letter) | Human-readable reference    |
 
 ```typescript
 import { connect, navigateTo, saveArchive } from "@/client.js";
@@ -232,6 +233,7 @@ const waczPath = await saveWacz(client, "research");
 ```
 
 The recording lifecycle is fully automatic:
+
 - **`page()`** — auto-starts HAR recording (opt out with `{ record: false }`)
 - **`saveArchive()` / `saveWacz()`** — stops recording and saves
 - **`close()` / `disconnect()`** — silently cleans up any active recordings

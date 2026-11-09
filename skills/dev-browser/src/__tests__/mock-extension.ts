@@ -14,11 +14,7 @@ export function randomPort(): number {
 }
 
 /** Wait for a condition with timeout */
-export async function waitFor(
-  fn: () => boolean,
-  timeoutMs = 2000,
-  pollMs = 20
-): Promise<void> {
+export async function waitFor(fn: () => boolean, timeoutMs = 2000, pollMs = 20): Promise<void> {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
     if (fn()) return;
@@ -95,7 +91,11 @@ export class MockExtension {
    * - Return any other value to auto-send it as the response.
    */
   onCommand(
-    handler: (msg: { id: number; method: string; params?: Record<string, unknown> }) => unknown | undefined
+    handler: (msg: {
+      id: number;
+      method: string;
+      params?: Record<string, unknown>;
+    }) => unknown | undefined
   ): void {
     this.onCommandHandlers.push(handler);
   }
@@ -123,7 +123,11 @@ export class MockExtension {
       );
   }
 
-  private handleCommand(msg: { id: number; method: string; params?: Record<string, unknown> }): void {
+  private handleCommand(msg: {
+    id: number;
+    method: string;
+    params?: Record<string, unknown>;
+  }): void {
     // Check custom handlers first
     for (const handler of this.onCommandHandlers) {
       const result = handler(msg);
@@ -200,11 +204,7 @@ export class MockExtension {
   }
 
   /** Send a Target.attachedToTarget event to the relay */
-  sendAttachedToTarget(
-    targetId: string,
-    sessionId: string,
-    url = "about:blank"
-  ): void {
+  sendAttachedToTarget(targetId: string, sessionId: string, url = "about:blank"): void {
     this.ws.send(
       JSON.stringify({
         method: "forwardCDPEvent",

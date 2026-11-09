@@ -243,7 +243,7 @@ describe("Relay Server", () => {
         session,
       });
       expect(body.warning).toBeTruthy();
-      expect((body.warning as string)).toContain("Warning");
+      expect(body.warning as string).toContain("Warning");
     });
 
     test("rejects when tab limit exceeded", async () => {
@@ -298,8 +298,8 @@ describe("Relay Server", () => {
       // Each session only sees its own page
       const listA = await fetchJson(port, "/pages", { session: "iso-session-a" });
       const listB = await fetchJson(port, "/pages", { session: "iso-session-b" });
-      expect((listA.body.pages as string[])).toEqual(["shared-name"]);
-      expect((listB.body.pages as string[])).toEqual(["shared-name"]);
+      expect(listA.body.pages as string[]).toEqual(["shared-name"]);
+      expect(listB.body.pages as string[]).toEqual(["shared-name"]);
     });
 
     test("deleting from one session doesn't affect another", async () => {
@@ -324,7 +324,7 @@ describe("Relay Server", () => {
 
       // Session B still has it
       const listB = await fetchJson(port, "/pages", { session: "iso-del-b" });
-      expect((listB.body.pages as string[])).toContain("cross-del");
+      expect(listB.body.pages as string[]).toContain("cross-del");
     });
   });
 
@@ -495,11 +495,7 @@ describe("Relay Server", () => {
      * sending the Network.* events the extension would forward. Uses a
      * non-text mimeType so no response body fetch is triggered.
      */
-    function sendNetworkExchange(
-      targetId: string,
-      requestId: string,
-      url: string
-    ): void {
+    function sendNetworkExchange(targetId: string, requestId: string, url: string): void {
       const sessionId = `pw-session-${targetId}`;
       const send = (method: string, params: Record<string, unknown>) => {
         ext.ws.send(
@@ -602,10 +598,7 @@ describe("Relay Server", () => {
       });
 
       // No session header — query param must select the right session
-      const viaQuery = await fetchJson(
-        port,
-        `/har/status?page=har-query-page&session=${session}`
-      );
+      const viaQuery = await fetchJson(port, `/har/status?page=har-query-page&session=${session}`);
       expect(viaQuery.body.recording).toBe(true);
 
       // Without header or query param it falls back to "default" (not recording)
@@ -659,11 +652,9 @@ describe("Relay Server", () => {
       const session = "har-entries-404-session";
       await createPage("har-entries-404-page", session);
 
-      const { status, body } = await fetchJson(
-        port,
-        "/har/entries?page=har-entries-404-page",
-        { session }
-      );
+      const { status, body } = await fetchJson(port, "/har/entries?page=har-entries-404-page", {
+        session,
+      });
       expect(status).toBe(404);
       expect(body.error).toBe('No HAR recording active for "har-entries-404-page"');
     });
@@ -697,22 +688,16 @@ describe("Relay Server", () => {
       ]);
 
       // since slices correctly
-      const sliced = await fetchJson(
-        port,
-        "/har/entries?page=har-entries-peek-page&since=1",
-        { session }
-      );
+      const sliced = await fetchJson(port, "/har/entries?page=har-entries-peek-page&since=1", {
+        session,
+      });
       expect(sliced.body.total).toBe(2);
       const slicedEntries = sliced.body.entries as Array<{ request: { url: string } }>;
       expect(slicedEntries).toHaveLength(1);
       expect(slicedEntries[0]!.request.url).toBe("https://example.com/b");
 
       // Recorder is untouched: status still recording, stop still drains
-      const status = await fetchJson(
-        port,
-        "/har/status?page=har-entries-peek-page",
-        { session }
-      );
+      const status = await fetchJson(port, "/har/status?page=har-entries-peek-page", { session });
       expect(status.body.recording).toBe(true);
       expect(status.body.entries).toBe(2);
 
@@ -826,7 +811,7 @@ describe("Relay Server - Cross-origin Navigation", () => {
 
     // Find the CDP session for this target from stats
     const stats1 = await fetchJson(port, "/stats");
-    expect((stats1.body.connectedTargets as number)).toBeGreaterThan(0);
+    expect(stats1.body.connectedTargets as number).toBeGreaterThan(0);
 
     // Simulate cross-origin navigation: detach old session, then reattach with new session
     // The extension sends detach for the old CDP session
@@ -871,14 +856,14 @@ describe("Relay Server - Cross-origin Navigation", () => {
     await new Promise((r) => setTimeout(r, 100));
     const listDuring = await fetchJson(port, "/pages", { session: "orphan-session" });
     // During the 500ms grace period the page name is still in the session
-    expect((listDuring.body.pages as string[])).toContain("orphan-page");
+    expect(listDuring.body.pages as string[]).toContain("orphan-page");
 
     // Wait for the 500ms grace period to expire + buffer
     await new Promise((r) => setTimeout(r, 600));
 
     // Page should be cleaned up now
     const listAfter = await fetchJson(port, "/pages", { session: "orphan-session" });
-    expect((listAfter.body.pages as string[])).not.toContain("orphan-page");
+    expect(listAfter.body.pages as string[]).not.toContain("orphan-page");
   });
 });
 
@@ -960,26 +945,21 @@ describe("getAgentSession", () => {
   function mockContext(header?: string, query?: string): Context {
     return {
       req: {
-        header: (name: string) =>
-          name === "X-DevBrowser-Session" ? header : undefined,
+        header: (name: string) => (name === "X-DevBrowser-Session" ? header : undefined),
         query: (name: string) => (name === "session" ? query : undefined),
       },
     } as unknown as Context;
   }
 
   test("prefers the header when present", () => {
-    expect(getAgentSession(mockContext("header-session", "query-session"))).toBe(
-      "header-session"
-    );
+    expect(getAgentSession(mockContext("header-session", "query-session"))).toBe("header-session");
   });
 
   test("falls back to the session query param when header is absent", () => {
-    expect(getAgentSession(mockContext(undefined, "query-session"))).toBe(
-      "query-session"
-    );
+    expect(getAgentSession(mockContext(undefined, "query-session"))).toBe("query-session");
   });
 
-  test("defaults to \"default\" when neither is present", () => {
+  test('defaults to "default" when neither is present', () => {
     expect(getAgentSession(mockContext())).toBe("default");
   });
 });

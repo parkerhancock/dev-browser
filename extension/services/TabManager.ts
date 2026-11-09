@@ -118,62 +118,62 @@ export class TabManager {
     const debuggee = { tabId };
 
     try {
-    this.logger.debug("Attaching debugger to tab:", tabId);
-    await chrome.debugger.attach(debuggee, "1.3");
+      this.logger.debug("Attaching debugger to tab:", tabId);
+      await chrome.debugger.attach(debuggee, "1.3");
 
-    const result = (await chrome.debugger.sendCommand(debuggee, "Target.getTargetInfo")) as {
-      targetInfo: TargetInfo;
-    };
+      const result = (await chrome.debugger.sendCommand(debuggee, "Target.getTargetInfo")) as {
+        targetInfo: TargetInfo;
+      };
 
-    const targetInfo = result.targetInfo;
-    const sessionId = `pw-${SESSION_PREFIX}-tab-${this.nextSessionId++}`;
+      const targetInfo = result.targetInfo;
+      const sessionId = `pw-${SESSION_PREFIX}-tab-${this.nextSessionId++}`;
 
-    this.tabs.set(tabId, {
-      sessionId,
-      targetId: targetInfo.targetId,
-      state: "connected",
-    });
-
-    // Enable essential CDP domains so events will fire
-    // These must be enabled before Playwright connects, otherwise
-    // navigation events that happen during connection setup are lost
-    try {
-      await chrome.debugger.sendCommand(debuggee, "Page.enable");
-      await chrome.debugger.sendCommand(debuggee, "Network.enable");
-      await chrome.debugger.sendCommand(debuggee, "Runtime.enable");
-      this.logger.debug("CDP domains enabled for tab:", tabId);
-    } catch (err) {
-      this.logger.debug("Error enabling CDP domains:", err);
-      // Continue anyway - Playwright will enable them
-    }
-
-    // Inject stealth overrides before any navigation occurs.
-    // Sites like X.com detect CDP debugger attachment and degrade
-    // functionality (e.g., refusing to render React or blocking API calls).
-    try {
-      await chrome.debugger.sendCommand(debuggee, "Page.addScriptToEvaluateOnNewDocument", {
-        source: STEALTH_SCRIPT,
+      this.tabs.set(tabId, {
+        sessionId,
+        targetId: targetInfo.targetId,
+        state: "connected",
       });
-      this.logger.debug("Stealth script injected for tab:", tabId);
-    } catch (err) {
-      this.logger.debug("Error injecting stealth script:", err);
-    }
 
-    // Notify relay of new target
-    this.sendMessage({
-      method: "forwardCDPEvent",
-      params: {
-        method: "Target.attachedToTarget",
+      // Enable essential CDP domains so events will fire
+      // These must be enabled before Playwright connects, otherwise
+      // navigation events that happen during connection setup are lost
+      try {
+        await chrome.debugger.sendCommand(debuggee, "Page.enable");
+        await chrome.debugger.sendCommand(debuggee, "Network.enable");
+        await chrome.debugger.sendCommand(debuggee, "Runtime.enable");
+        this.logger.debug("CDP domains enabled for tab:", tabId);
+      } catch (err) {
+        this.logger.debug("Error enabling CDP domains:", err);
+        // Continue anyway - Playwright will enable them
+      }
+
+      // Inject stealth overrides before any navigation occurs.
+      // Sites like X.com detect CDP debugger attachment and degrade
+      // functionality (e.g., refusing to render React or blocking API calls).
+      try {
+        await chrome.debugger.sendCommand(debuggee, "Page.addScriptToEvaluateOnNewDocument", {
+          source: STEALTH_SCRIPT,
+        });
+        this.logger.debug("Stealth script injected for tab:", tabId);
+      } catch (err) {
+        this.logger.debug("Error injecting stealth script:", err);
+      }
+
+      // Notify relay of new target
+      this.sendMessage({
+        method: "forwardCDPEvent",
         params: {
-          sessionId,
-          targetInfo: { ...targetInfo, browserContextId: "default", attached: true },
-          waitingForDebugger: false,
+          method: "Target.attachedToTarget",
+          params: {
+            sessionId,
+            targetInfo: { ...targetInfo, browserContextId: "default", attached: true },
+            waitingForDebugger: false,
+          },
         },
-      },
-    });
+      });
 
-    this.logger.log("Tab attached:", tabId, "sessionId:", sessionId, "url:", targetInfo.url);
-    return targetInfo;
+      this.logger.log("Tab attached:", tabId, "sessionId:", sessionId, "url:", targetInfo.url);
+      return targetInfo;
     } finally {
       this.attachingTabs.delete(tabId);
     }

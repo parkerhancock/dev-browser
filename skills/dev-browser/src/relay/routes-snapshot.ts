@@ -8,11 +8,7 @@ import { getAgentSession } from "../types.js";
 import type { RelayContext } from "./context.js";
 
 export function registerSnapshotRoutes(app: Hono, ctx: RelayContext): void {
-  const {
-    live,
-    sendToExtension,
-    namedPages,
-  } = ctx;
+  const { live, sendToExtension, namedPages } = ctx;
 
   // ============================================================================
   // ARIA Snapshot & Ref-based Interaction Endpoints
@@ -77,7 +73,12 @@ export function registerSnapshotRoutes(app: Hono, ctx: RelayContext): void {
     }
 
     const agentSession = getAgentSession(c);
-    const { page: pageName, action, ref, value } = (await c.req.json()) as {
+    const {
+      page: pageName,
+      action,
+      ref,
+      value,
+    } = (await c.req.json()) as {
       page: string;
       action: string;
       ref: string;

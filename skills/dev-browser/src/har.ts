@@ -101,8 +101,7 @@ export function processNetworkEvent(
       name: n,
       value: String(v),
     }));
-    const cookieHeader =
-      params.request.headers["Cookie"] ?? params.request.headers["cookie"] ?? "";
+    const cookieHeader = params.request.headers["Cookie"] ?? params.request.headers["cookie"] ?? "";
     const cookies = parseCookieHeader(cookieHeader);
     const postData = params.request.postData
       ? {

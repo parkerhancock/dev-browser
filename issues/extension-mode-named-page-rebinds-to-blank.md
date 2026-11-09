@@ -130,7 +130,7 @@ EOF
    to the existing tab (by last-known URL or a stored tabId) instead of handing
    back a blank target.
 2. **Fix restart recovery matching.** The `Attempting to recover N persisted
-   pages` pass reports `0 recovered, N stale` even when the live tab is present in
+pages` pass reports `0 recovered, N stale` even when the live tab is present in
    `Found M available targets`. Recovery should match persisted pages against
    available targets (URL/tabId) and re-bind rather than marking stale.
 3. **Actually exempt pinned pages from idle cleanup** (or document that pinning

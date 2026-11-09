@@ -208,7 +208,12 @@ async function capture(
 ): Promise<Buffer> {
   const { data } = await cdp<{ data: string }>("Page.captureScreenshot", {
     format: "png",
-    clip: { ...clip, x: clip.x + view.scrollX, y: clip.y + view.scrollY, scale: magnification / view.dpr },
+    clip: {
+      ...clip,
+      x: clip.x + view.scrollX,
+      y: clip.y + view.scrollY,
+      scale: magnification / view.dpr,
+    },
   });
   return Buffer.from(data, "base64");
 }
@@ -219,7 +224,11 @@ function checkScale(scale: number | undefined): number {
   return s;
 }
 
-async function screenshot(page: Page, input: ComputerInput, cdp?: CdpSend): Promise<ComputerResult> {
+async function screenshot(
+  page: Page,
+  input: ComputerInput,
+  cdp?: CdpSend
+): Promise<ComputerResult> {
   const scale = checkScale(input.scale);
   const view = await viewState(page);
   const image =
@@ -243,7 +252,10 @@ async function zoom(page: Page, input: ComputerInput, cdp?: CdpSend): Promise<Co
   const clip = { x: x0!, y: y0!, width: x1! - x0!, height: y1! - y0! };
   const frame = "Coordinates stay in the full viewport frame.";
   if (!cdp) {
-    return { message: `Region (${x0}, ${y0}) to (${x1}, ${y1}). ${frame}`, image: await page.screenshot({ clip }) };
+    return {
+      message: `Region (${x0}, ${y0}) to (${x1}, ${y1}). ${frame}`,
+      image: await page.screenshot({ clip }),
+    };
   }
   // Render the region larger, at real resolution, rather than upscaling pixels
   const magnification =

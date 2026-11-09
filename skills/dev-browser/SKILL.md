@@ -35,10 +35,10 @@ Browser automation that maintains page state across script executions. Write sma
 
 Two modes available on different ports. **Both can run simultaneously** - useful when some agents debug a UI (standalone) while others automate logged-in sessions (extension).
 
-| Mode | Port | Use Case |
-|------|------|----------|
-| Standalone | 9222 | Fresh browser, debugging, CI/CD |
-| Extension | 9224 | User's Chrome, logged-in sessions |
+| Mode       | Port | Use Case                          |
+| ---------- | ---- | --------------------------------- |
+| Standalone | 9222 | Fresh browser, debugging, CI/CD   |
+| Extension  | 9224 | User's Chrome, logged-in sessions |
 
 ### Standalone Mode (Default)
 
@@ -88,6 +88,7 @@ if (!info.extensionConnected) {
 **Password managers block the debugger.** When a field gets focus, a password manager such as 1Password can show its inline menu in a frame inside the page. While another extension's frame is in the page, Chrome detaches dev-browser's debugger and refuses its commands ("Cannot access a chrome-extension:// URL of different extension"). The extension reattaches as soon as Chrome lets it, but commands on that tab fail until the menu closes. Close the menu (press Escape in the browser, or click elsewhere), fill those fields in standalone mode, or, on pages you control, add `data-1p-ignore` to fields 1Password shouldn't decorate.
 
 **Automatic session persistence:** The skill includes a SessionStart hook that exposes `CLAUDE_SESSION_ID` as an environment variable. When running in Claude Code:
+
 - Pages automatically persist across script executions within the same session
 - Each Claude Code session gets its own isolated page namespace
 - No explicit session ID needed - just call `connect()` and pages will persist
@@ -105,6 +106,7 @@ This plugin includes a `webfetch` agent that replaces Claude Code's built-in Web
 ### Setup
 
 **Zero configuration required.** The plugin:
+
 1. Automatically blocks built-in WebFetch via a PreToolUse hook
 2. Auto-starts the browser server on first fetch
 
@@ -130,12 +132,12 @@ From a script, `fetchPage(client, url, options)` in `@/fetch.js` and `httpFetch(
 
 ## Session Types
 
-| Type | Pages persist? | When to use |
-|------|---------------|-------------|
-| **Automatic** (`CLAUDE_SESSION_ID` set) | Yes | Default in Claude Code - pages survive across scripts |
-| **Explicit** (`session: "name"`) | Yes | Share pages between agents or name your workspace |
-| **Ephemeral** (`ephemeral: true`) | No | Quick one-off lookups that shouldn't leave tabs behind |
-| **Auto-generated** (no session, no env var) | No | Standalone scripts outside Claude Code |
+| Type                                        | Pages persist? | When to use                                            |
+| ------------------------------------------- | -------------- | ------------------------------------------------------ |
+| **Automatic** (`CLAUDE_SESSION_ID` set)     | Yes            | Default in Claude Code - pages survive across scripts  |
+| **Explicit** (`session: "name"`)            | Yes            | Share pages between agents or name your workspace      |
+| **Ephemeral** (`ephemeral: true`)           | No             | Quick one-off lookups that shouldn't leave tabs behind |
+| **Auto-generated** (no session, no env var) | No             | Standalone scripts outside Claude Code                 |
 
 **Ephemeral sessions** are useful when you need to quickly check something without polluting your persistent session's tab space:
 
@@ -149,6 +151,7 @@ await client.disconnect(); // Page automatically closed
 ```
 
 **When pages don't persist** (ephemeral or auto-generated sessions), you'll see a log message:
+
 ```
 [dev-browser] Session: ephemeral-xxx (ephemeral - pages auto-close on disconnect)
 ```
@@ -257,12 +260,12 @@ const element = await client.selectSnapshotRef("name", "e5"); // Get element by 
 // Archiving & HAR (recording auto-starts on page(); pass { record: false } to skip)
 import { saveArchive, saveWacz } from "@/client.js";
 const archivePath = await saveArchive(client, "name"); // .zip with WACZ + HTML + PDF
-const waczPath = await saveWacz(client, "name");        // WACZ only
-await client.isRecordingHar("name");                     // Check if recording (async)
+const waczPath = await saveWacz(client, "name"); // WACZ only
+await client.isRecordingHar("name"); // Check if recording (async)
 const { entries, total } = await client.getHarEntries("name"); // Peek at entries without stopping
 const newer = await client.getHarEntries("name", { since: total }); // Only entries after `total`
-const har = await client.stopHarRecording("name");       // Stop, return full HAR, reset
-await client.startHarRecording("name");                  // Start (no-op if already recording in extension mode)
+const har = await client.stopHarRecording("name"); // Stop, return full HAR, reset
+await client.startHarRecording("name"); // Start (no-op if already recording in extension mode)
 
 // Console & network (capture starts with recording — i.e. on page() by default)
 const { messages } = await client.getConsoleMessages("name", { pattern: "error" });
@@ -281,7 +284,10 @@ const md = await client.markdown("name");
 
 // Batched CDP commands (one round trip; stops on first error)
 const { results } = await client.batch("name", [
-  { method: "Emulation.setDeviceMetricsOverride", params: { width: 390, height: 844, deviceScaleFactor: 2, mobile: true } },
+  {
+    method: "Emulation.setDeviceMetricsOverride",
+    params: { width: 390, height: 844, deviceScaleFactor: 2, mobile: true },
+  },
   { method: "Page.captureScreenshot" },
 ]);
 
@@ -353,29 +359,29 @@ Run it from `mcp-server/` with `node bin/dev-browser.mjs <cmd>` (or install the 
 
 Vendor tool → dev-browser mapping (every MCP tool is a thin wrapper over the client API, which stays the engine):
 
-| MCP tool | Backed by |
-|---|---|
-| `tabs_context` | `client.list()` + `client.allTargets()` + `getServerInfo()` |
-| `navigate` | `client.page(name)` + `page.goto()` / `goBack()` / `goForward()`. If the page shows a "Leave site?" dialog for unsaved changes, it stays and the tool reports it; `force: true` discards the changes and navigates |
-| `read_page` | `client.getAISnapshot(name)` + `filterSnapshot()` (`filter: "interactive"`, `depth`, `ref_id`, `max_chars`) |
-| `get_page_text` | `client.text(name)` / `client.markdown(name)` |
-| `find` | `client.find(name, query)` |
-| `ref_action` | `page.clickRef/fillRef` (extension) / `selectSnapshotRef` (standalone) |
-| `form_input` | `setRefValue(page, ref, value)` (inputs, selects, checkboxes, contenteditable) or `client.fillForm(name, fields)` |
-| `browser_batch` | sequential dispatch of this server's own tools |
-| `cdp_batch` | `client.batch(name, ops)` (`POST /batch` on the relay) |
-| `javascript` | `page.evaluate(code)` |
-| `screenshot` | `page.screenshot()` (also saved under `~/.dev-browser/screenshots`) |
-| `computer` | `computerAction(page, input)` over `page.mouse` / `page.keyboard` / `page.screenshot()`: clicks, type, key, scroll, drag, hover, zoom, wait. Coordinates are CSS pixels and match its screenshots, including on HiDPI displays |
-| `resize_window` | `client.emulate(name, options)`: size, `mobile`/`tablet`/`desktop` presets (touch + Android UA), `color_scheme` |
-| `file_upload` | `page.setInputFiles()` by selector, or by ref (`DOM.setFileInputFiles` in extension mode) |
-| `tabs_create` / `tabs_close` / `tabs_select` | `client.page(name)` / `client.close(name)` / `Page.bringToFront` |
-| `read_console_messages` | `client.getConsoleMessages(name, { pattern, since })`, plus `only_errors` and `limit` |
-| `read_network_requests` | `client.getNetworkRequests(name, { pattern, since })`; `request_id` returns headers and body from `client.getHarEntries()` |
-| `gif_creator` | `encodeGif(frames)` (`src/gif.ts`): records a frame after each action on the page and exports a GIF with an orange ring at clicks, a red arrow along drags, a label naming each action, and a progress bar. Export's `options` (`showClickIndicators`, `showDragPaths`, `showActionLabels`, `showProgressBar`) turn each off |
-| `upload_image` | Set a file on a file input by ref, or drop it on an element by ref or coordinate (`dropFile()` in `src/ref-actions.ts`) |
-| `preview_start` / `preview_list` / `preview_logs` / `preview_stop` | Dev servers from the project's `.claude/launch.json` (`mcp-server/src/preview.ts`): start or reuse one, open it in a page, read its output, stop it |
-| `switch_browser` / `list_connected_browsers` | `/health` probes on :9222 and :9224 (includes the `browser` label) |
+| MCP tool                                                           | Backed by                                                                                                                                                                                                                                                                                                                    |
+| ------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `tabs_context`                                                     | `client.list()` + `client.allTargets()` + `getServerInfo()`                                                                                                                                                                                                                                                                  |
+| `navigate`                                                         | `client.page(name)` + `page.goto()` / `goBack()` / `goForward()`. If the page shows a "Leave site?" dialog for unsaved changes, it stays and the tool reports it; `force: true` discards the changes and navigates                                                                                                           |
+| `read_page`                                                        | `client.getAISnapshot(name)` + `filterSnapshot()` (`filter: "interactive"`, `depth`, `ref_id`, `max_chars`)                                                                                                                                                                                                                  |
+| `get_page_text`                                                    | `client.text(name)` / `client.markdown(name)`                                                                                                                                                                                                                                                                                |
+| `find`                                                             | `client.find(name, query)`                                                                                                                                                                                                                                                                                                   |
+| `ref_action`                                                       | `page.clickRef/fillRef` (extension) / `selectSnapshotRef` (standalone)                                                                                                                                                                                                                                                       |
+| `form_input`                                                       | `setRefValue(page, ref, value)` (inputs, selects, checkboxes, contenteditable) or `client.fillForm(name, fields)`                                                                                                                                                                                                            |
+| `browser_batch`                                                    | sequential dispatch of this server's own tools                                                                                                                                                                                                                                                                               |
+| `cdp_batch`                                                        | `client.batch(name, ops)` (`POST /batch` on the relay)                                                                                                                                                                                                                                                                       |
+| `javascript`                                                       | `page.evaluate(code)`                                                                                                                                                                                                                                                                                                        |
+| `screenshot`                                                       | `page.screenshot()` (also saved under `~/.dev-browser/screenshots`)                                                                                                                                                                                                                                                          |
+| `computer`                                                         | `computerAction(page, input)` over `page.mouse` / `page.keyboard` / `page.screenshot()`: clicks, type, key, scroll, drag, hover, zoom, wait. Coordinates are CSS pixels and match its screenshots, including on HiDPI displays                                                                                               |
+| `resize_window`                                                    | `client.emulate(name, options)`: size, `mobile`/`tablet`/`desktop` presets (touch + Android UA), `color_scheme`                                                                                                                                                                                                              |
+| `file_upload`                                                      | `page.setInputFiles()` by selector, or by ref (`DOM.setFileInputFiles` in extension mode)                                                                                                                                                                                                                                    |
+| `tabs_create` / `tabs_close` / `tabs_select`                       | `client.page(name)` / `client.close(name)` / `Page.bringToFront`                                                                                                                                                                                                                                                             |
+| `read_console_messages`                                            | `client.getConsoleMessages(name, { pattern, since })`, plus `only_errors` and `limit`                                                                                                                                                                                                                                        |
+| `read_network_requests`                                            | `client.getNetworkRequests(name, { pattern, since })`; `request_id` returns headers and body from `client.getHarEntries()`                                                                                                                                                                                                   |
+| `gif_creator`                                                      | `encodeGif(frames)` (`src/gif.ts`): records a frame after each action on the page and exports a GIF with an orange ring at clicks, a red arrow along drags, a label naming each action, and a progress bar. Export's `options` (`showClickIndicators`, `showDragPaths`, `showActionLabels`, `showProgressBar`) turn each off |
+| `upload_image`                                                     | Set a file on a file input by ref, or drop it on an element by ref or coordinate (`dropFile()` in `src/ref-actions.ts`)                                                                                                                                                                                                      |
+| `preview_start` / `preview_list` / `preview_logs` / `preview_stop` | Dev servers from the project's `.claude/launch.json` (`mcp-server/src/preview.ts`): start or reuse one, open it in a page, read its output, stop it                                                                                                                                                                          |
+| `switch_browser` / `list_connected_browsers`                       | `/health` probes on :9222 and :9224 (includes the `browser` label)                                                                                                                                                                                                                                                           |
 
 Downloads and browser identity are also exposed over HTTP in both modes: `GET /downloads?since=<ms>` lists downloads (standalone tracks them per session; the relay reports the extension's `chrome.downloads`, which is browser-wide — downloads the user starts by hand also appear), `GET /download/:id` serves a completed download's bytes, and `GET /browsers` reports the browser label. In standalone mode completed downloads are copied into `<profile>/downloads/` so the bytes stay servable; extension-mode files stay in the user's Downloads folder and are never deleted. `client.saveDownload(id, destPath)` fetches the bytes to a local file — a `DownloadRecord`'s `path` is a path on the server's machine, so use `saveDownload` whenever the browser runs remotely.
 
@@ -475,11 +481,11 @@ await element.click();
 ```typescript
 import type { CDPPage } from "@/cdp-page.js";
 
-const page = await client.page("hackernews") as CDPPage;
+const page = (await client.page("hackernews")) as CDPPage;
 const snapshot = await page.snapshot(); // ARIA tree (same format)
 console.log(snapshot);
 
-await page.clickRef("e2");              // Click by ref
+await page.clickRef("e2"); // Click by ref
 await page.fillRef("e10", "search query"); // Fill input by ref
 ```
 
@@ -490,25 +496,23 @@ When using extension mode, `page` is a `CDPPage` with additional methods not on 
 ```typescript
 import type { CDPPage } from "@/cdp-page.js";
 
-const page = await client.page("mypage") as CDPPage;
+const page = (await client.page("mypage")) as CDPPage;
 ```
 
-| Method | Purpose |
-|--------|---------|
-| `page.snapshot()` | ARIA accessibility tree (same as `client.getAISnapshot()`) |
-| `page.clickRef(ref)` | Click element by ARIA snapshot ref |
-| `page.fillRef(ref, value)` | Fill input by ARIA snapshot ref |
-| `await page.frames()` | Discover main, same-process, and out-of-process frames |
-| `page.syncUrl()` | Refresh cached URL from actual page |
-| `page.cdp(method, params?, options?)` | Raw CDP command escape hatch |
+| Method                                | Purpose                                                    |
+| ------------------------------------- | ---------------------------------------------------------- |
+| `page.snapshot()`                     | ARIA accessibility tree (same as `client.getAISnapshot()`) |
+| `page.clickRef(ref)`                  | Click element by ARIA snapshot ref                         |
+| `page.fillRef(ref, value)`            | Fill input by ARIA snapshot ref                            |
+| `await page.frames()`                 | Discover main, same-process, and out-of-process frames     |
+| `page.syncUrl()`                      | Refresh cached URL from actual page                        |
+| `page.cdp(method, params?, options?)` | Raw CDP command escape hatch                               |
 
 For controls inside cross-origin frames, select the frame and use its DOM helpers:
 
 ```typescript
 const frames = await page.frames();
-const transactions = frames.find((frame) =>
-  frame.url().includes("transactions")
-);
+const transactions = frames.find((frame) => frame.url().includes("transactions"));
 if (!transactions) throw new Error("Transactions frame not found");
 
 console.log(await transactions.title());
@@ -523,7 +527,12 @@ const result = await page.cdp("DOM.getDocument");
 const { data } = await page.cdp<{ data: string }>("Page.captureScreenshot", { format: "png" });
 
 // Useful CDP methods:
-await page.cdp("Emulation.setDeviceMetricsOverride", { width: 375, height: 812, deviceScaleFactor: 3, mobile: true });
+await page.cdp("Emulation.setDeviceMetricsOverride", {
+  width: 375,
+  height: 812,
+  deviceScaleFactor: 3,
+  mobile: true,
+});
 await page.cdp("Network.enable");
 await page.cdp("Network.setExtraHTTPHeaders", { headers: { "X-Custom": "value" } });
 ```
@@ -574,6 +583,7 @@ await client.closeTarget(tabs[0].tabId);
 ```
 
 **When to use:**
+
 - Clean up tabs left over from crashed scripts
 - Find tabs created by other sessions
 - Close multiple tabs matching a pattern (e.g., all `example.com` tabs)
@@ -590,11 +600,11 @@ In extension mode the relay owns recording state, so a recording started by one 
 
 The recommended way to capture a page. Produces a `.zip` bundle with three files:
 
-| File | Contents | Use case |
-|------|----------|----------|
-| `<name>.wacz` | WARC network archive | Archival replay, provenance |
-| `<name>.html` | Rendered DOM snapshot | Full-text search indexing |
-| `<name>.pdf` | PDF rendering (Letter) | Human-readable reference |
+| File          | Contents               | Use case                    |
+| ------------- | ---------------------- | --------------------------- |
+| `<name>.wacz` | WARC network archive   | Archival replay, provenance |
+| `<name>.html` | Rendered DOM snapshot  | Full-text search indexing   |
+| `<name>.pdf`  | PDF rendering (Letter) | Human-readable reference    |
 
 ```typescript
 import { saveArchive } from "@/client.js";
@@ -608,12 +618,13 @@ const archivePath = await saveArchive(client, "research");
 ```
 
 Options:
+
 ```typescript
 await saveArchive(client, "research", {
-  outputPath: "tmp/my-archive.zip",  // Custom path
-  title: "Research on topic X",       // WACZ metadata
-  skipPdf: true,                      // Skip PDF (e.g., headed mode)
-  skipHtml: true,                     // Skip HTML capture
+  outputPath: "tmp/my-archive.zip", // Custom path
+  title: "Research on topic X", // WACZ metadata
+  skipPdf: true, // Skip PDF (e.g., headed mode)
+  skipHtml: true, // Skip HTML capture
 });
 ```
 
@@ -659,11 +670,11 @@ await serve({ headless: true });
 
 Each session is limited to **5 tabs** to prevent runaway automation:
 
-| Tabs | Behavior |
-|------|----------|
-| 1-2 | Normal operation |
-| 3-4 | Warning in response: `"Consider closing unused tabs"` |
-| 5 | Hard limit - new pages rejected with HTTP 429 |
+| Tabs | Behavior                                              |
+| ---- | ----------------------------------------------------- |
+| 1-2  | Normal operation                                      |
+| 3-4  | Warning in response: `"Consider closing unused tabs"` |
+| 5    | Hard limit - new pages rejected with HTTP 429         |
 
 Close unused pages to stay within limits:
 
@@ -775,10 +786,12 @@ const client = await connect({ ephemeral: true });
 ### Log Files
 
 **Server logs** are written to `~/.dev-browser/logs/` (persistent across reboots):
+
 - `server-YYYY-MM-DD.log` — Standalone server
 - `relay-YYYY-MM-DD.log` — Extension relay server
 
 **Client/script logs** are written to `$TMPDIR/claude-skills/dev-browser/` (ephemeral, OS-managed):
+
 - `client-YYYY-MM-DD.log` — Library diagnostics from scriptlet executions
 
 Client logs are file-only — they never appear on stdout, keeping scriptlet output clean for agents. Warnings and errors still appear on stderr.
@@ -792,6 +805,7 @@ grep "action=created" ~/.dev-browser/logs/relay-*.log
 ```
 
 **Log format:**
+
 ```
 [2025-01-14T12:35:00.123Z] [relay] POST /pages session=agent-123 name=search action=created total=5 sessionTotal=2
 ```
@@ -806,6 +820,7 @@ curl http://localhost:9224/stats | jq   # Extension
 ```
 
 **Response:**
+
 ```json
 {
   "totalPages": 8,
@@ -813,8 +828,8 @@ curl http://localhost:9224/stats | jq   # Extension
   "tabLimit": 5,
   "tabWarningThreshold": 3,
   "bySession": {
-    "agent-123": [{"name": "search", "url": "https://..."}],
-    "default": [{"name": "main", "url": "https://..."}]
+    "agent-123": [{ "name": "search", "url": "https://..." }],
+    "default": [{ "name": "main", "url": "https://..." }]
   }
 }
 ```

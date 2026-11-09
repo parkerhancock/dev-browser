@@ -7,13 +7,7 @@ import { savePersistedPages } from "../persistence.js";
 import type { RelayContext } from "./context.js";
 
 export function registerTabRoutes(app: Hono, ctx: RelayContext): void {
-  const {
-    registry,
-    live,
-    sendToExtension,
-    sessions,
-    log,
-  } = ctx;
+  const { registry, live, sendToExtension, sessions, log } = ctx;
 
   // ============================================================================
   // Tab Management Endpoints (bypass session isolation for management)
@@ -110,8 +104,14 @@ export function registerTabRoutes(app: Hono, ctx: RelayContext): void {
     live.persistedPages = live.persistedPages.filter((p) => !p.key.startsWith(`${sessionId}:`));
     savePersistedPages(live.persistedPages);
 
-    log(`DELETE /sessions/${sessionId} - closed ${closedPages.length} pages: ${closedPages.join(", ")}`);
-    return c.json({ closed: closedPages.length, pages: closedPages, errors: errors.length > 0 ? errors : undefined });
+    log(
+      `DELETE /sessions/${sessionId} - closed ${closedPages.length} pages: ${closedPages.join(", ")}`
+    );
+    return c.json({
+      closed: closedPages.length,
+      pages: closedPages,
+      errors: errors.length > 0 ? errors : undefined,
+    });
   });
 
   // Close all tabs matching a URL pattern

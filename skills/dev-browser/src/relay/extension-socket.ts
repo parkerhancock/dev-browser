@@ -10,7 +10,11 @@ import type { RelayContext } from "./context.js";
 
 type UpgradeWebSocket = NodeWebSocket["upgradeWebSocket"];
 
-export function registerExtensionSocket(app: Hono, upgradeWebSocket: UpgradeWebSocket, ctx: RelayContext): void {
+export function registerExtensionSocket(
+  app: Hono,
+  upgradeWebSocket: UpgradeWebSocket,
+  ctx: RelayContext
+): void {
   const {
     dialogPolicy,
     registry,
@@ -123,8 +127,7 @@ export function registerExtensionSocket(app: Hono, upgradeWebSocket: UpgradeWebS
             const existing = downloads.get(p.id);
             const parsedStart = p.startTime ? Date.parse(p.startTime) : NaN;
             const startedAt =
-              existing?.startedAt ??
-              (Number.isNaN(parsedStart) ? Date.now() : parsedStart);
+              existing?.startedAt ?? (Number.isNaN(parsedStart) ? Date.now() : parsedStart);
             downloads.set(p.id, {
               id: p.id,
               url: p.url,
@@ -166,7 +169,9 @@ export function registerExtensionSocket(app: Hono, upgradeWebSocket: UpgradeWebS
                     parentSessionId: sessionId,
                     targetInfo: targetParams.targetInfo,
                   });
-                  log(`Child target attached: ${targetParams.targetInfo.url} (${targetParams.sessionId})`);
+                  log(
+                    `Child target attached: ${targetParams.targetInfo.url} (${targetParams.sessionId})`
+                  );
                 } else {
                   log(`Ignoring non-page target: ${targetType} ${targetParams.targetInfo.url}`);
                 }
@@ -196,9 +201,13 @@ export function registerExtensionSocket(app: Hono, upgradeWebSocket: UpgradeWebS
               const pageKey = registry.getPageKeyByTargetId(targetParams.targetInfo.targetId);
 
               // Cancel any pending detach for this targetId
-              const cancelledOldSession = registry.cancelPendingDetach(targetParams.targetInfo.targetId);
+              const cancelledOldSession = registry.cancelPendingDetach(
+                targetParams.targetInfo.targetId
+              );
               if (cancelledOldSession) {
-                log(`Cancelled pending detach for ${cancelledOldSession} - target ${targetParams.targetInfo.targetId} reattached as ${targetParams.sessionId}`);
+                log(
+                  `Cancelled pending detach for ${cancelledOldSession} - target ${targetParams.targetInfo.targetId} reattached as ${targetParams.sessionId}`
+                );
                 registry.removeTarget(cancelledOldSession);
               }
 
@@ -208,8 +217,15 @@ export function registerExtensionSocket(app: Hono, upgradeWebSocket: UpgradeWebS
                 if (oldCdpSessionId && oldCdpSessionId !== targetParams.sessionId) {
                   const colonIdx = pageKey.indexOf(":");
                   const owningSession = colonIdx > 0 ? pageKey.slice(0, colonIdx) : "default";
-                  registry.reattachTarget(pageKey, oldCdpSessionId, targetParams.sessionId, owningSession);
-                  log(`Updated mappings for ${pageKey}: ${oldCdpSessionId} -> ${targetParams.sessionId} (cross-origin navigation)`);
+                  registry.reattachTarget(
+                    pageKey,
+                    oldCdpSessionId,
+                    targetParams.sessionId,
+                    owningSession
+                  );
+                  log(
+                    `Updated mappings for ${pageKey}: ${oldCdpSessionId} -> ${targetParams.sessionId} (cross-origin navigation)`
+                  );
                 }
               }
 
@@ -248,20 +264,29 @@ export function registerExtensionSocket(app: Hono, upgradeWebSocket: UpgradeWebS
               // If this session owns a named page, defer cleanup to allow for reattachment
               // during cross-origin navigation (new session may attach with same targetId)
               if (ownedPageKey && targetId) {
-                log(`Target detached: ${cdpSessionId} (targetId=${targetId}) - deferring cleanup for potential reattachment`);
+                log(
+                  `Target detached: ${cdpSessionId} (targetId=${targetId}) - deferring cleanup for potential reattachment`
+                );
 
-                registry.deferDetach(cdpSessionId, targetId, () => {
-                  // Check if a new session has taken over this page
-                  const currentSessionId = namedPages.get(ownedPageKey!);
-                  if (currentSessionId && currentSessionId !== cdpSessionId) {
-                    log(`Skipping cleanup for ${cdpSessionId} - page ${ownedPageKey} now owned by ${currentSessionId}`);
-                    return;
-                  }
+                registry.deferDetach(
+                  cdpSessionId,
+                  targetId,
+                  () => {
+                    // Check if a new session has taken over this page
+                    const currentSessionId = namedPages.get(ownedPageKey!);
+                    if (currentSessionId && currentSessionId !== cdpSessionId) {
+                      log(
+                        `Skipping cleanup for ${cdpSessionId} - page ${ownedPageKey} now owned by ${currentSessionId}`
+                      );
+                      return;
+                    }
 
-                  // No reattachment happened - do the full cleanup
-                  log(`Cleanup timeout fired for ${cdpSessionId} - no reattachment, cleaning up`);
-                  registry.removeNamedPage(ownedPageKey!);
-                }, 500);
+                    // No reattachment happened - do the full cleanup
+                    log(`Cleanup timeout fired for ${cdpSessionId} - no reattachment, cleaning up`);
+                    registry.removeNamedPage(ownedPageKey!);
+                  },
+                  500
+                );
               } else {
                 // No named page - clean up immediately
                 registry.removeUnnamedTarget(cdpSessionId);
@@ -286,7 +311,6 @@ export function registerExtensionSocket(app: Hono, upgradeWebSocket: UpgradeWebS
                 persistedEntry.lastSeen = Date.now();
                 debouncedSave();
               }
-
             } else if (method === "Page.frameNavigated") {
               // Extract URL from frameNavigated events to keep connectedTargets URL up to date
               // Chrome's extension API doesn't forward Target.targetInfoChanged, so we synthesize it
@@ -298,7 +322,9 @@ export function registerExtensionSocket(app: Hono, upgradeWebSocket: UpgradeWebS
                 if (target && target.targetInfo.url !== frameParams.frame.url) {
                   const oldUrl = target.targetInfo.url;
                   target.targetInfo.url = frameParams.frame.url;
-                  log(`Page.frameNavigated: Updated URL for ${sessionId} from ${oldUrl} to ${frameParams.frame.url}`);
+                  log(
+                    `Page.frameNavigated: Updated URL for ${sessionId} from ${oldUrl} to ${frameParams.frame.url}`
+                  );
 
                   // Also update persisted pages
                   const pageKey = registry.getPageKeyByTargetId(target.targetId);
@@ -312,17 +338,20 @@ export function registerExtensionSocket(app: Hono, upgradeWebSocket: UpgradeWebS
                   }
                 }
               }
-
             } else if (method === "Page.javascriptDialogOpening") {
               // Auto-handle JS dialogs so they never wedge automation
               const dialogParams = params as { message?: string; type?: string };
               const leave =
-                dialogParams.type === "beforeunload" && sessionId ? beforeUnloadPolicies.get(sessionId) : undefined;
+                dialogParams.type === "beforeunload" && sessionId
+                  ? beforeUnloadPolicies.get(sessionId)
+                  : undefined;
               const pending = leave && Date.now() < leave.until ? leave : undefined;
               if (pending) pending.dialogs++;
               if ((pending || dialogPolicy !== "ignore") && sessionId) {
                 const accept = pending ? pending.accept : dialogPolicy === "accept";
-                log(`Auto-${accept ? "accepting" : "dismissing"} ${dialogParams.type ?? "dialog"}: ${dialogParams.message ?? ""}`);
+                log(
+                  `Auto-${accept ? "accepting" : "dismissing"} ${dialogParams.type ?? "dialog"}: ${dialogParams.message ?? ""}`
+                );
                 sendToExtension({
                   method: "forwardCDPCommand",
                   params: {

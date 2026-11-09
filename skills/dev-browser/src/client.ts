@@ -28,7 +28,12 @@ export type { HarCookie, HarPostData, HarContent, HarEntry, HarLog } from "./har
 // Re-export so consumers can type console results without importing relay
 export type { ConsoleMessage, DownloadRecord } from "./relay.js";
 export { waitForPageLoad, navigateTo } from "./client/navigation.js";
-export type { WaitForPageLoadOptions, WaitForPageLoadResult, NavigateOptions, NavigateResult } from "./client/navigation.js";
+export type {
+  WaitForPageLoadOptions,
+  WaitForPageLoadResult,
+  NavigateOptions,
+  NavigateResult,
+} from "./client/navigation.js";
 export { saveWacz, saveArchive } from "./client/archive.js";
 export type { SaveWaczOptions, SaveArchiveOptions } from "./client/archive.js";
 
@@ -290,10 +295,7 @@ export interface DevBrowserClient {
    * Execute several CDP commands against a page in one round trip.
    * Stops at the first failing op; `completed` counts the ops that succeeded.
    */
-  batch: (
-    name: string,
-    ops: BatchOp[]
-  ) => Promise<{ results: BatchOpResult[]; completed: number }>;
+  batch: (name: string, ops: BatchOp[]) => Promise<{ results: BatchOpResult[]; completed: number }>;
   /**
    * Read console messages captured for a page (console API calls, thrown
    * exceptions, and browser log entries). Capture starts when the page is
@@ -338,20 +340,13 @@ export interface DevBrowserClient {
    * origin. Standalone mode uses the browser context; extension mode
    * forwards Browser.grantPermissions and may be refused by Chrome.
    */
-  grantPermissions: (
-    name: string,
-    origin: string,
-    permissions: string[]
-  ) => Promise<void>;
+  grantPermissions: (name: string, origin: string, permissions: string[]) => Promise<void>;
   /**
    * Clear browsing data. With `origin`, clears that origin's storage
    * (cookies, local/session storage, IndexedDB, cache storage); without,
    * clears all cookies and the HTTP cache.
    */
-  clearBrowsingData: (
-    name: string,
-    options?: { origin?: string }
-  ) => Promise<void>;
+  clearBrowsingData: (name: string, options?: { origin?: string }) => Promise<void>;
   /**
    * Export cookies + localStorage for an origin. localStorage can only be
    * read when the page is currently on that origin.
@@ -375,10 +370,7 @@ export interface DevBrowserClient {
    * download; pass `since` (epoch ms) to narrow the window. Throws on
    * interrupted downloads and after `timeoutMs` (default 30s).
    */
-  waitForDownload: (options?: {
-    since?: number;
-    timeoutMs?: number;
-  }) => Promise<DownloadRecord>;
+  waitForDownload: (options?: { since?: number; timeoutMs?: number }) => Promise<DownloadRecord>;
   /**
    * Save a completed download's bytes to a local file and return destPath.
    * A DownloadRecord's `path` is a path on the server's machine, so use this
@@ -423,8 +415,8 @@ export async function connect(
   const session = isEphemeral
     ? `ephemeral-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
     : (opts.session ??
-       process.env.CLAUDE_SESSION_ID ??
-       `session-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`);
+      process.env.CLAUDE_SESSION_ID ??
+      `session-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`);
 
   // Log session source for debugging
   if (isEphemeral) {
@@ -436,8 +428,8 @@ export async function connect(
   } else {
     logger.debug(
       `Session: ${session} (auto-generated)\n` +
-      `WARNING: Pages will be auto-closed on disconnect since this session is ephemeral.\n` +
-      `For persistent pages across scripts, set CLAUDE_SESSION_ID env var or pass { session: "my-session" } to connect().`
+        `WARNING: Pages will be auto-closed on disconnect since this session is ephemeral.\n` +
+        `For persistent pages across scripts, set CLAUDE_SESSION_ID env var or pass { session: "my-session" } to connect().`
     );
   }
 
@@ -460,14 +452,10 @@ export async function connect(
       const { browsers } = (await res.json()) as { browsers: BrowserInfo[] };
       const current = browsers[0];
       if (!current) {
-        throw new Error(
-          `No browser is connected to the relay (wanted "${wanted}")`
-        );
+        throw new Error(`No browser is connected to the relay (wanted "${wanted}")`);
       }
       if (current.browser !== "unknown" && current.browser !== wanted) {
-        throw new Error(
-          `Connected browser is "${current.browser}", not "${wanted}"`
-        );
+        throw new Error(`Connected browser is "${current.browser}", not "${wanted}"`);
       }
     } else {
       const res = await fetch(`${serverUrl}/health`, {

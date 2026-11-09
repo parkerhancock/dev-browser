@@ -74,17 +74,28 @@ export function detectChallengeFromSignals(
 ): Challenge | null {
   const status = signals.status || undefined;
   const blockStatus = status !== undefined && BLOCK_STATUSES.has(status);
-  const found = (vendor: ChallengeVendor, reason: string): Challenge => ({ vendor, reason, status });
+  const found = (vendor: ChallengeVendor, reason: string): Challenge => ({
+    vendor,
+    reason,
+    status,
+  });
 
   // Cloudflare: the cf-mitigated header is definitive; the interstitial title
   // counts only on a challenge status.
-  if (headers["cf-mitigated"] === "challenge") return found("cloudflare", "cf-mitigated: challenge");
-  if ((status === 403 || status === 503) && /just a moment|attention required/i.test(signals.title)) {
+  if (headers["cf-mitigated"] === "challenge")
+    return found("cloudflare", "cf-mitigated: challenge");
+  if (
+    (status === 403 || status === 503) &&
+    /just a moment|attention required/i.test(signals.title)
+  ) {
     return found("cloudflare", `challenge page title "${signals.title}"`);
   }
 
   // DataDome: its header on a block status, or its captcha iframe.
-  if (Object.keys(headers).some((k) => k.startsWith("x-datadome")) && (status === 403 || status === 429)) {
+  if (
+    Object.keys(headers).some((k) => k.startsWith("x-datadome")) &&
+    (status === 403 || status === 429)
+  ) {
     return found("datadome", "x-datadome header on a block status");
   }
   const dd = frameMatch(signals.frames, "captcha-delivery.com", "datadome");
@@ -109,7 +120,8 @@ export function detectChallengeFromSignals(
   }
 
   // A short 403 is a block page, not a real error page with content.
-  if (status === 403 && signals.htmlLength < 5000) return found("unknown", "HTTP 403 with a short body");
+  if (status === 403 && signals.htmlLength < 5000)
+    return found("unknown", "HTTP 403 with a short body");
 
   return null;
 }
@@ -133,8 +145,17 @@ export async function detectChallenge(
 
 /** Page signals read from raw HTML, for HTTP responses with no browser. */
 export function signalsFromHtml(status: number, html: string): PageSignals {
-  const frames = Array.from(html.matchAll(/<iframe\b[^>]*\bsrc=["']([^"']+)["']/gi), (m) => m[1]!).slice(0, 100);
-  return { status, title: htmlTitle(html), frames, textLength: htmlToText(html).length, htmlLength: html.length };
+  const frames = Array.from(
+    html.matchAll(/<iframe\b[^>]*\bsrc=["']([^"']+)["']/gi),
+    (m) => m[1]!
+  ).slice(0, 100);
+  return {
+    status,
+    title: htmlTitle(html),
+    frames,
+    textLength: htmlToText(html).length,
+    htmlLength: html.length,
+  };
 }
 
 /** A body smaller than this has no real content behind a captcha embed. */
@@ -163,7 +184,8 @@ export function detectChallengeFromHttp(
       ["recaptcha", "google.com/recaptcha"],
     ];
     for (const [vendor, marker] of embeds) {
-      if (head.includes(marker)) return { vendor, reason: `${marker} embed gating the response`, status };
+      if (head.includes(marker))
+        return { vendor, reason: `${marker} embed gating the response`, status };
     }
   }
   return null;
@@ -174,8 +196,13 @@ export type NavigationErrorKind = "timeout" | "dns" | "tls" | "connection" | "ot
 /** Classify a navigation error message from Playwright or CDP. */
 export function classifyNavigationError(message: string): NavigationErrorKind {
   const msg = message.toLowerCase();
-  if (/timeout \d+ms exceeded|timeout \(\d+ ms\) exceeded|timed out after/.test(msg)) return "timeout";
-  if (/err_name_not_resolved|err_name_resolution_failed|getaddrinfo|enotfound|dns error|failed to lookup/.test(msg)) {
+  if (/timeout \d+ms exceeded|timeout \(\d+ ms\) exceeded|timed out after/.test(msg))
+    return "timeout";
+  if (
+    /err_name_not_resolved|err_name_resolution_failed|getaddrinfo|enotfound|dns error|failed to lookup/.test(
+      msg
+    )
+  ) {
     return "dns";
   }
   if (/err_cert_|err_ssl_|ssl_protocol|certificate/.test(msg)) return "tls";

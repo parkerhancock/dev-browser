@@ -3,12 +3,7 @@
  */
 
 import { describe, test, expect } from "vitest";
-import {
-  checkNavigation,
-  checkCdpMethod,
-  PERMISSIVE_POLICY,
-  type RelayPolicy,
-} from "../policy.js";
+import { checkNavigation, checkCdpMethod, PERMISSIVE_POLICY, type RelayPolicy } from "../policy.js";
 
 const STRICT: RelayPolicy = {
   defaultMode: "strict",
@@ -102,12 +97,8 @@ describe("checkCdpMethod", () => {
       ...STRICT,
       fullCdpAccessOrigins: ["https://example.com"],
     };
-    expect(
-      checkCdpMethod(policy, "s", "Tracing.start", "https://example.com").allowed
-    ).toBe(true);
-    expect(
-      checkCdpMethod(policy, "s", "Tracing.start", "https://other.net").allowed
-    ).toBe(false);
+    expect(checkCdpMethod(policy, "s", "Tracing.start", "https://example.com").allowed).toBe(true);
+    expect(checkCdpMethod(policy, "s", "Tracing.start", "https://other.net").allowed).toBe(false);
     expect(checkCdpMethod(policy, "s", "Tracing.start").allowed).toBe(false);
   });
 });

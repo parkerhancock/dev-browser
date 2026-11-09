@@ -13,9 +13,7 @@ import { join } from "node:path";
 import { createServer, type Server } from "node:http";
 import { describe, test, expect, beforeAll, afterAll } from "vitest";
 
-process.env.DEV_BROWSER_DIR = mkdtempSync(
-  join(tmpdir(), "dev-browser-remote-test-")
-);
+process.env.DEV_BROWSER_DIR = mkdtempSync(join(tmpdir(), "dev-browser-remote-test-"));
 
 import { serve, type DevBrowserServer } from "../index.js";
 import { connect, type DevBrowserClient } from "../client.js";
@@ -148,9 +146,7 @@ describe("Remote-ready standalone server", () => {
     const other = await fetch(`http://127.0.0.1:${port}/downloads`, {
       headers: { [TOKEN_HEADER]: token, "X-DevBrowser-Session": "someone-else" },
     });
-    expect(((await other.json()) as { downloads: unknown[] }).downloads).toEqual(
-      []
-    );
+    expect(((await other.json()) as { downloads: unknown[] }).downloads).toEqual([]);
   });
 
   describe("fetchPage", () => {
@@ -165,7 +161,7 @@ describe("Remote-ready standalone server", () => {
         }
         res.writeHead(200, { "content-type": "text/html" });
         res.end(
-          '<title>Article</title><nav>menu</nav><article><h1>Heading</h1><p>' +
+          "<title>Article</title><nav>menu</nav><article><h1>Heading</h1><p>" +
             "Body text. ".repeat(40) +
             '<a href="/next">next</a></p></article>'
         );

@@ -7,15 +7,8 @@ import { getAgentSession } from "../types.js";
 import type { RelayContext } from "./context.js";
 
 export function registerCaptureRoutes(app: Hono, ctx: RelayContext): void {
-  const {
-    live,
-    harRecorders,
-    consoleBuffers,
-    consoleEnabled,
-    sendToExtension,
-    namedPages,
-    log,
-  } = ctx;
+  const { live, harRecorders, consoleBuffers, consoleEnabled, sendToExtension, namedPages, log } =
+    ctx;
 
   // ============================================================================
   // Console Capture Endpoints

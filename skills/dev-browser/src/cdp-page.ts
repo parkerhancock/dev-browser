@@ -6,11 +6,7 @@
  */
 
 import type { Page, Locator, Keyboard, Mouse } from "./page.js";
-import {
-  resolveKey,
-  parseKeyCombo,
-  elementCenterExpression,
-} from "./cdp-helpers.js";
+import { resolveKey, parseKeyCombo, elementCenterExpression } from "./cdp-helpers.js";
 import { authHeaders } from "./auth.js";
 import { resolve as resolvePath } from "node:path";
 
@@ -85,12 +81,7 @@ export class CDPPage implements Page {
   readonly keyboard: CDPKeyboard;
   readonly mouse: CDPMouse;
 
-  constructor(
-    relayUrl: string,
-    pageName: string,
-    session: string,
-    initialUrl?: string
-  ) {
+  constructor(relayUrl: string, pageName: string, session: string, initialUrl?: string) {
     this.relayUrl = relayUrl;
     this.pageName = pageName;
     this.session = session;
@@ -129,19 +120,14 @@ export class CDPPage implements Page {
     };
 
     if (!res.ok || data.error) {
-      throw new Error(
-        data.error?.message ?? `CDP ${method} failed (${res.status})`
-      );
+      throw new Error(data.error?.message ?? `CDP ${method} failed (${res.status})`);
     }
 
     return data.result as T;
   }
 
   // Internal evaluate helper (returns raw CDP result)
-  private async evalRaw(
-    expression: string,
-    returnByValue = true
-  ): Promise<RuntimeEvaluateResult> {
+  private async evalRaw(expression: string, returnByValue = true): Promise<RuntimeEvaluateResult> {
     return this.cdp<RuntimeEvaluateResult>("Runtime.evaluate", {
       expression,
       returnByValue,
@@ -153,9 +139,7 @@ export class CDPPage implements Page {
   private async evalValue<T = any>(expression: string): Promise<T> {
     const result = await this.evalRaw(expression);
     if (result.exceptionDetails) {
-      const desc =
-        result.exceptionDetails.exception?.description ??
-        result.exceptionDetails.text;
+      const desc = result.exceptionDetails.exception?.description ?? result.exceptionDetails.text;
       throw new Error(`Evaluation failed: ${desc}`);
     }
     return result.result.value as T;
@@ -165,14 +149,10 @@ export class CDPPage implements Page {
   // Navigation
   // ======================================================================
 
-  async goto(
-    url: string,
-    options?: { timeout?: number; waitUntil?: string }
-  ): Promise<any> {
-    const result = await this.cdp<{ frameId: string; errorText?: string }>(
-      "Page.navigate",
-      { url }
-    );
+  async goto(url: string, options?: { timeout?: number; waitUntil?: string }): Promise<any> {
+    const result = await this.cdp<{ frameId: string; errorText?: string }>("Page.navigate", {
+      url,
+    });
     if (result.errorText) {
       throw new Error(`Navigation failed: ${result.errorText}`);
     }
@@ -185,27 +165,21 @@ export class CDPPage implements Page {
     return null;
   }
 
-  async goBack(
-    options?: { timeout?: number; waitUntil?: string }
-  ): Promise<any> {
+  async goBack(options?: { timeout?: number; waitUntil?: string }): Promise<any> {
     await this.evalValue("history.back()");
     await this.pollReadyState(options?.timeout ?? 15000);
     await this.syncUrl();
     return null;
   }
 
-  async goForward(
-    options?: { timeout?: number; waitUntil?: string }
-  ): Promise<any> {
+  async goForward(options?: { timeout?: number; waitUntil?: string }): Promise<any> {
     await this.evalValue("history.forward()");
     await this.pollReadyState(options?.timeout ?? 15000);
     await this.syncUrl();
     return null;
   }
 
-  async reload(
-    options?: { timeout?: number; waitUntil?: string }
-  ): Promise<any> {
+  async reload(options?: { timeout?: number; waitUntil?: string }): Promise<any> {
     await this.cdp("Page.reload");
     await this.pollReadyState(options?.timeout ?? 15000);
     await this.syncUrl();
@@ -236,30 +210,21 @@ export class CDPPage implements Page {
     await this.evalValue(`document.documentElement.innerHTML = ${escaped}`);
   }
 
-  async innerHTML(
-    selector: string,
-    _options?: { timeout?: number }
-  ): Promise<string> {
+  async innerHTML(selector: string, _options?: { timeout?: number }): Promise<string> {
     const sel = JSON.stringify(selector);
     return this.evalValue<string>(
       `(() => { const el = document.querySelector(${sel}); if (!el) throw new Error('Element not found: ' + ${sel}); return el.innerHTML; })()`
     );
   }
 
-  async innerText(
-    selector: string,
-    _options?: { timeout?: number }
-  ): Promise<string> {
+  async innerText(selector: string, _options?: { timeout?: number }): Promise<string> {
     const sel = JSON.stringify(selector);
     return this.evalValue<string>(
       `(() => { const el = document.querySelector(${sel}); if (!el) throw new Error('Element not found: ' + ${sel}); return el.innerText; })()`
     );
   }
 
-  async textContent(
-    selector: string,
-    _options?: { timeout?: number }
-  ): Promise<string | null> {
+  async textContent(selector: string, _options?: { timeout?: number }): Promise<string | null> {
     const sel = JSON.stringify(selector);
     return this.evalValue<string | null>(
       `(() => { const el = document.querySelector(${sel}); return el ? el.textContent : null; })()`
@@ -305,9 +270,7 @@ export class CDPPage implements Page {
 
     const result = await this.evalRaw(expression, false);
     if (result.exceptionDetails) {
-      const desc =
-        result.exceptionDetails.exception?.description ??
-        result.exceptionDetails.text;
+      const desc = result.exceptionDetails.exception?.description ?? result.exceptionDetails.text;
       throw new Error(`Evaluation failed: ${desc}`);
     }
     return result.result.value ?? result.result;
@@ -334,19 +297,12 @@ export class CDPPage implements Page {
     });
   }
 
-  async dblclick(
-    selector: string,
-    _options?: { timeout?: number }
-  ): Promise<void> {
+  async dblclick(selector: string, _options?: { timeout?: number }): Promise<void> {
     const { x, y } = await this.resolveElementCenter(selector);
     await this.mouse.dblclick(x, y);
   }
 
-  async fill(
-    selector: string,
-    value: string,
-    _options?: { timeout?: number }
-  ): Promise<void> {
+  async fill(selector: string, value: string, _options?: { timeout?: number }): Promise<void> {
     const sel = JSON.stringify(selector);
     const val = JSON.stringify(value);
     // Focus, clear existing value, set new value, dispatch events
@@ -372,10 +328,7 @@ export class CDPPage implements Page {
     await this.keyboard.type(text, { delay: options?.delay });
   }
 
-  async hover(
-    selector: string,
-    _options?: { timeout?: number }
-  ): Promise<void> {
+  async hover(selector: string, _options?: { timeout?: number }): Promise<void> {
     const { x, y } = await this.resolveElementCenter(selector);
     await this.mouse.move(x, y);
   }
@@ -409,10 +362,7 @@ export class CDPPage implements Page {
     );
   }
 
-  async check(
-    selector: string,
-    _options?: { timeout?: number }
-  ): Promise<void> {
+  async check(selector: string, _options?: { timeout?: number }): Promise<void> {
     const sel = JSON.stringify(selector);
     await this.evalValue(
       `(() => {
@@ -423,10 +373,7 @@ export class CDPPage implements Page {
     );
   }
 
-  async uncheck(
-    selector: string,
-    _options?: { timeout?: number }
-  ): Promise<void> {
+  async uncheck(selector: string, _options?: { timeout?: number }): Promise<void> {
     const sel = JSON.stringify(selector);
     await this.evalValue(
       `(() => {
@@ -451,13 +398,8 @@ export class CDPPage implements Page {
     files: string | string[],
     _options?: { timeout?: number }
   ): Promise<void> {
-    const fileList = (Array.isArray(files) ? files : [files]).map((f) =>
-      resolvePath(f)
-    );
-    const { root } = await this.cdp<{ root: { nodeId: number } }>(
-      "DOM.getDocument",
-      { depth: 0 }
-    );
+    const fileList = (Array.isArray(files) ? files : [files]).map((f) => resolvePath(f));
+    const { root } = await this.cdp<{ root: { nodeId: number } }>("DOM.getDocument", { depth: 0 });
     const { nodeId } = await this.cdp<{ nodeId: number }>("DOM.querySelector", {
       nodeId: root.nodeId,
       selector,
@@ -468,10 +410,7 @@ export class CDPPage implements Page {
     await this.cdp("DOM.setFileInputFiles", { files: fileList, nodeId });
   }
 
-  async focus(
-    selector: string,
-    _options?: { timeout?: number }
-  ): Promise<void> {
+  async focus(selector: string, _options?: { timeout?: number }): Promise<void> {
     const sel = JSON.stringify(selector);
     await this.evalValue(
       `(() => { const el = document.querySelector(${sel}); if (!el) throw new Error('Element not found: ' + ${sel}); el.focus(); })()`
@@ -486,10 +425,7 @@ export class CDPPage implements Page {
     return new CDPLocator(this, { type: "css", selector });
   }
 
-  getByRole(
-    role: string,
-    options?: { name?: string | RegExp; exact?: boolean }
-  ): Locator {
+  getByRole(role: string, options?: { name?: string | RegExp; exact?: boolean }): Locator {
     return new CDPLocator(this, {
       type: "role",
       role,
@@ -498,32 +434,25 @@ export class CDPPage implements Page {
     });
   }
 
-  getByText(
-    text: string | RegExp,
-    options?: { exact?: boolean }
-  ): Locator {
+  getByText(text: string | RegExp, options?: { exact?: boolean }): Locator {
     return new CDPLocator(this, { type: "text", text, exact: options?.exact });
   }
 
   getByTestId(testId: string | RegExp): Locator {
     const selector =
-      testId instanceof RegExp
-        ? `[data-testid]`
-        : `[data-testid="${cssEscape(String(testId))}"]`;
-    return new CDPLocator(this, { type: "css", selector, testIdPattern: testId instanceof RegExp ? testId : undefined });
+      testId instanceof RegExp ? `[data-testid]` : `[data-testid="${cssEscape(String(testId))}"]`;
+    return new CDPLocator(this, {
+      type: "css",
+      selector,
+      testIdPattern: testId instanceof RegExp ? testId : undefined,
+    });
   }
 
-  getByLabel(
-    text: string | RegExp,
-    options?: { exact?: boolean }
-  ): Locator {
+  getByLabel(text: string | RegExp, options?: { exact?: boolean }): Locator {
     return new CDPLocator(this, { type: "label", text, exact: options?.exact });
   }
 
-  getByPlaceholder(
-    text: string | RegExp,
-    options?: { exact?: boolean }
-  ): Locator {
+  getByPlaceholder(text: string | RegExp, options?: { exact?: boolean }): Locator {
     if (text instanceof RegExp) {
       return new CDPLocator(this, {
         type: "placeholder",
@@ -532,9 +461,7 @@ export class CDPPage implements Page {
       });
     }
     const escaped = cssEscape(text);
-    const selector = options?.exact
-      ? `[placeholder="${escaped}"]`
-      : `[placeholder*="${escaped}"]`;
+    const selector = options?.exact ? `[placeholder="${escaped}"]` : `[placeholder*="${escaped}"]`;
     return new CDPLocator(this, { type: "css", selector });
   }
 
@@ -562,9 +489,7 @@ export class CDPPage implements Page {
       if (found) return;
       await delay(100);
     }
-    throw new Error(
-      `waitForSelector: "${selector}" not found after ${timeout}ms`
-    );
+    throw new Error(`waitForSelector: "${selector}" not found after ${timeout}ms`);
   }
 
   async waitForLoadState(
@@ -578,8 +503,7 @@ export class CDPPage implements Page {
     while (Date.now() - start < timeout) {
       const readyState = await this.evalValue<string>("document.readyState");
       if (target === "domcontentloaded" && readyState !== "loading") return;
-      if ((target === "load" || target === "networkidle") && readyState === "complete")
-        return;
+      if ((target === "load" || target === "networkidle") && readyState === "complete") return;
       await delay(100);
     }
   }
@@ -675,10 +599,7 @@ export class CDPPage implements Page {
       };
     }
 
-    const result = await this.cdp<{ data: string }>(
-      "Page.captureScreenshot",
-      captureParams
-    );
+    const result = await this.cdp<{ data: string }>("Page.captureScreenshot", captureParams);
     return Buffer.from(result.data, "base64");
   }
 
@@ -729,23 +650,17 @@ export class CDPPage implements Page {
   async close(_options?: { runBeforeUnload?: boolean }): Promise<void> {
     if (this._closed) return;
     this._closed = true;
-    await fetch(
-      `${this.relayUrl}/pages/${encodeURIComponent(this.pageName)}`,
-      {
-        method: "DELETE",
-        headers: { "X-DevBrowser-Session": this.session, ...authHeaders() },
-      }
-    );
+    await fetch(`${this.relayUrl}/pages/${encodeURIComponent(this.pageName)}`, {
+      method: "DELETE",
+      headers: { "X-DevBrowser-Session": this.session, ...authHeaders() },
+    });
   }
 
   isClosed(): boolean {
     return this._closed;
   }
 
-  async setViewportSize(size: {
-    width: number;
-    height: number;
-  }): Promise<void> {
+  async setViewportSize(size: { width: number; height: number }): Promise<void> {
     await this.cdp("Emulation.setDeviceMetricsOverride", {
       width: size.width,
       height: size.height,
@@ -779,13 +694,9 @@ export class CDPPage implements Page {
 
     const [{ frameTree }, { targetInfos }] = await Promise.all([
       this.cdp<{ frameTree: CdpFrameTree }>("Page.getFrameTree"),
-      this.cdp<{ targetInfos: CdpTargetInfo[] }>(
-        "DevBrowser.getChildTargets"
-      ),
+      this.cdp<{ targetInfos: CdpTargetInfo[] }>("DevBrowser.getChildTargets"),
     ]);
-    const targetsById = new Map(
-      targetInfos.map((target) => [target.targetId, target])
-    );
+    const targetsById = new Map(targetInfos.map((target) => [target.targetId, target]));
     const frames: CDPFrame[] = [];
 
     const visit = (tree: CdpFrameTree, isMainFrame: boolean): void => {
@@ -853,11 +764,7 @@ export class CDPPage implements Page {
   // Private helpers
   // ======================================================================
 
-  private async refAction(
-    action: string,
-    ref: string,
-    value?: string
-  ): Promise<void> {
+  private async refAction(action: string, ref: string, value?: string): Promise<void> {
     const res = await fetch(`${this.relayUrl}/ref-action`, {
       method: "POST",
       headers: {
@@ -868,9 +775,7 @@ export class CDPPage implements Page {
       body: JSON.stringify({ page: this.pageName, action, ref, value }),
     });
     if (!res.ok) {
-      throw new Error(
-        `Ref action "${action}" on ${ref} failed: ${await res.text()}`
-      );
+      throw new Error(`Ref action "${action}" on ${ref} failed: ${await res.text()}`);
     }
   }
 
@@ -888,12 +793,8 @@ export class CDPPage implements Page {
   }
 
   /** Resolve a CSS selector to its center coordinates. */
-  async resolveElementCenter(
-    selector: string
-  ): Promise<{ x: number; y: number }> {
-    return this.evalValue<{ x: number; y: number }>(
-      elementCenterExpression(selector)
-    );
+  async resolveElementCenter(selector: string): Promise<{ x: number; y: number }> {
+    return this.evalValue<{ x: number; y: number }>(elementCenterExpression(selector));
   }
 }
 
@@ -976,9 +877,7 @@ export class CDPFrame {
     const expression =
       typeof pageFunction === "string"
         ? pageFunction
-        : `(${pageFunction.toString()})(${args
-            .map((arg) => JSON.stringify(arg))
-            .join(", ")})`;
+        : `(${pageFunction.toString()})(${args.map((arg) => JSON.stringify(arg)).join(", ")})`;
     const params: Record<string, unknown> = {
       expression,
       returnByValue: true,
@@ -999,15 +898,12 @@ export class CDPFrame {
       params.contextId = this.executionContextId;
     }
 
-    const result = await this.page.cdp<RuntimeEvaluateResult>(
-      "Runtime.evaluate",
-      params,
-      { targetId: this.options.targetId }
-    );
+    const result = await this.page.cdp<RuntimeEvaluateResult>("Runtime.evaluate", params, {
+      targetId: this.options.targetId,
+    });
     if (result.exceptionDetails) {
       const description =
-        result.exceptionDetails.exception?.description ??
-        result.exceptionDetails.text;
+        result.exceptionDetails.exception?.description ?? result.exceptionDetails.text;
       throw new Error(`Evaluation failed: ${description}`);
     }
     return result.result.value as R;
@@ -1048,8 +944,15 @@ export class CDPKeyboard implements Keyboard {
 
   async up(key: string): Promise<void> {
     const def = resolveKey(key);
-    this.modifiers &=
-      ~(key === "Shift" ? 8 : key === "Control" ? 2 : key === "Alt" ? 1 : key === "Meta" ? 4 : 0);
+    this.modifiers &= ~(key === "Shift"
+      ? 8
+      : key === "Control"
+        ? 2
+        : key === "Alt"
+          ? 1
+          : key === "Meta"
+            ? 4
+            : 0);
 
     await this.page.cdp("Input.dispatchKeyEvent", {
       type: "keyUp",
@@ -1160,11 +1063,7 @@ export class CDPMouse implements Mouse {
     await this.up({ button: options?.button, clickCount: 2 });
   }
 
-  async move(
-    x: number,
-    y: number,
-    options?: { steps?: number }
-  ): Promise<void> {
+  async move(x: number, y: number, options?: { steps?: number }): Promise<void> {
     const steps = options?.steps ?? 1;
     const fromX = this.x;
     const fromY = this.y;
@@ -1202,10 +1101,7 @@ export class CDPMouse implements Mouse {
     });
   }
 
-  async up(options?: {
-    button?: "left" | "right" | "middle";
-    clickCount?: number;
-  }): Promise<void> {
+  async up(options?: { button?: "left" | "right" | "middle"; clickCount?: number }): Promise<void> {
     this.pressed = null;
     await this.page.cdp("Input.dispatchMouseEvent", {
       type: "mouseReleased",
@@ -1286,7 +1182,11 @@ export class CDPLocator implements Locator {
         if (!s.name) {
           return `Array.from(document.querySelectorAll(${roleSel}))`;
         }
-        const pred = textFilterExpr("(el.getAttribute('aria-label') || el.textContent || '').trim()", s.name, s.exact);
+        const pred = textFilterExpr(
+          "(el.getAttribute('aria-label') || el.textContent || '').trim()",
+          s.name,
+          s.exact
+        );
         return `Array.from(document.querySelectorAll(${roleSel})).filter(el => ${pred})`;
       }
       case "text": {
@@ -1319,7 +1219,11 @@ export class CDPLocator implements Locator {
 
   /** CSS selector for simple cases (used by page-level interaction methods). */
   private resolveSelector(): string | null {
-    if (this.strategy.type === "css" && !this.strategy.testIdPattern && (this._nth === undefined || this._nth === 0)) {
+    if (
+      this.strategy.type === "css" &&
+      !this.strategy.testIdPattern &&
+      (this._nth === undefined || this._nth === 0)
+    ) {
       return this.strategy.selector;
     }
     return null;
@@ -1329,7 +1233,9 @@ export class CDPLocator implements Locator {
 
   /** Evaluate a JS snippet with `el` bound to the resolved element. Returns the expression result. */
   private evalOnElement<T = any>(returnExpr: string): Promise<T> {
-    return this.page.evaluate(`(() => { const el = ${this.elementExpression()}; ${returnExpr} })()`);
+    return this.page.evaluate(
+      `(() => { const el = ${this.elementExpression()}; ${returnExpr} })()`
+    );
   }
 
   /** Scroll element to center and return its center coordinates. */
@@ -1343,16 +1249,24 @@ export class CDPLocator implements Locator {
 
   async click(_options?: { timeout?: number }): Promise<void> {
     const sel = this.resolveSelector();
-    if (sel) { await this.page.click(sel); return; }
+    if (sel) {
+      await this.page.click(sel);
+      return;
+    }
     const { x, y } = await this.elementCenter();
     await this.page.mouse.click(x, y);
   }
 
   async fill(value: string, _options?: { timeout?: number }): Promise<void> {
     const sel = this.resolveSelector();
-    if (sel) { await this.page.fill(sel, value); return; }
+    if (sel) {
+      await this.page.fill(sel, value);
+      return;
+    }
     const val = JSON.stringify(value);
-    await this.evalOnElement(`el.focus(); el.value = ''; el.value = ${val}; el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true }));`);
+    await this.evalOnElement(
+      `el.focus(); el.value = ''; el.value = ${val}; el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true }));`
+    );
   }
 
   async type(text: string, options?: { delay?: number; timeout?: number }): Promise<void> {

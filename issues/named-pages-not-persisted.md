@@ -13,16 +13,19 @@ When using extension mode, named pages created via `client.page("amazon")` are n
 In `src/relay.ts`, the `/pages` endpoints don't maintain a name→tabId mapping:
 
 ### POST /pages (line 493)
+
 - Creates a new tab via extension
 - Returns the name to the client
 - **Does NOT store the name→tabId mapping**
 
 ### GET /pages (line 471)
+
 - Queries extension for tabs in session
 - Returns them as `tab-${tabId}` format
 - **Original names are lost**
 
 ### DELETE /pages/:name
+
 - Tries to find page by name
 - **Fails with 404 because mapping was never stored**
 
@@ -43,15 +46,16 @@ const client2 = await connect();
 const page2 = await client2.page("amazon");
 
 // List pages - shows tab-12345, not "amazon"
-console.log(await client2.list());  // ['tab-1631111898', 'tab-1631111902', ...]
+console.log(await client2.list()); // ['tab-1631111898', 'tab-1631111902', ...]
 
 // Try to close - FAILS
-await client2.close("amazon");  // 404 error
+await client2.close("amazon"); // 404 error
 ```
 
 ## Impact
 
 In a typical session, this caused **34+ zombie tabs** in Chrome that:
+
 - Cannot be closed via the API
 - Consume browser memory
 - Must be manually closed by the user
@@ -92,6 +96,7 @@ if (tabId) {
 ## Workaround
 
 Until fixed, agents should:
+
 1. Always use the same page name (reduces tab creation)
 2. Do all work in a single script execution
 3. Manually close Chrome tabs when done

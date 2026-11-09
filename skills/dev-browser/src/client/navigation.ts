@@ -304,7 +304,12 @@ export async function navigateTo(
   }
 
   // Phase 2: Wait for page load with graceful timeout
-  let load = { success: !navigationTimedOut, readyState: "unknown", pendingRequests: 0, timedOut: false };
+  let load = {
+    success: !navigationTimedOut,
+    readyState: "unknown",
+    pendingRequests: 0,
+    timedOut: false,
+  };
   if (options.waitForLoad !== false) {
     const remainingTime = Math.max(timeout - (Date.now() - startTime), 2000);
     load = await waitForPageLoad(page, { timeout: remainingTime });
@@ -330,6 +335,8 @@ export async function navigateTo(
     status: response?.status() ?? (signals?.status || undefined),
     challenge: signals ? detectChallengeFromSignals(signals, headers) : undefined,
     textLength: signals?.textLength,
-    ...(navigationTimedOut ? { error: { kind: "timeout" as const, message: "Navigation timed out" } } : {}),
+    ...(navigationTimedOut
+      ? { error: { kind: "timeout" as const, message: "Navigation timed out" } }
+      : {}),
   };
 }

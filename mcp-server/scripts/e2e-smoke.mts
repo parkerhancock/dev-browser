@@ -72,7 +72,12 @@ const batch = await client.callTool({
 console.log("batch:", text(batch));
 
 const ctx = await client.callTool({ name: "tabs_context", arguments: {} });
-console.log("tabs_context mode:", JSON.parse(text(ctx)).mode, "pages:", JSON.parse(text(ctx)).namedPages);
+console.log(
+  "tabs_context mode:",
+  JSON.parse(text(ctx)).mode,
+  "pages:",
+  JSON.parse(text(ctx)).namedPages
+);
 
 await client.callTool({ name: "tabs_close", arguments: { page: "e2e" } });
 console.log("closed");

@@ -21,7 +21,8 @@ export function connectBrowserCdp(wsEndpoint: string): BrowserCdp {
       ws.onerror = () => reject(new Error(`Browser CDP connection to ${wsEndpoint} failed`));
       ws.onclose = () => {
         socket = null;
-        for (const { reject: fail } of pending.values()) fail(new Error("Browser CDP connection closed"));
+        for (const { reject: fail } of pending.values())
+          fail(new Error("Browser CDP connection closed"));
         pending.clear();
       };
       ws.onmessage = (event) => {

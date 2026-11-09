@@ -114,12 +114,7 @@ export interface TargetRegistry {
    * Sets target state to "detaching" and stores the timeout on the target.
    * If the same targetId reattaches before timeout, cancel via cancelPendingDetach.
    */
-  deferDetach(
-    cdpSessionId: string,
-    targetId: string,
-    onTimeout: () => void,
-    delayMs: number
-  ): void;
+  deferDetach(cdpSessionId: string, targetId: string, onTimeout: () => void, delayMs: number): void;
 
   /**
    * Cancel a pending detach for a targetId (called on reattachment).
@@ -136,9 +131,7 @@ export interface TargetRegistry {
    * Remove all pages and targets for a session.
    * Returns page keys that were removed (for extension-side cleanup).
    */
-  cleanupSession(
-    agentSession: string
-  ): { removedPageKeys: string[]; cdpSessionIds: string[] };
+  cleanupSession(agentSession: string): { removedPageKeys: string[]; cdpSessionIds: string[] };
 
   /**
    * Set ownership of an unclaimed target. Used when a CDP command arrives
@@ -181,9 +174,12 @@ export interface TargetRegistry {
    * Tear down all pages for a session, cleaning up all Maps properly.
    * Returns info needed for extension-side tab closing.
    */
-  evictSession(
-    agentSession: string
-  ): Array<{ pageKey: string; pageName: string; cdpSessionId: string; target: ConnectedTarget | undefined }>;
+  evictSession(agentSession: string): Array<{
+    pageKey: string;
+    pageName: string;
+    cdpSessionId: string;
+    target: ConnectedTarget | undefined;
+  }>;
 
   /**
    * Count of targets currently in "detaching" state.
@@ -306,11 +302,7 @@ export function createTargetRegistry(): TargetRegistry {
       return target;
     },
 
-    removeStalePageName(
-      pageKey: string,
-      pageName: string,
-      agentSession: string
-    ): void {
+    removeStalePageName(pageKey: string, pageName: string, agentSession: string): void {
       namedPages.delete(pageKey);
       const session = sessions.get(agentSession);
       if (session) {
@@ -382,9 +374,7 @@ export function createTargetRegistry(): TargetRegistry {
       targets.delete(cdpSessionId);
     },
 
-    cleanupSession(
-      agentSession: string
-    ): { removedPageKeys: string[]; cdpSessionIds: string[] } {
+    cleanupSession(agentSession: string): { removedPageKeys: string[]; cdpSessionIds: string[] } {
       const session = sessions.get(agentSession);
       if (!session) return { removedPageKeys: [], cdpSessionIds: [] };
 
@@ -452,13 +442,21 @@ export function createTargetRegistry(): TargetRegistry {
       targets.clear();
     },
 
-    evictSession(
-      agentSession: string
-    ): Array<{ pageKey: string; pageName: string; cdpSessionId: string; target: ConnectedTarget | undefined }> {
+    evictSession(agentSession: string): Array<{
+      pageKey: string;
+      pageName: string;
+      cdpSessionId: string;
+      target: ConnectedTarget | undefined;
+    }> {
       const session = sessions.get(agentSession);
       if (!session) return [];
 
-      const result: Array<{ pageKey: string; pageName: string; cdpSessionId: string; target: ConnectedTarget | undefined }> = [];
+      const result: Array<{
+        pageKey: string;
+        pageName: string;
+        cdpSessionId: string;
+        target: ConnectedTarget | undefined;
+      }> = [];
 
       const pageNames = Array.from(session.pageNames);
 

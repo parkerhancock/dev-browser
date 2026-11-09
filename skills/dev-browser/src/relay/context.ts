@@ -6,7 +6,12 @@
  */
 
 import type { WSContext } from "hono/ws";
-import { loadPersistedPages, savePersistedPages, createDebouncedSave, type PersistedPage } from "../persistence.js";
+import {
+  loadPersistedPages,
+  savePersistedPages,
+  createDebouncedSave,
+  type PersistedPage,
+} from "../persistence.js";
 import { createLogger } from "../logging.js";
 import { mkdirSync, writeFileSync, unlinkSync, readdirSync, statSync } from "fs";
 import { join } from "path";
@@ -33,7 +38,8 @@ export function createRelayContext(options: RelayOptions) {
   const policy = options.policy ?? loadPolicy();
   const dialogPolicy: DialogPolicy =
     options.dialogPolicy ??
-    ((process.env.DEV_BROWSER_DIALOG_POLICY as DialogPolicy | undefined) ?? "dismiss");
+    (process.env.DEV_BROWSER_DIALOG_POLICY as DialogPolicy | undefined) ??
+    "dismiss";
   const startedAt = Date.now();
 
   // State — all page/session/target tracking is in the registry
@@ -46,7 +52,10 @@ export function createRelayContext(options: RelayOptions) {
    * set by DevBrowser.setBeforeUnloadPolicy around a navigation. Without an
    * entry, beforeunload follows the dialog policy like any other dialog.
    */
-  const beforeUnloadPolicies = new Map<string, { accept: boolean; until: number; dialogs: number }>();
+  const beforeUnloadPolicies = new Map<
+    string,
+    { accept: boolean; until: number; dialogs: number }
+  >();
   // Waiters for target attachment (event-driven replacement for sleep after createTarget)
   const pendingTargetWaiters = new Map<string, { resolve: () => void }>();
   // State that changes over the relay's life, shared with every route module
@@ -56,7 +65,13 @@ export function createRelayContext(options: RelayOptions) {
     extensionBrowser: ExtensionBrowserInfo | null;
     persistedPages: PersistedPage[];
     extensionMessageId: number;
-  } = { extensionWs: null, isRecovering: false, extensionBrowser: null, persistedPages: [], extensionMessageId: 0 };
+  } = {
+    extensionWs: null,
+    isRecovering: false,
+    extensionBrowser: null,
+    persistedPages: [],
+    extensionMessageId: 0,
+  };
   // Which browser the connected extension runs in (parity P1 #10b)
   // Downloads reported by the extension, newest-insertion-last (parity P1 #8).
   // Metadata survives extension reconnects — the files live on disk regardless.
@@ -72,8 +87,7 @@ export function createRelayContext(options: RelayOptions) {
   // and named tabs are already capped by the per-session TAB_LIMIT and
   // cleaned up explicitly (close/closeAll/session end). Override via
   // DEV_BROWSER_IDLE_TIMEOUT_MS env var.
-  const IDLE_TIMEOUT_MS =
-    parseInt(process.env.DEV_BROWSER_IDLE_TIMEOUT_MS ?? "", 10) || 60 * 1000;
+  const IDLE_TIMEOUT_MS = parseInt(process.env.DEV_BROWSER_IDLE_TIMEOUT_MS ?? "", 10) || 60 * 1000;
   // Check every 5 seconds (or faster when the timeout itself is shorter, e.g. in tests)
   const IDLE_CHECK_INTERVAL_MS = Math.min(5 * 1000, IDLE_TIMEOUT_MS);
 
@@ -162,23 +176,17 @@ export function createRelayContext(options: RelayOptions) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     params: Record<string, any>
   ): void {
-    processNetworkEvent(
-      state.pending,
-      state.completed,
-      method,
-      params,
-      async (requestId) => {
-        const result = await sendToExtension({
-          method: "forwardCDPCommand",
-          params: {
-            sessionId: state.cdpSessionId,
-            method: "Network.getResponseBody",
-            params: { requestId },
-          },
-        });
-        return result as { body?: string; base64Encoded?: boolean } | null;
-      }
-    );
+    processNetworkEvent(state.pending, state.completed, method, params, async (requestId) => {
+      const result = await sendToExtension({
+        method: "forwardCDPCommand",
+        params: {
+          sessionId: state.cdpSessionId,
+          method: "Network.getResponseBody",
+          params: { requestId },
+        },
+      });
+      return result as { body?: string; base64Encoded?: boolean } | null;
+    });
   }
 
   // Idle page cleanup — close ANONYMOUS targets with no activity.
@@ -192,7 +200,9 @@ export function createRelayContext(options: RelayOptions) {
       if (target.pinned) continue; // Pinned pages are exempt (human collaboration)
       if (registry.getPageKeyByTargetId(target.targetId)) continue; // Named pages are exempt
       if (target.lastActivity < idleThreshold) {
-        log(`Idle timeout: closing anonymous target ${target.targetId} (inactive for ${Math.round((now - target.lastActivity) / 1000)}s)`);
+        log(
+          `Idle timeout: closing anonymous target ${target.targetId} (inactive for ${Math.round((now - target.lastActivity) / 1000)}s)`
+        );
 
         // Close the tab via extension
         if (live.extensionWs) {
@@ -336,7 +346,13 @@ export function createRelayContext(options: RelayOptions) {
           const agentSession = persisted.key.slice(0, colonIdx);
           const pageName = persisted.key.slice(colonIdx + 1);
 
-          registry.nameTarget(persisted.key, pageName, cdpSessionId, attachResult.targetInfo.targetId, agentSession);
+          registry.nameTarget(
+            persisted.key,
+            pageName,
+            cdpSessionId,
+            attachResult.targetInfo.targetId,
+            agentSession
+          );
 
           // Update persisted entry with new targetId and current URL
           persisted.targetId = attachResult.targetInfo.targetId;
@@ -443,7 +459,11 @@ export function createRelayContext(options: RelayOptions) {
       case "DevBrowser.setBeforeUnloadPolicy": {
         // Accept or dismiss "Leave site?" dialogs for the next 30 s
         if (!sessionId) return {};
-        beforeUnloadPolicies.set(sessionId, { accept: params?.accept === true, until: Date.now() + 30000, dialogs: 0 });
+        beforeUnloadPolicies.set(sessionId, {
+          accept: params?.accept === true,
+          until: Date.now() + 30000,
+          dialogs: 0,
+        });
         return {};
       }
 

@@ -7,7 +7,12 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import type { Page as PlaywrightPage } from "patchright";
-import { detectChallengeFromSignals, readPageSignals, type Challenge, type NavigationErrorKind } from "./challenge.js";
+import {
+  detectChallengeFromSignals,
+  readPageSignals,
+  type Challenge,
+  type NavigationErrorKind,
+} from "./challenge.js";
 import { navigateTo, saveWacz, type DevBrowserClient } from "./client.js";
 import { toMarkdown } from "./markdown.js";
 import type { Page } from "./page.js";
@@ -137,7 +142,11 @@ export async function fetchPage(
 
     // Give a client-rendered app a moment to fill in.
     if (!challenge && textLength < minText) {
-      const filled = await pollSignals(page, options.renderWait ?? 5000, (s) => s.textLength >= minText);
+      const filled = await pollSignals(
+        page,
+        options.renderWait ?? 5000,
+        (s) => s.textLength >= minText
+      );
       textLength = filled?.textLength ?? textLength;
     }
 
@@ -157,7 +166,10 @@ export async function fetchPage(
     }
     let waczPath: string | undefined;
     if (options.waczPath) {
-      waczPath = await saveWacz(client, name, { outputPath: options.waczPath, title: await page.title() });
+      waczPath = await saveWacz(client, name, {
+        outputPath: options.waczPath,
+        title: await page.title(),
+      });
     }
 
     return {

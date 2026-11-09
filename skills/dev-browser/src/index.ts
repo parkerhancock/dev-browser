@@ -28,7 +28,6 @@ import { connectBrowserCdp } from "./browser-cdp.js";
 
 export type { ServeOptions, GetPageResponse, ListPagesResponse, ServerInfoResponse };
 
-
 export interface DevBrowserServer {
   wsEndpoint: string;
   port: number;
@@ -95,9 +94,7 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
 
   // Determine user data directory for persistent context.
   // Named profiles get their own directory so their state stays separate.
-  const dataDirName = options.profile
-    ? `browser-data-${options.profile}`
-    : "browser-data";
+  const dataDirName = options.profile ? `browser-data-${options.profile}` : "browser-data";
   const userDataDir = profileDir
     ? join(profileDir, dataDirName)
     : join(process.cwd(), `.${dataDirName}`);
@@ -129,7 +126,10 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
       timezoneId: options.timezoneId,
     });
   } catch (err) {
-    if (err instanceof Error && /ProcessSingleton|profile directory is already in use/i.test(err.message)) {
+    if (
+      err instanceof Error &&
+      /ProcessSingleton|profile directory is already in use/i.test(err.message)
+    ) {
       throw new Error(
         `Browser profile ${userDataDir} is already in use by another browser. ` +
           `Stop the other dev-browser server, or start this one with a different --profile.`
@@ -147,7 +147,9 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
   const answerDialogsLate = (page: Page) =>
     page.on("dialog", (dialog) => {
       setTimeout(() => {
-        void (dialog.type() === "beforeunload" ? dialog.accept() : dialog.dismiss()).catch(() => {});
+        void (dialog.type() === "beforeunload" ? dialog.accept() : dialog.dismiss()).catch(
+          () => {}
+        );
       }, 500);
     });
   context.pages().forEach(answerDialogsLate);
@@ -244,8 +246,7 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
    */
   function advertisedWsEndpoint(c: Context): string {
     const dialedHost =
-      c.req.header("host") ??
-      `${host === "0.0.0.0" || host === "::" ? "127.0.0.1" : host}:${port}`;
+      c.req.header("host") ?? `${host === "0.0.0.0" || host === "::" ? "127.0.0.1" : host}:${port}`;
     return `ws://${dialedHost}/cdp`;
   }
 
@@ -342,10 +343,7 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
       download
         .path()
         .then((artifactPath) => {
-          const safeName = (record.suggestedFilename ?? "download").replace(
-            /[/\\]/g,
-            "_"
-          );
+          const safeName = (record.suggestedFilename ?? "download").replace(/[/\\]/g, "_");
           const dest = join(downloadsDir, `${record.id}-${safeName}`);
           copyFileSync(artifactPath, dest);
           record.path = dest;
@@ -385,7 +383,12 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
       mode: "launch",
       browser,
       ...(options.proxy?.username
-        ? { proxyCredentials: { username: options.proxy.username, password: options.proxy.password ?? "" } }
+        ? {
+            proxyCredentials: {
+              username: options.proxy.username,
+              password: options.proxy.password ?? "",
+            },
+          }
         : {}),
     } satisfies ServerInfoResponse & {
       mode: string;
@@ -431,18 +434,27 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
     let warning: string | undefined;
 
     if (entry) {
-      log(`POST /pages session=${agentSession} name=${name} action=reused total=${registry.size} sessionTotal=${sessionPageCount}`);
+      log(
+        `POST /pages session=${agentSession} name=${name} action=reused total=${registry.size} sessionTotal=${sessionPageCount}`
+      );
     } else {
       if (sessionPageCount >= TAB_LIMIT) {
-        log(`POST /pages session=${agentSession} name=${name} action=rejected-limit total=${registry.size} sessionTotal=${sessionPageCount}`);
-        return c.json({
-          error: `Tab limit exceeded. Session "${agentSession}" already has ${sessionPageCount} tabs (limit: ${TAB_LIMIT}). Close some tabs before opening new ones.`,
-        }, 429);
+        log(
+          `POST /pages session=${agentSession} name=${name} action=rejected-limit total=${registry.size} sessionTotal=${sessionPageCount}`
+        );
+        return c.json(
+          {
+            error: `Tab limit exceeded. Session "${agentSession}" already has ${sessionPageCount} tabs (limit: ${TAB_LIMIT}). Close some tabs before opening new ones.`,
+          },
+          429
+        );
       }
 
       if (sessionPageCount >= TAB_WARNING_THRESHOLD) {
         warning = `Warning: Session "${agentSession}" has ${sessionPageCount} tabs. Limit is ${TAB_LIMIT}. Consider closing unused tabs.`;
-        log(`POST /pages session=${agentSession} name=${name} warning=approaching-limit sessionTotal=${sessionPageCount}`);
+        log(
+          `POST /pages session=${agentSession} name=${name} warning=approaching-limit sessionTotal=${sessionPageCount}`
+        );
       }
 
       const page = await withTimeout(newWindowPage(), 30000, "Page creation timed out after 30s");
@@ -464,7 +476,9 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
         sessionState.pageNames.delete(name);
       });
 
-      log(`POST /pages session=${agentSession} name=${name} action=created total=${registry.size} sessionTotal=${sessionState.pageNames.size}`);
+      log(
+        `POST /pages session=${agentSession} name=${name} action=created total=${registry.size} sessionTotal=${sessionState.pageNames.size}`
+      );
     }
 
     const response: GetPageResponse & { warning?: string } = {
@@ -492,7 +506,9 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
       if (sessionState) {
         sessionState.pageNames.delete(name);
       }
-      log(`DELETE /pages session=${agentSession} name=${name} action=deleted total=${registry.size}`);
+      log(
+        `DELETE /pages session=${agentSession} name=${name} action=deleted total=${registry.size}`
+      );
       return c.json({ success: true });
     }
 

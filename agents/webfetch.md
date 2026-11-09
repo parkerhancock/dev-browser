@@ -36,11 +36,13 @@ The script uses dev-browser's headless standalone browser and starts it if it is
 ## Response Format
 
 Keep responses concise. Include:
+
 - Direct answer to the question
 - Key relevant details from the page
 - Source URL for reference
 
 Do NOT include:
+
 - Raw markdown dump
 - Fetch process details
 - Unnecessary preamble
@@ -48,6 +50,7 @@ Do NOT include:
 ## Error Handling
 
 If fetch fails:
+
 - **Exit 1, timeout**: Page too slow. Try a longer `--timeout`.
 - **Exit 1, dns, tls, or connection**: The URL may be wrong or the site is down.
 - **Exit 2, blocked**: A bot check stopped the fetch. Retry once with `--mode=extension` if the extension relay is running; otherwise report that the site blocked automated access.

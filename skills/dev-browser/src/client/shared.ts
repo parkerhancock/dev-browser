@@ -88,14 +88,11 @@ export async function fetchPin(
   name: string,
   pinned: boolean
 ): Promise<void> {
-  const res = await fetch(
-    `${serverUrl}/pages/${encodeURIComponent(name)}`,
-    {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json", ...sessionHeaders },
-      body: JSON.stringify({ pinned }),
-    }
-  );
+  const res = await fetch(`${serverUrl}/pages/${encodeURIComponent(name)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", ...sessionHeaders },
+    body: JSON.stringify({ pinned }),
+  });
   if (!res.ok) {
     throw new Error(`Failed to ${pinned ? "pin" : "unpin"} page: ${await res.text()}`);
   }
@@ -106,10 +103,10 @@ export async function deleteSessionPages(
   sessionHeaders: Record<string, string>,
   session: string
 ): Promise<{ closed: number; pages: string[] }> {
-  const res = await fetch(
-    `${serverUrl}/sessions/${encodeURIComponent(session)}`,
-    { method: "DELETE", headers: sessionHeaders }
-  );
+  const res = await fetch(`${serverUrl}/sessions/${encodeURIComponent(session)}`, {
+    method: "DELETE",
+    headers: sessionHeaders,
+  });
   const data = (await res.json()) as { error?: string; closed?: number; pages?: string[] };
   if (data.error) throw new Error(data.error);
   return { closed: data.closed ?? 0, pages: data.pages ?? [] };
@@ -154,10 +151,7 @@ export function findInSnapshot(snapshot: string, query: string): FindMatch[] {
 }
 
 /** Fill several fields sequentially. */
-export async function fillFormFields(
-  page: Page,
-  fields: Record<string, string>
-): Promise<void> {
+export async function fillFormFields(page: Page, fields: Record<string, string>): Promise<void> {
   for (const [selector, value] of Object.entries(fields)) {
     await page.fill(selector, value);
   }
@@ -192,8 +186,7 @@ export function filterConsoleMessages(
   buffer: ConsoleMessage[],
   options?: { pattern?: string; since?: number }
 ): { messages: ConsoleMessage[]; total: number } {
-  const since =
-    options?.since && options.since > 0 ? Math.floor(options.since) : 0;
+  const since = options?.since && options.since > 0 ? Math.floor(options.since) : 0;
   let messages = buffer.slice(since);
   if (options?.pattern) {
     const regex = new RegExp(options.pattern);
@@ -337,8 +330,7 @@ export async function clearBrowsingDataImpl(
   if (options?.origin) {
     await sendCdp("Storage.clearDataForOrigin", {
       origin: options.origin,
-      storageTypes:
-        "cookies,local_storage,session_storage,indexeddb,cache_storage",
+      storageTypes: "cookies,local_storage,session_storage,indexeddb,cache_storage",
     });
     return;
   }

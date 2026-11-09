@@ -7,15 +7,7 @@ import { getAgentSession } from "../types.js";
 import type { RelayContext } from "./context.js";
 
 export function registerCdpRoutes(app: Hono, ctx: RelayContext): void {
-  const {
-    childTargets,
-    live,
-    isChildOf,
-    routeCdpCommand,
-    policyBlocks,
-    namedPages,
-    log,
-  } = ctx;
+  const { childTargets, live, isChildOf, routeCdpCommand, policyBlocks, namedPages, log } = ctx;
 
   // ============================================================================
   // HTTP CDP Endpoint (replaces WebSocket proxy for extension mode)
@@ -37,7 +29,12 @@ export function registerCdpRoutes(app: Hono, ctx: RelayContext): void {
 
     const agentSession = getAgentSession(c);
     const body = await c.req.json();
-    const { page: pageName, method, params, targetId } = body as {
+    const {
+      page: pageName,
+      method,
+      params,
+      targetId,
+    } = body as {
       page: string;
       method: string;
       params?: Record<string, unknown>;
@@ -45,10 +42,7 @@ export function registerCdpRoutes(app: Hono, ctx: RelayContext): void {
     };
 
     if (!pageName || !method) {
-      return c.json(
-        { error: { message: "page and method are required" } },
-        400
-      );
+      return c.json({ error: { message: "page and method are required" } }, 400);
     }
 
     // Resolve page name to CDP sessionId

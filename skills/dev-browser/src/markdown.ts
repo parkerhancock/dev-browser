@@ -4,7 +4,11 @@ import TurndownService from "turndown";
 
 /** Markdown with absolute links; drops scripts, styles, frames, and page chrome. */
 export function toMarkdown(html: string, baseUrl: string): string {
-  const turndown = new TurndownService({ headingStyle: "atx", codeBlockStyle: "fenced", bulletListMarker: "-" });
+  const turndown = new TurndownService({
+    headingStyle: "atx",
+    codeBlockStyle: "fenced",
+    bulletListMarker: "-",
+  });
   turndown.remove(["script", "style", "noscript", "iframe", "nav", "footer", "aside"]);
   turndown.addRule("absoluteLinks", {
     filter: "a",
@@ -21,7 +25,14 @@ export function toMarkdown(html: string, baseUrl: string): string {
   return turndown.turndown(html);
 }
 
-const ENTITIES: Record<string, string> = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " " };
+const ENTITIES: Record<string, string> = {
+  amp: "&",
+  lt: "<",
+  gt: ">",
+  quot: '"',
+  apos: "'",
+  nbsp: " ",
+};
 
 /** Approximate visible text of an HTML document, without a browser. */
 export function htmlToText(html: string): string {
@@ -32,7 +43,10 @@ export function htmlToText(html: string): string {
     .replace(/<[^>]+>/g, " ")
     .replace(/&(#x?[0-9a-f]+|[a-z]+);/gi, (m, code: string) => {
       if (code[0] === "#") {
-        const n = code[1] === "x" || code[1] === "X" ? parseInt(code.slice(2), 16) : parseInt(code.slice(1), 10);
+        const n =
+          code[1] === "x" || code[1] === "X"
+            ? parseInt(code.slice(2), 16)
+            : parseInt(code.slice(1), 10);
         return Number.isFinite(n) ? String.fromCodePoint(n) : m;
       }
       return ENTITIES[code.toLowerCase()] ?? m;

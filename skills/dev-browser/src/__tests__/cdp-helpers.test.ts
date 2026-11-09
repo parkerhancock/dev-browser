@@ -14,22 +14,40 @@ import {
 describe("resolveKey", () => {
   it("resolves named navigation keys", () => {
     expect(resolveKey("Enter")).toEqual({
-      key: "Enter", code: "Enter", keyCode: 13, text: "\r",
+      key: "Enter",
+      code: "Enter",
+      keyCode: 13,
+      text: "\r",
     });
     expect(resolveKey("Tab")).toEqual({
-      key: "Tab", code: "Tab", keyCode: 9, text: "",
+      key: "Tab",
+      code: "Tab",
+      keyCode: 9,
+      text: "",
     });
     expect(resolveKey("Backspace")).toEqual({
-      key: "Backspace", code: "Backspace", keyCode: 8, text: "",
+      key: "Backspace",
+      code: "Backspace",
+      keyCode: 8,
+      text: "",
     });
     expect(resolveKey("Delete")).toEqual({
-      key: "Delete", code: "Delete", keyCode: 46, text: "",
+      key: "Delete",
+      code: "Delete",
+      keyCode: 46,
+      text: "",
     });
     expect(resolveKey("Escape")).toEqual({
-      key: "Escape", code: "Escape", keyCode: 27, text: "",
+      key: "Escape",
+      code: "Escape",
+      keyCode: 27,
+      text: "",
     });
     expect(resolveKey("Space")).toEqual({
-      key: " ", code: "Space", keyCode: 32, text: " ",
+      key: " ",
+      code: "Space",
+      keyCode: 32,
+      text: " ",
     });
   });
 
@@ -79,7 +97,10 @@ describe("resolveKey", () => {
   it("passes through unknown multi-char key names", () => {
     const unknown = resolveKey("SomeUnknownKey");
     expect(unknown).toEqual({
-      key: "SomeUnknownKey", code: "SomeUnknownKey", keyCode: 0, text: "",
+      key: "SomeUnknownKey",
+      code: "SomeUnknownKey",
+      keyCode: 0,
+      text: "",
     });
   });
 
@@ -103,19 +124,22 @@ describe("parseKeyCombo", () => {
 
   it("parses single modifier + key", () => {
     expect(parseKeyCombo("Control+a")).toEqual({
-      modifiers: ["Control"], key: "a",
+      modifiers: ["Control"],
+      key: "a",
     });
   });
 
   it("parses multiple modifiers + key", () => {
     expect(parseKeyCombo("Control+Shift+a")).toEqual({
-      modifiers: ["Control", "Shift"], key: "a",
+      modifiers: ["Control", "Shift"],
+      key: "a",
     });
   });
 
   it("parses triple modifier combo", () => {
     expect(parseKeyCombo("Control+Alt+Delete")).toEqual({
-      modifiers: ["Control", "Alt"], key: "Delete",
+      modifiers: ["Control", "Alt"],
+      key: "Delete",
     });
   });
 });

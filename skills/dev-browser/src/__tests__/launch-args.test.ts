@@ -14,7 +14,9 @@ describe("launch args", () => {
       .find((arg) => arg.startsWith("--disable-features="))!
       .slice("--disable-features=".length)
       .split(",");
-    expect(DISABLED_FEATURES).toEqual(defaults.filter((f) => f !== "ThirdPartyStoragePartitioning"));
+    expect(DISABLED_FEATURES).toEqual(
+      defaults.filter((f) => f !== "ThirdPartyStoragePartitioning")
+    );
   });
 
   test("headless launches use Chrome's new headless mode", () => {

@@ -31,6 +31,7 @@ tracking with `GET /downloads` / `GET /download/:id` and
 per connection), `--host`, and a repo-root `Dockerfile`.
 
 **Deferred** (needs a product decision):
+
 - §4(3) native-messaging host in place of the `debugger` permission
 - P2 strict-by-default: shipped as permissive when no
   `~/.dev-browser/policy.json` exists (strict with no allowlist would
@@ -38,15 +39,15 @@ per connection), `--host`, and a repo-root `Dockerfile`.
   `"defaultMode": "strict"` fail-closes exactly as specced
 - P3 shell-script removal: `server.sh`/`start.sh`/`stop.sh` kept until
   the SessionStart hook and docs migrate to the CLI
-**Context:** reverse-engineering docs live outside this repo at
-`/Users/parkerhancock/Projects/openjev-mlx/research/docs/` (`claude-code-browser-use.md`,
-`codex-desktop-app-browser-computer-use.md`, `dev-browser-web-parity-plan.md` — the latter
-mirrors this file). Vendor reference tool surface (Claude in Chrome, 23 tools):
-`tabs_context, navigate, read_page, get_page_text, find, form_input, browser_batch,
+  **Context:** reverse-engineering docs live outside this repo at
+  `/Users/parkerhancock/Projects/openjev-mlx/research/docs/` (`claude-code-browser-use.md`,
+  `codex-desktop-app-browser-computer-use.md`, `dev-browser-web-parity-plan.md` — the latter
+  mirrors this file). Vendor reference tool surface (Claude in Chrome, 23 tools):
+  `tabs_context, navigate, read_page, get_page_text, find, form_input, browser_batch,
 javascript, resize_window, upload_image, tabs_create, tabs_close, read_console_messages,
 read_network_requests, file_upload, switch_browser, list_connected_browsers`.
-Scope: **web browser use only** (no computer use, no harness features). Security fixes
-are §4 and should land before or with P0.
+  Scope: **web browser use only** (no computer use, no harness features). Security fixes
+  are §4 and should land before or with P0.
 
 Repo conventions (from root `AGENTS.md`): use Node.js/npm (not Bun); before marking any
 code change done run `cd skills/dev-browser && npx tsc --noEmit` and `npm test`; use
@@ -66,23 +67,23 @@ as the engine — MCP tools are thin wrappers, not a rewrite.
 
 ## P1 — library gaps (each small; all paths under `skills/dev-browser/src/`)
 
-| # | Feature | Current state | Change |
-|---|---|---|---|
-| 1 | `browser_batch` (many actions, one call) | one script per action | `POST /batch` on server (`index.ts`) + relay (`relay.ts`); `client.batch(name, ops[])` |
-| 2 | `read_console_messages` w/ regex filter | page console not captured (only extension's own log, `relay.ts:1624`) | capture `Runtime.consoleAPICalled` + `Log.entryAdded` per target in `relay-registry.ts`; `client.console(name, {pattern?})` |
-| 3 | `read_network_requests` live tail | HAR only (`har.ts`) | `client.network(name, {pattern?})` live method/url/status log |
-| 4 | `find` in page | none | `client.find(name, text)` → matches + snapshot refs (`snapshot/browser-script.ts`) |
-| 5 | bulk `form_input` | `page.fill` per field | `client.form(name, {selector: value})` |
-| 6 | `file_upload` | no `setInputFiles` in `cdp-page.ts` | add `page.setFiles(selector, paths)` to unified `Page` (`page.ts`); extension: `DOM.setFileInputFiles`, standalone: Playwright |
-| 7 | JS dialogs auto-dismiss | none | dismiss on `Page.javascriptDialogOpening` in both modes; configurable |
-| 8 | downloads in extension mode | partial (`relay.ts:452,602,1086`) | serve bytes via `GET /download/:id`, auto-clean; `page.waitForDownload()` |
-| 9 | `read_page`/`get_page_text` first-class | only inline in webfetch agent | `client.markdown(name)` / `client.text(name)` (Turndown already used) |
-| 10 | multi-browser (`switch/list_browsers`) | extension = whichever browser is running; standalone = Chromium only | standalone: `serve({browser})` → Playwright `channel: "chrome"\|"msedge"\|"brave"`; extension: label each WS connection with its browser (`extension/services/ConnectionManager.ts`), `client.listBrowsers()`, `connect({browser})` |
-| 11 | per-origin permissions + per-origin CDP allowlist (`fullCdpAccess`) | raw `page.cdp()` only | `client.grantPermissions(origin, [...])` (`Browser.grantPermissions`); relay-side per-origin CDP method policy |
-| 12 | named browser profiles | one `profileDir` (`index.ts:74-80`) | `serve({profile: "work"})` → `.browser-data-work/`; extension: launch with `--profile-directory=` |
-| 13 | rich `tabs_context` | `client.list()` + `allTargets()` | MCP tool combining both + active-tab marker |
-| 14 | health probe | `/stats` exists | add `GET /health` (mode, extensionConnected, uptime) |
-| 15 | clear browsing data | none | `client.clearBrowsingData({types})` → `Browser.clearBrowserData` / `Storage.clearDataForOrigin` |
+| #   | Feature                                                             | Current state                                                         | Change                                                                                                                                                                                                                              |
+| --- | ------------------------------------------------------------------- | --------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | `browser_batch` (many actions, one call)                            | one script per action                                                 | `POST /batch` on server (`index.ts`) + relay (`relay.ts`); `client.batch(name, ops[])`                                                                                                                                              |
+| 2   | `read_console_messages` w/ regex filter                             | page console not captured (only extension's own log, `relay.ts:1624`) | capture `Runtime.consoleAPICalled` + `Log.entryAdded` per target in `relay-registry.ts`; `client.console(name, {pattern?})`                                                                                                         |
+| 3   | `read_network_requests` live tail                                   | HAR only (`har.ts`)                                                   | `client.network(name, {pattern?})` live method/url/status log                                                                                                                                                                       |
+| 4   | `find` in page                                                      | none                                                                  | `client.find(name, text)` → matches + snapshot refs (`snapshot/browser-script.ts`)                                                                                                                                                  |
+| 5   | bulk `form_input`                                                   | `page.fill` per field                                                 | `client.form(name, {selector: value})`                                                                                                                                                                                              |
+| 6   | `file_upload`                                                       | no `setInputFiles` in `cdp-page.ts`                                   | add `page.setFiles(selector, paths)` to unified `Page` (`page.ts`); extension: `DOM.setFileInputFiles`, standalone: Playwright                                                                                                      |
+| 7   | JS dialogs auto-dismiss                                             | none                                                                  | dismiss on `Page.javascriptDialogOpening` in both modes; configurable                                                                                                                                                               |
+| 8   | downloads in extension mode                                         | partial (`relay.ts:452,602,1086`)                                     | serve bytes via `GET /download/:id`, auto-clean; `page.waitForDownload()`                                                                                                                                                           |
+| 9   | `read_page`/`get_page_text` first-class                             | only inline in webfetch agent                                         | `client.markdown(name)` / `client.text(name)` (Turndown already used)                                                                                                                                                               |
+| 10  | multi-browser (`switch/list_browsers`)                              | extension = whichever browser is running; standalone = Chromium only  | standalone: `serve({browser})` → Playwright `channel: "chrome"\|"msedge"\|"brave"`; extension: label each WS connection with its browser (`extension/services/ConnectionManager.ts`), `client.listBrowsers()`, `connect({browser})` |
+| 11  | per-origin permissions + per-origin CDP allowlist (`fullCdpAccess`) | raw `page.cdp()` only                                                 | `client.grantPermissions(origin, [...])` (`Browser.grantPermissions`); relay-side per-origin CDP method policy                                                                                                                      |
+| 12  | named browser profiles                                              | one `profileDir` (`index.ts:74-80`)                                   | `serve({profile: "work"})` → `.browser-data-work/`; extension: launch with `--profile-directory=`                                                                                                                                   |
+| 13  | rich `tabs_context`                                                 | `client.list()` + `allTargets()`                                      | MCP tool combining both + active-tab marker                                                                                                                                                                                         |
+| 14  | health probe                                                        | `/stats` exists                                                       | add `GET /health` (mode, extensionConnected, uptime)                                                                                                                                                                                |
+| 15  | clear browsing data                                                 | none                                                                  | `client.clearBrowsingData({types})` → `Browser.clearBrowserData` / `Storage.clearDataForOrigin`                                                                                                                                     |
 
 ## P2 — policy enforced at the relay choke point
 

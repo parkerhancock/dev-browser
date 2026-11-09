@@ -75,14 +75,20 @@ const browserName = (flag("browser") ?? "chromium") as "chromium" | "chrome" | "
 const format = output === "json" ? "markdown" : (output as "markdown" | "html" | "text");
 
 if (proxyUrl && engine !== "http" && !fresh) {
-  fail("--proxy applies to --engine=http or a --fresh browser. A shared server takes its proxy at start: dev-browser serve --proxy.");
+  fail(
+    "--proxy applies to --engine=http or a --fresh browser. A shared server takes its proxy at start: dev-browser serve --proxy."
+  );
 }
-if (fresh && mode === "extension") fail("--fresh, --headed, and --browser start a standalone browser; drop --mode=extension.");
+if (fresh && mode === "extension")
+  fail("--fresh, --headed, and --browser start a standalone browser; drop --mode=extension.");
 
 /** Any HTTP answer, even 401, means the server is up. */
 async function serverUp(port: number): Promise<boolean> {
   try {
-    await fetch(`http://127.0.0.1:${port}/health`, { headers: authHeaders(), signal: AbortSignal.timeout(1000) });
+    await fetch(`http://127.0.0.1:${port}/health`, {
+      headers: authHeaders(),
+      signal: AbortSignal.timeout(1000),
+    });
     return true;
   } catch {
     return false;
@@ -136,7 +142,10 @@ async function browserFetch(): Promise<FetchPageResult> {
       profileDir,
       proxy: proxyUrl ? parseProxyUrl(proxyUrl) : undefined,
     });
-    client = await connect(`http://127.0.0.1:${port}`, { ephemeral: true, token: loadOrCreateToken() });
+    client = await connect(`http://127.0.0.1:${port}`, {
+      ephemeral: true,
+      token: loadOrCreateToken(),
+    });
   } else {
     if (mode === "standalone") await ensureStandaloneServer();
     else if (!(await serverUp(PORTS.extension))) {
@@ -159,7 +168,8 @@ async function browserFetch(): Promise<FetchPageResult> {
 }
 
 const wantsCapture = flag("screenshot") !== undefined || flag("wacz") !== undefined;
-if (engine === "http" && wantsCapture) fail("--screenshot and --wacz need a browser; use --engine=browser or auto.");
+if (engine === "http" && wantsCapture)
+  fail("--screenshot and --wacz need a browser; use --engine=browser or auto.");
 
 let result: FetchPageResult;
 if (engine === "browser") {
@@ -167,7 +177,13 @@ if (engine === "browser") {
 } else {
   result = await httpFetch(url, { timeout, proxyUrl, format });
   if (engine === "auto" && (needsBrowser(result) || wantsCapture)) {
-    const why = result.challenge ? "blocked" : result.error ? `${result.error.kind} error` : wantsCapture ? "capture requested" : "too little text";
+    const why = result.challenge
+      ? "blocked"
+      : result.error
+        ? `${result.error.kind} error`
+        : wantsCapture
+          ? "capture requested"
+          : "too little text";
     console.error(`HTTP fetch not usable (${why}); loading in the browser...`);
     result = await browserFetch();
   }
@@ -175,9 +191,13 @@ if (engine === "browser") {
 
 const status = result.status ? `HTTP ${result.status}` : "HTTP status unknown";
 if (result.error && !result.content) {
-  console.error(`Failed: ${result.error.kind} error loading ${url}: ${result.error.message.split("\n")[0]}`);
+  console.error(
+    `Failed: ${result.error.kind} error loading ${url}: ${result.error.message.split("\n")[0]}`
+  );
 } else {
-  console.error(`Fetched ${result.finalUrl} via ${result.engine} (${status}, ${result.textLength} chars of text)`);
+  console.error(
+    `Fetched ${result.finalUrl} via ${result.engine} (${status}, ${result.textLength} chars of text)`
+  );
 }
 if (result.challenge) {
   const hint =
@@ -186,7 +206,9 @@ if (result.challenge) {
       : mode === "standalone"
         ? " --mode=extension may get through."
         : "";
-  console.error(`Blocked: ${result.challenge.vendor} challenge (${result.challenge.reason}).${hint}`);
+  console.error(
+    `Blocked: ${result.challenge.vendor} challenge (${result.challenge.reason}).${hint}`
+  );
 }
 if (result.screenshotPath) console.error(`Screenshot: ${result.screenshotPath}`);
 if (result.waczPath) console.error(`Archive: ${result.waczPath}`);

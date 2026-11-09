@@ -45,8 +45,7 @@ function closedTargetIds(ext: MockExtension): string[] {
 
 /** Number of Target.createTarget commands forwarded to the mock extension */
 function createTargetCount(ext: MockExtension): number {
-  return ext.forwardedCdpCommands().filter((c) => c.method === "Target.createTarget")
-    .length;
+  return ext.forwardedCdpCommands().filter((c) => c.method === "Target.createTarget").length;
 }
 
 // ============================================================================
@@ -335,7 +334,9 @@ describe("Relay Server - Rebind Instead of Orphan", () => {
     ext.onCommand((msg) => {
       if (msg.method === "getAvailableTargets") {
         return {
-          targets: [{ tabId: 200, targetId: "tab-200", url: "https://bank.example/home", title: "Home" }],
+          targets: [
+            { tabId: 200, targetId: "tab-200", url: "https://bank.example/home", title: "Home" },
+          ],
         };
       }
       if (msg.method === "attachToTab") {

@@ -123,7 +123,7 @@ export class CDPRouter {
       } catch (err) {
         if (attempt === maxRetries - 1) throw err;
         // Exponential backoff: 50ms, 100ms, 200ms, 400ms
-        await new Promise(r => setTimeout(r, 50 * Math.pow(2, attempt)));
+        await new Promise((r) => setTimeout(r, 50 * Math.pow(2, attempt)));
       }
     }
     throw new Error("unreachable");
@@ -339,9 +339,10 @@ export class CDPRouter {
   /**
    * Attach debugger to a specific tab for recovery.
    */
-  private async attachToTab(
-    tabId: number
-  ): Promise<{ sessionId: string; targetInfo: { targetId: string; type: string; title: string; url: string; attached: boolean } }> {
+  private async attachToTab(tabId: number): Promise<{
+    sessionId: string;
+    targetInfo: { targetId: string; type: string; title: string; url: string; attached: boolean };
+  }> {
     // Check if already attached
     const existing = this.tabManager.get(tabId);
     if (existing && existing.state === "connected" && existing.sessionId) {

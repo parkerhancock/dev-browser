@@ -50,7 +50,9 @@ export function readLaunchConfigurations(projectDir: string): LaunchConfiguratio
   try {
     raw = readFileSync(path, "utf8");
   } catch {
-    throw new Error(`No ${path}. Create it with a "configurations" list (see the preview_start description).`);
+    throw new Error(
+      `No ${path}. Create it with a "configurations" list (see the preview_start description).`
+    );
   }
   const parsed = JSON.parse(raw) as { configurations?: LaunchConfiguration[] };
   return parsed.configurations ?? [];
@@ -69,7 +71,8 @@ function waitForPort(port: number, isDead: () => boolean, timeoutMs: number): Pr
       });
       socket.once("error", () => {
         socket.destroy();
-        if (Date.now() > deadline) reject(new Error(`Nothing listened on port ${port} within ${timeoutMs / 1000}s`));
+        if (Date.now() > deadline)
+          reject(new Error(`Nothing listened on port ${port} within ${timeoutMs / 1000}s`));
         else setTimeout(attempt, 300);
       });
     };
@@ -88,11 +91,13 @@ export class PreviewManager {
   /** Start (or reuse) the named configuration and return its server. */
   async start(name: string): Promise<PreviewServer & { reused: boolean }> {
     for (const server of this.servers.values()) {
-      if (server.name === name && server.status !== "exited") return { ...this.view(server), reused: true };
+      if (server.name === name && server.status !== "exited")
+        return { ...this.view(server), reused: true };
     }
     const config = readLaunchConfigurations(this.projectDir).find((c) => c.name === name);
     if (!config) throw new Error(`No configuration named "${name}" in .claude/launch.json`);
-    if (!config.url && config.port === undefined) throw new Error(`Configuration "${name}" needs a port or url`);
+    if (!config.url && config.port === undefined)
+      throw new Error(`Configuration "${name}" needs a port or url`);
     const url = config.url ?? `http://localhost:${config.port}`;
     const server: Running = {
       id: `preview-${this.nextId++}`,
@@ -125,7 +130,8 @@ export class PreviewManager {
         if (!line) continue;
         server.logs.push(stream === "stderr" ? `[stderr] ${line}` : line);
       }
-      if (server.logs.length > MAX_LOG_LINES) server.logs.splice(0, server.logs.length - MAX_LOG_LINES);
+      if (server.logs.length > MAX_LOG_LINES)
+        server.logs.splice(0, server.logs.length - MAX_LOG_LINES);
     };
     child.stdout?.on("data", record("stdout"));
     child.stderr?.on("data", record("stderr"));
@@ -144,7 +150,9 @@ export class PreviewManager {
       } catch (err) {
         const tail = server.logs.slice(-20).join("\n");
         await this.stop(server.id).catch(() => {});
-        throw new Error(`${err instanceof Error ? err.message : String(err)}.${tail ? `\nLast output:\n${tail}` : ""}`);
+        throw new Error(
+          `${err instanceof Error ? err.message : String(err)}.${tail ? `\nLast output:\n${tail}` : ""}`
+        );
       }
     }
     if (server.status === "starting") server.status = "running";
@@ -155,10 +163,14 @@ export class PreviewManager {
     return [...this.servers.values()].map((s) => this.view(s));
   }
 
-  logs(id: string, options: { level?: "all" | "error"; search?: string; lines?: number } = {}): string[] {
+  logs(
+    id: string,
+    options: { level?: "all" | "error"; search?: string; lines?: number } = {}
+  ): string[] {
     const server = this.get(id);
     let lines = server.logs;
-    if (options.level === "error") lines = lines.filter((l) => /error|exception|failed|fatal/i.test(l));
+    if (options.level === "error")
+      lines = lines.filter((l) => /error|exception|failed|fatal/i.test(l));
     if (options.search) lines = lines.filter((l) => l.includes(options.search!));
     return lines.slice(-(options.lines ?? 50));
   }
@@ -177,7 +189,8 @@ export class PreviewManager {
 
   private killAll(): void {
     for (const server of this.servers.values()) {
-      if (server.child?.pid !== undefined && server.status !== "exited") this.signal(server.child.pid, "SIGTERM");
+      if (server.child?.pid !== undefined && server.status !== "exited")
+        this.signal(server.child.pid, "SIGTERM");
     }
   }
 

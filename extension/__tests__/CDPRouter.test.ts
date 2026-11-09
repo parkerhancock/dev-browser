@@ -113,9 +113,8 @@ describe("CDPRouter", () => {
         { id: 20, windowId: 2, title: "Dev Browser", color: "blue", collapsed: false },
       ];
 
-      mockTabGroupsQuery.mockImplementation(
-        async ({ windowId }: { windowId?: number }) =>
-          windowId === undefined ? groups : groups.filter((group) => group.windowId === windowId)
+      mockTabGroupsQuery.mockImplementation(async ({ windowId }: { windowId?: number }) =>
+        windowId === undefined ? groups : groups.filter((group) => group.windowId === windowId)
       );
       mockTabsQuery.mockImplementation(async ({ groupId }: { groupId: number }) =>
         groupId === 11 ? [{ id: 2 }, { id: 3 }] : []

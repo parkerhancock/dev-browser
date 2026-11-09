@@ -32,7 +32,17 @@ export type {
 
 export async function serveRelay(options: RelayOptions = {}): Promise<RelayServer> {
   const ctx = createRelayContext(options);
-  const { port, host, requireAuth, token, log, logFile, live, pdfCleanupInterval, idleCleanupInterval } = ctx;
+  const {
+    port,
+    host,
+    requireAuth,
+    token,
+    log,
+    logFile,
+    live,
+    pdfCleanupInterval,
+    idleCleanupInterval,
+  } = ctx;
 
   // ============================================================================
   // HTTP/WebSocket Server

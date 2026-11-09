@@ -162,16 +162,12 @@ async function harEntryToWarc(
   // Build HTTP request string
   const reqUrl = new URL(url);
   const reqPath = reqUrl.pathname + reqUrl.search;
-  const reqHeaders = entry.request.headers
-    .map((h) => `${h.name}: ${h.value}`)
-    .join("\r\n");
+  const reqHeaders = entry.request.headers.map((h) => `${h.name}: ${h.value}`).join("\r\n");
   const reqBody = entry.request.postData?.text ?? "";
   const httpRequest = `${entry.request.method} ${reqPath} HTTP/1.1\r\nHost: ${reqUrl.host}\r\n${reqHeaders}\r\n\r\n${reqBody}`;
 
   // Build HTTP response string
-  const respHeaders = entry.response.headers
-    .map((h) => `${h.name}: ${h.value}`)
-    .join("\r\n");
+  const respHeaders = entry.response.headers.map((h) => `${h.name}: ${h.value}`).join("\r\n");
   const respBody = entry.response.content.text ?? "";
   const statusLine = `HTTP/1.1 ${entry.response.status} ${entry.response.statusText || "OK"}`;
   const httpResponse = `${statusLine}\r\n${respHeaders}\r\n\r\n${respBody}`;

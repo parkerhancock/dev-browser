@@ -13,7 +13,7 @@ import archiver from "archiver";
 // Re-implement the HAR recording logic for testing (isolated from client.ts)
 interface PendingHarEntry {
   entry: Partial<HarEntry>;
-  startTime: number;       // Monotonic timestamp for duration calculation
+  startTime: number; // Monotonic timestamp for duration calculation
   requestId: string;
   mimeType?: string;
 }
@@ -71,14 +71,16 @@ async function startRecording(page: Page): Promise<HarRecorderState> {
     const cookies = parseCookieHeader(cookieHeader);
     const postData = params.request.postData
       ? {
-          mimeType: params.request.headers["Content-Type"] ??
-                    params.request.headers["content-type"] ?? "application/octet-stream",
+          mimeType:
+            params.request.headers["Content-Type"] ??
+            params.request.headers["content-type"] ??
+            "application/octet-stream",
           text: params.request.postData,
         }
       : undefined;
 
     state.pending.set(params.requestId, {
-      startTime: params.timestamp * 1000,  // Monotonic timestamp for duration
+      startTime: params.timestamp * 1000, // Monotonic timestamp for duration
       requestId: params.requestId,
       entry: {
         startedDateTime: new Date(params.wallTime * 1000).toISOString(),
@@ -156,9 +158,10 @@ async function startRecording(page: Page): Promise<HarRecorderState> {
     }
 
     // Fetch body for text content
-    const isText = pending.mimeType?.startsWith("text/") ||
-                   pending.mimeType?.includes("json") ||
-                   pending.mimeType?.includes("xml");
+    const isText =
+      pending.mimeType?.startsWith("text/") ||
+      pending.mimeType?.includes("json") ||
+      pending.mimeType?.includes("xml");
     if (isText && params.encodedDataLength < 1024 * 1024) {
       try {
         const { body, base64Encoded } = await cdpSession.send("Network.getResponseBody", {

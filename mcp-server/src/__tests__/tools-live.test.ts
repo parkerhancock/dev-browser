@@ -54,7 +54,8 @@ async function call(name: string, args: Record<string, unknown> = {}): Promise<s
   return text;
 }
 
-const js = async (code: string): Promise<unknown> => JSON.parse(await call("javascript", { code: `JSON.stringify(${code})` }));
+const js = async (code: string): Promise<unknown> =>
+  JSON.parse(await call("javascript", { code: `JSON.stringify(${code})` }));
 
 beforeAll(async () => {
   site = createServer((req, res) => {
@@ -83,7 +84,10 @@ beforeAll(async () => {
     headless: true,
     profileDir: mkdtempSync(join(tmpdir(), "dev-browser-mcp-live-profile-")),
   });
-  browserClient = await connect(`http://127.0.0.1:${port}`, { session: "mcp-live", token: loadToken()! });
+  browserClient = await connect(`http://127.0.0.1:${port}`, {
+    session: "mcp-live",
+    token: loadToken()!,
+  });
   const state = createState({ mode: "standalone", session: "mcp-live" });
   state.clients.set("standalone", browserClient);
   const project = mkdtempSync(join(tmpdir(), "dev-browser-mcp-live-project-"));
@@ -96,7 +100,10 @@ beforeAll(async () => {
         {
           name: "app",
           runtimeExecutable: process.execPath,
-          runtimeArgs: ["-e", `require("http").createServer((q, r) => r.end("<title>Dev app</title>")).listen(${appPort})`],
+          runtimeArgs: [
+            "-e",
+            `require("http").createServer((q, r) => r.end("<title>Dev app</title>")).listen(${appPort})`,
+          ],
           port: appPort,
         },
       ],
@@ -140,12 +147,17 @@ describe("MCP tools on a live standalone browser", () => {
     await call("form_input", { ref: await refFor(/combobox/), value: "Large" });
     await call("form_input", { ref: await refFor(/checkbox "Agree"/), value: true });
     expect(
-      await js(`[document.querySelector("#name").value, document.querySelector("#size").value, document.querySelector("#agree").checked]`)
+      await js(
+        `[document.querySelector("#name").value, document.querySelector("#size").value, document.querySelector("#agree").checked]`
+      )
     ).toEqual(["Ada", "l", true]);
   });
 
   test("file_upload sets files by ref", async () => {
-    await call("file_upload", { ref: await refFor(/button "Upload"/), files: [join(process.cwd(), "package.json")] });
+    await call("file_upload", {
+      ref: await refFor(/button "Upload"/),
+      files: [join(process.cwd(), "package.json")],
+    });
     expect(await js(`document.querySelector("#upload").files[0].name`)).toBe("package.json");
   });
 
@@ -156,7 +168,9 @@ describe("MCP tools on a live standalone browser", () => {
     )) as unknown[];
     expect(phone).toEqual([5, true, true, 375]);
     await call("resize_window", { preset: "desktop" });
-    const desktop = (await js(`[navigator.maxTouchPoints, /Android/.test(navigator.userAgent), innerWidth, innerHeight]`)) as unknown[];
+    const desktop = (await js(
+      `[navigator.maxTouchPoints, /Android/.test(navigator.userAgent), innerWidth, innerHeight]`
+    )) as unknown[];
     expect(desktop).toEqual([0, false, 1440, 900]);
   });
 
@@ -169,7 +183,9 @@ describe("MCP tools on a live standalone browser", () => {
   test("read_network_requests returns a response body by id", async () => {
     let requests: Array<{ id: number; url: string }> = [];
     for (let i = 0; i < 20 && !requests.some((r) => r.url.endsWith("/data.json")); i++) {
-      requests = JSON.parse(await call("read_network_requests", { pattern: "data\\.json" })).requests;
+      requests = JSON.parse(
+        await call("read_network_requests", { pattern: "data\\.json" })
+      ).requests;
       await new Promise((r) => setTimeout(r, 250));
     }
     const id = requests.find((r) => r.url.endsWith("/data.json"))!.id;
@@ -189,16 +205,26 @@ describe("MCP tools on a live standalone browser", () => {
     await call("navigate", { url: `${origin}/form` });
     const image = join(process.cwd(), "..", "assets", "header.png");
     const size = statSync(image).size;
-    await call("upload_image", { path: image, ref: await refFor(/button "Upload"/), filename: "shot.png" });
+    await call("upload_image", {
+      path: image,
+      ref: await refFor(/button "Upload"/),
+      filename: "shot.png",
+    });
     expect(await js(`document.querySelector("#upload").files[0].name`)).toBe("shot.png");
     await call("upload_image", { path: image, coordinate: [100, 350] });
-    expect(await js(`document.querySelector("#drop").dataset.got`)).toBe(`header.png:${size}:image/png`);
+    expect(await js(`document.querySelector("#drop").dataset.got`)).toBe(
+      `header.png:${size}:image/png`
+    );
   });
 
   test("gif_creator records actions and exports a GIF", async () => {
     await call("gif_creator", { action: "start_recording" });
     await call("computer", { action: "left_click", coordinate: [100, 350] });
-    await call("computer", { action: "left_click_drag", start_coordinate: [50, 50], coordinate: [300, 120] });
+    await call("computer", {
+      action: "left_click_drag",
+      start_coordinate: [50, 50],
+      coordinate: [300, 120],
+    });
     await call("navigate", { url: `${origin}/form` });
     expect(JSON.parse(await call("gif_creator", { action: "stop_recording" })).frames).toBe(5);
     const path = join(process.env.DEV_BROWSER_DIR!, "out.gif");
@@ -212,13 +238,23 @@ describe("MCP tools on a live standalone browser", () => {
   test("navigate keeps a page with unsaved changes unless forced", async () => {
     await call("navigate", { url: `${origin}/unsaved`, page: "draft" });
     // A real keystroke gives the page the user activation that arms the dialog
-    await call("computer", { action: "left_click", ref: await refFor(/textbox/), page: "draft" }).catch(() => {});
+    await call("computer", {
+      action: "left_click",
+      ref: await refFor(/textbox/),
+      page: "draft",
+    }).catch(() => {});
     await call("computer", { action: "type", text: "notes", page: "draft" });
-    await expect(call("navigate", { url: `${origin}/form`, page: "draft" })).rejects.toThrow(/unsaved changes/);
-    expect(JSON.parse(await call("javascript", { code: "JSON.stringify(location.pathname)", page: "draft" }))).toBe(
-      "/unsaved"
+    await expect(call("navigate", { url: `${origin}/form`, page: "draft" })).rejects.toThrow(
+      /unsaved changes/
     );
-    const forced = JSON.parse(await call("navigate", { url: `${origin}/form`, page: "draft", force: true }));
+    expect(
+      JSON.parse(
+        await call("javascript", { code: "JSON.stringify(location.pathname)", page: "draft" })
+      )
+    ).toBe("/unsaved");
+    const forced = JSON.parse(
+      await call("navigate", { url: `${origin}/form`, page: "draft", force: true })
+    );
     expect(forced).toMatchObject({ discardedUnsavedChanges: true });
     expect(forced.url).toBe(`${origin}/form`);
     await call("tabs_close", { page: "draft" });
@@ -227,8 +263,14 @@ describe("MCP tools on a live standalone browser", () => {
   test("tabs_select and scaled screenshots work", async () => {
     await call("tabs_create", { page: "other" });
     await expect(call("tabs_select", { page: "live" })).resolves.toContain("success");
-    const result = await mcp.callTool({ name: "screenshot", arguments: { page: "live", scale: 0.5 } });
-    const png = Buffer.from((result.content as Content).find((c) => c.type === "image")!.data!, "base64");
+    const result = await mcp.callTool({
+      name: "screenshot",
+      arguments: { page: "live", scale: 0.5 },
+    });
+    const png = Buffer.from(
+      (result.content as Content).find((c) => c.type === "image")!.data!,
+      "base64"
+    );
     expect([png.readUInt32BE(16), png.readUInt32BE(20)]).toEqual([720, 450]);
     const zoom = await mcp.callTool({
       name: "computer",

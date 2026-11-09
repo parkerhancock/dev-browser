@@ -114,7 +114,9 @@ export function registerPageRoutes(app: Hono, ctx: RelayContext): void {
       if (target && adoptTabId !== undefined && boundTabId !== adoptTabId) {
         // Explicit adoption of a different tab: drop the old binding (that tab
         // stays open, unnamed) and fall through to attach the requested tab.
-        log(`POST /pages session=${agentSession} name=${name} action=unbind-for-adopt tabId=${adoptTabId}`);
+        log(
+          `POST /pages session=${agentSession} name=${name} action=unbind-for-adopt tabId=${adoptTabId}`
+        );
         registry.removeStalePageName(pageKey, name, agentSession);
       } else if (target) {
         // Update pinned flag if explicitly set on reuse
@@ -127,7 +129,9 @@ export function registerPageRoutes(app: Hono, ctx: RelayContext): void {
           }
         }
         // Return existing page without activating (use page.bringToFront() if needed)
-        log(`POST /pages session=${agentSession} name=${name} action=reused pinned=${target.pinned} total=${namedPages.size} sessionTotal=${sessionPageCount}`);
+        log(
+          `POST /pages session=${agentSession} name=${name} action=reused pinned=${target.pinned} total=${namedPages.size} sessionTotal=${sessionPageCount}`
+        );
         return c.json({
           wsEndpoint: `ws://${host}:${port}/cdp`,
           name, // Return without session prefix
@@ -144,7 +148,9 @@ export function registerPageRoutes(app: Hono, ctx: RelayContext): void {
 
     // Check tab limits before creating
     if (sessionPageCount >= TAB_LIMIT) {
-      log(`POST /pages session=${agentSession} name=${name} action=rejected-limit total=${namedPages.size} sessionTotal=${sessionPageCount}`);
+      log(
+        `POST /pages session=${agentSession} name=${name} action=rejected-limit total=${namedPages.size} sessionTotal=${sessionPageCount}`
+      );
       return c.json(
         {
           error: `Tab limit exceeded. Session "${agentSession}" already has ${sessionPageCount} tabs (limit: ${TAB_LIMIT}). Close some tabs before opening new ones.`,
@@ -157,7 +163,9 @@ export function registerPageRoutes(app: Hono, ctx: RelayContext): void {
     let warning: string | undefined;
     if (sessionPageCount >= TAB_WARNING_THRESHOLD) {
       warning = `Warning: Session "${agentSession}" has ${sessionPageCount} tabs. Limit is ${TAB_LIMIT}. Consider closing unused tabs.`;
-      log(`POST /pages session=${agentSession} name=${name} warning=approaching-limit sessionTotal=${sessionPageCount}`);
+      log(
+        `POST /pages session=${agentSession} name=${name} warning=approaching-limit sessionTotal=${sessionPageCount}`
+      );
     }
 
     if (!live.extensionWs) {
@@ -181,10 +189,10 @@ export function registerPageRoutes(app: Hono, ctx: RelayContext): void {
         const match =
           adoptTabId !== undefined
             ? avail.targets.find((t) => t.tabId === adoptTabId)
-            : avail.targets.find((t) => t.tabId === persistedEntry!.tabId) ??
+            : (avail.targets.find((t) => t.tabId === persistedEntry!.tabId) ??
               (persistedEntry!.url && persistedEntry!.url !== "about:blank"
                 ? avail.targets.find((t) => t.url === persistedEntry!.url)
-                : undefined);
+                : undefined));
 
         if (!match && adoptTabId !== undefined) {
           return c.json({ error: `No open tab with tabId ${adoptTabId}` }, 404);
@@ -207,12 +215,25 @@ export function registerPageRoutes(app: Hono, ctx: RelayContext): void {
             pinned: rebindPinned,
             state: "attached",
           });
-          registry.nameTarget(pageKey, name, cdpSessionId, attachResult.targetInfo.targetId, agentSession);
+          registry.nameTarget(
+            pageKey,
+            name,
+            cdpSessionId,
+            attachResult.targetInfo.targetId,
+            agentSession
+          );
 
           const entry =
             persistedEntry ??
             (() => {
-              const fresh = { key: pageKey, targetId: "", tabId: match.tabId, url: "", lastSeen: 0, pinned: false };
+              const fresh = {
+                key: pageKey,
+                targetId: "",
+                tabId: match.tabId,
+                url: "",
+                lastSeen: 0,
+                pinned: false,
+              };
               live.persistedPages.push(fresh);
               return fresh;
             })();
@@ -223,7 +244,9 @@ export function registerPageRoutes(app: Hono, ctx: RelayContext): void {
           entry.lastSeen = Date.now();
           savePersistedPages(live.persistedPages);
 
-          log(`POST /pages session=${agentSession} name=${name} action=${adoptTabId !== undefined ? "adopted" : "rebound"} tabId=${match.tabId} url=${entry.url} pinned=${rebindPinned}`);
+          log(
+            `POST /pages session=${agentSession} name=${name} action=${adoptTabId !== undefined ? "adopted" : "rebound"} tabId=${match.tabId} url=${entry.url} pinned=${rebindPinned}`
+          );
 
           const response: {
             wsEndpoint: string;
@@ -247,7 +270,10 @@ export function registerPageRoutes(app: Hono, ctx: RelayContext): void {
       } catch (err) {
         if (adoptTabId !== undefined) {
           log(`Adopt failed for ${pageKey} tabId=${adoptTabId}: ${err}`);
-          return c.json({ error: `Could not attach to tab ${adoptTabId}: ${(err as Error).message}` }, 500);
+          return c.json(
+            { error: `Could not attach to tab ${adoptTabId}: ${(err as Error).message}` },
+            500
+          );
         }
         log(`Rebind failed for ${pageKey}, falling back to new tab: ${err}`);
       }
@@ -308,7 +334,9 @@ export function registerPageRoutes(app: Hono, ctx: RelayContext): void {
           });
           savePersistedPages(live.persistedPages);
 
-          log(`POST /pages session=${agentSession} name=${name} action=created pinned=${pinned} total=${namedPages.size} sessionTotal=${sessionState.pageNames.size}`);
+          log(
+            `POST /pages session=${agentSession} name=${name} action=created pinned=${pinned} total=${namedPages.size} sessionTotal=${sessionState.pageNames.size}`
+          );
 
           // Return new page without activating (use page.bringToFront() if needed)
           const response: {
@@ -379,9 +407,7 @@ export function registerPageRoutes(app: Hono, ctx: RelayContext): void {
         throw new Error(`Chrome did not close tab ${persistedEntry.tabId}`);
       }
     } catch (err) {
-      log(
-        `DELETE /pages session=${agentSession} name=${name} action=close-failed error=${err}`
-      );
+      log(`DELETE /pages session=${agentSession} name=${name} action=close-failed error=${err}`);
       return c.json({ error: String(err) }, 502);
     }
 
@@ -392,7 +418,9 @@ export function registerPageRoutes(app: Hono, ctx: RelayContext): void {
     live.persistedPages = live.persistedPages.filter((p) => p.key !== pageKey);
     savePersistedPages(live.persistedPages);
 
-    log(`DELETE /pages session=${agentSession} name=${name} action=deleted total=${namedPages.size}`);
+    log(
+      `DELETE /pages session=${agentSession} name=${name} action=deleted total=${namedPages.size}`
+    );
     return c.json({ success: true });
   });
 

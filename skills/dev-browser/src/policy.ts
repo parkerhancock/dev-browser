@@ -99,15 +99,15 @@ function domainMatches(hostname: string, domain: string): boolean {
   return h === d || h.endsWith(`.${d}`);
 }
 
-function resolveSession(policy: RelayPolicy, agentSession: string): Required<Pick<SessionPolicy, "mode">> & SessionPolicy {
+function resolveSession(
+  policy: RelayPolicy,
+  agentSession: string
+): Required<Pick<SessionPolicy, "mode">> & SessionPolicy {
   const override = policy.sessions?.[agentSession] ?? {};
   return {
     mode: override.mode ?? policy.defaultMode,
     allowedDomains: override.allowedDomains ?? policy.allowedDomains,
-    blockedDomains: [
-      ...(policy.blockedDomains ?? []),
-      ...(override.blockedDomains ?? []),
-    ],
+    blockedDomains: [...(policy.blockedDomains ?? []), ...(override.blockedDomains ?? [])],
   };
 }
 

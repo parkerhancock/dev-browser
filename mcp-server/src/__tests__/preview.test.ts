@@ -18,7 +18,10 @@ function freePort(): Promise<number> {
 function project(configurations: unknown[]): string {
   const dir = mkdtempSync(join(tmpdir(), "dev-browser-preview-"));
   mkdirSync(join(dir, ".claude"));
-  writeFileSync(join(dir, ".claude", "launch.json"), JSON.stringify({ version: "0.0.1", configurations }));
+  writeFileSync(
+    join(dir, ".claude", "launch.json"),
+    JSON.stringify({ version: "0.0.1", configurations })
+  );
   return dir;
 }
 
@@ -31,10 +34,16 @@ describe("PreviewManager", () => {
   test("starts a server, keeps its logs, reuses it, and stops it", async () => {
     const port = await freePort();
     const manager = new PreviewManager(
-      project([{ name: "web", runtimeExecutable: process.execPath, runtimeArgs: ["-e", SERVER], port }])
+      project([
+        { name: "web", runtimeExecutable: process.execPath, runtimeArgs: ["-e", SERVER], port },
+      ])
     );
     const server = await manager.start("web");
-    expect(server).toMatchObject({ status: "running", url: `http://localhost:${port}`, reused: false });
+    expect(server).toMatchObject({
+      status: "running",
+      url: `http://localhost:${port}`,
+      reused: false,
+    });
     expect(await (await fetch(`http://127.0.0.1:${port}/`)).text()).toBe("hi");
     expect((await manager.start("web")).reused).toBe(true);
 
@@ -58,16 +67,25 @@ describe("PreviewManager", () => {
         },
       ])
     );
-    await expect(manager.start("broken")).rejects.toThrow(/exited before it opened its port[\s\S]*missing module/);
+    await expect(manager.start("broken")).rejects.toThrow(
+      /exited before it opened its port[\s\S]*missing module/
+    );
   });
 
   test("attaches to a url without starting anything", async () => {
     const manager = new PreviewManager(project([{ name: "remote", url: "http://localhost:4321" }]));
-    expect(await manager.start("remote")).toMatchObject({ status: "running", url: "http://localhost:4321" });
+    expect(await manager.start("remote")).toMatchObject({
+      status: "running",
+      url: "http://localhost:4321",
+    });
   });
 
   test("names the missing file or configuration", async () => {
-    await expect(new PreviewManager(mkdtempSync(join(tmpdir(), "none-"))).start("web")).rejects.toThrow(/launch\.json/);
-    await expect(new PreviewManager(project([])).start("web")).rejects.toThrow(/No configuration named "web"/);
+    await expect(
+      new PreviewManager(mkdtempSync(join(tmpdir(), "none-"))).start("web")
+    ).rejects.toThrow(/launch\.json/);
+    await expect(new PreviewManager(project([])).start("web")).rejects.toThrow(
+      /No configuration named "web"/
+    );
   });
 });

@@ -91,9 +91,7 @@ export async function connectExtensionMode(
       throw new Error(`Failed to stop HAR recording: ${await res.text()}`);
     }
     const har = (await res.json()) as HarLog;
-    logger.debug(
-      `Stopped HAR recording for "${name}" (${har.log.entries.length} entries)`
-    );
+    logger.debug(`Stopped HAR recording for "${name}" (${har.log.entries.length} entries)`);
     return har;
   }
 
@@ -196,10 +194,7 @@ export async function connectExtensionMode(
             logger.debug(`HAR recording already active for "${name}"`);
           }
         } catch (err) {
-          logger.warn(
-            `Failed to auto-start HAR recording for "${name}":`,
-            err
-          );
+          logger.warn(`Failed to auto-start HAR recording for "${name}":`, err);
         }
 
         // Auto-enable console capture too (same opt-out as HAR)
@@ -222,10 +217,10 @@ export async function connectExtensionMode(
     },
 
     async close(name: string): Promise<void> {
-      const res = await fetch(
-        `${serverUrl}/pages/${encodeURIComponent(name)}`,
-        { method: "DELETE", headers: sessionHeaders }
-      );
+      const res = await fetch(`${serverUrl}/pages/${encodeURIComponent(name)}`, {
+        method: "DELETE",
+        headers: sessionHeaders,
+      });
       if (!res.ok) {
         throw new Error(`Failed to close page: ${await res.text()}`);
       }
@@ -252,10 +247,7 @@ export async function connectExtensionMode(
       return fetchSnapshot(name);
     },
 
-    async selectSnapshotRef(
-      _name: string,
-      _ref: string
-    ): Promise<ElementHandle | null> {
+    async selectSnapshotRef(_name: string, _ref: string): Promise<ElementHandle | null> {
       logger.warn(
         "selectSnapshotRef is not available in extension mode. " +
           "Use page.clickRef(ref) or page.fillRef(ref, value) instead."
@@ -299,10 +291,9 @@ export async function connectExtensionMode(
     },
 
     async isRecordingHar(name: string): Promise<boolean> {
-      const res = await fetch(
-        `${serverUrl}/har/status?page=${encodeURIComponent(name)}`,
-        { headers: sessionHeaders }
-      );
+      const res = await fetch(`${serverUrl}/har/status?page=${encodeURIComponent(name)}`, {
+        headers: sessionHeaders,
+      });
       if (!res.ok) {
         throw new Error(`Failed to get HAR status: ${await res.text()}`);
       }
@@ -442,35 +433,20 @@ export async function connectExtensionMode(
       return pageInnerText(existingPage(name));
     },
 
-    async grantPermissions(
-      name: string,
-      origin: string,
-      permissions: string[]
-    ): Promise<void> {
+    async grantPermissions(name: string, origin: string, permissions: string[]): Promise<void> {
       await sendCdp(name, "Browser.grantPermissions", { origin, permissions });
     },
 
-    async clearBrowsingData(
-      name: string,
-      options?: { origin?: string }
-    ): Promise<void> {
+    async clearBrowsingData(name: string, options?: { origin?: string }): Promise<void> {
       await clearBrowsingDataImpl((m, p) => sendCdp(name, m, p), options);
     },
 
     async exportOriginState(name: string, origin: string): Promise<OriginState> {
-      return exportOriginStateImpl(
-        (m, p) => sendCdp(name, m, p),
-        existingPage(name),
-        origin
-      );
+      return exportOriginStateImpl((m, p) => sendCdp(name, m, p), existingPage(name), origin);
     },
 
     async importOriginState(name: string, state: OriginState): Promise<void> {
-      await importOriginStateImpl(
-        (m, p) => sendCdp(name, m, p),
-        existingPage(name),
-        state
-      );
+      await importOriginStateImpl((m, p) => sendCdp(name, m, p), existingPage(name), state);
     },
 
     async getDownloads(options?: { since?: number }): Promise<DownloadRecord[]> {
