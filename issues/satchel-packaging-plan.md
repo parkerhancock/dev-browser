@@ -120,7 +120,8 @@ already uses with its loopback MCP server.
      checkout instead (G3);
   2. run `npm ci` in `skills/dev-browser` and `mcp-server`, and
      `npx patchright install chromium`;
-  3. write `~/.dev-browser/app/current/VERSION`;
+  3. record the install in `~/.dev-browser/app/install.json` (version, copy or
+     link, source), not a `VERSION` file, so a linked checkout stays clean;
   4. after confirmation, or with `--service`, install a launchd agent or systemd
      user unit that runs the MCP host on 9225 and the relay on 9224, and start
      it;
@@ -139,7 +140,7 @@ already uses with its loopback MCP server.
 - R8. SKILL.md, AGENTS.md, and `agents/webfetch.md` shall run scripts from
   `~/.dev-browser/app/current`, and say to run setup when that's missing.
 - R9. On Claude Code, a SessionStart hook shall compare the plugin's version with
-  `VERSION` and, on a mismatch, start setup in the background without the
+  `install.json` and, for a copied install, on a mismatch, start setup in the background without the
   service step. Errors are ignored. Codex users rerun setup by hand after
   updates.
 - R10. The client shall use `CLAUDE_CODE_SESSION_ID` when `CLAUDE_SESSION_ID`
@@ -260,7 +261,9 @@ already uses with its loopback MCP server.
   project MCP server in this repo. No plugin icon yet (a validator warning).
 - T5 (R6, R8, A3, A5, A8, A9). Write `scripts/setup.mjs`, including
   `--uninstall` and `--purge`, and the launchd and systemd service files.
-  Repoint the docs and the agent to `~/.dev-browser/app/current`.
+  Repoint the docs and the agent to `~/.dev-browser/app/current`. **Done 2026-11-09.** A real
+  copied install into a temporary folder took 9 s with warm npm and browser
+  caches; the shim against it handshook in 173 ms and drove the browser.
 - T6 (R11, A7). Add the extension release job and fix the download links.
 - T7. Move this Mac over:
   1. install the plugin in Claude Code and Codex;

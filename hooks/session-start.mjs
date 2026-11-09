@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 /**
  * SessionStart hook: keep an installed dev-browser runtime in step with the
- * plugin. When ~/.dev-browser/app/current exists and its VERSION differs from
- * the plugin's, run `scripts/setup.mjs --update` in the background and return
- * at once. It never does a first install (setup asks about the login service
- * then), prints nothing, and ignores every error.
+ * plugin. When ~/.dev-browser/app/install.json records a copied install whose
+ * version differs from the plugin's, run `scripts/setup.mjs --update` in the
+ * background and return at once. It never does a first install (setup asks
+ * about the login service then), leaves linked installs alone, prints
+ * nothing, and ignores every error.
  */
 
 import { spawn } from "node:child_process";
@@ -19,7 +20,6 @@ try {
     process.env.PLUGIN_ROOT ||
     dirname(dirname(fileURLToPath(import.meta.url)));
   const dir = process.env.DEV_BROWSER_DIR || join(homedir(), ".dev-browser");
-  const app = process.env.DEV_BROWSER_APP || join(dir, "app", "current");
   const setup = join(root, "scripts", "setup.mjs");
 
   const readJson = (path) => JSON.parse(readFileSync(path, "utf8"));
@@ -28,11 +28,16 @@ try {
     join(root, ".codex-plugin", "plugin.json"),
   ].find(existsSync);
   const pluginVersion = manifest ? readJson(manifest).version : undefined;
-  const runtimeVersion = existsSync(join(app, "VERSION"))
-    ? readFileSync(join(app, "VERSION"), "utf8").trim()
+  const record = existsSync(join(dir, "app", "install.json"))
+    ? readJson(join(dir, "app", "install.json"))
     : undefined;
 
-  if (pluginVersion && runtimeVersion && pluginVersion !== runtimeVersion && existsSync(setup)) {
+  if (
+    pluginVersion &&
+    record?.mode === "copy" &&
+    record.version !== pluginVersion &&
+    existsSync(setup)
+  ) {
     const child = spawn(process.execPath, [setup, "--update"], {
       detached: true,
       stdio: "ignore",

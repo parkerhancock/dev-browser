@@ -42,39 +42,28 @@ For maximum stealth (real browser fingerprint, existing cookies), install the Ch
 
 ## Prerequisites
 
-- [Claude Code](https://docs.anthropic.com/en/docs/claude-code) CLI installed
-- [Node.js](https://nodejs.org) (v18 or later) with npm
+- [Claude Code](https://docs.anthropic.com/en/docs/claude-code) or Codex
+- [Node.js](https://nodejs.org) 20 or later with npm
+- macOS or Linux
 
 ## Installation
 
-### Claude Code
+1. Install the plugin.
 
-```
-/plugin marketplace add sawyerhood/dev-browser
-/plugin install dev-browser@sawyerhood/dev-browser
-```
+   Claude Code:
 
-Restart Claude Code after installation.
+   ```
+   /plugin marketplace add parkerhancock/dev-browser
+   /plugin install dev-browser@dev-browser
+   ```
 
-### Amp / Codex
+   Codex: add the `parkerhancock/dev-browser` marketplace and install `dev-browser` from it.
 
-Copy the skill to your skills directory:
+2. Run setup once per machine. In Claude Code, run `/dev-browser:setup`. Elsewhere, run the command dev-browser's tools print until setup is done (`node <plugin folder>/scripts/setup.mjs`). Setup installs the runtime into `~/.dev-browser/app`, downloads the browser, and asks whether to start dev-browser at login. It takes a minute or two.
 
-```bash
-# For Amp: ~/.claude/skills | For Codex: ~/.codex/skills
-SKILLS_DIR=~/.claude/skills  # or ~/.codex/skills
+The browser tools work after that, and the browser starts on first use. After a plugin update, Claude Code reruns setup in the background; in Codex, run setup again. To remove dev-browser, run setup with `--uninstall` (add `--purge` to delete `~/.dev-browser` too).
 
-mkdir -p $SKILLS_DIR
-git clone https://github.com/sawyerhood/dev-browser /tmp/dev-browser-skill
-cp -r /tmp/dev-browser-skill/skills/dev-browser $SKILLS_DIR/dev-browser
-rm -rf /tmp/dev-browser-skill
-```
-
-**Amp only:** Start the server manually before use:
-
-```bash
-cd ~/.claude/skills/dev-browser && npm install && npm run start-server
-```
+For development, `node scripts/setup.mjs --link .` from a checkout makes the runtime use the checkout, so edits take effect after `~/.dev-browser/bin/dev-browser restart`.
 
 ### Chrome Extension (Optional)
 
@@ -82,7 +71,7 @@ The Chrome extension allows Dev Browser to control your existing Chrome browser 
 
 **Installation:**
 
-1. Download `extension.zip` from the [latest release](https://github.com/sawyerhood/dev-browser/releases/latest)
+1. Download the extension zip from the [latest release](https://github.com/parkerhancock/dev-browser/releases/latest)
 2. Unzip the file to a permanent location (e.g., `~/.dev-browser-extension`)
 3. Open Chrome and go to `chrome://extensions`
 4. Enable "Developer mode" (toggle in top right)
@@ -105,7 +94,7 @@ Session persistence needs no setup: Claude Code gives each session a `CLAUDE_COD
 **Start the shared relay:**
 
 ```bash
-node mcp-server/bin/dev-browser.mjs start relay
+~/.dev-browser/bin/dev-browser start relay
 ```
 
 It's idempotent: run it from any Claude Code instance and it either starts the relay in the background or reports that it's already running.
@@ -124,10 +113,10 @@ const client = await connect("http://localhost:9222", { session: "shared-workspa
 **Stop the relay:**
 
 ```bash
-node mcp-server/bin/dev-browser.mjs stop relay
+~/.dev-browser/bin/dev-browser stop relay
 ```
 
-`node mcp-server/bin/dev-browser.mjs status` shows every dev-browser server and whether `start` launched it.
+`~/.dev-browser/bin/dev-browser status` shows every dev-browser server and whether `start` launched it.
 
 ## Permissions
 

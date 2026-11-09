@@ -85,6 +85,7 @@ Outside the skill, at the repo root:
 - `extension/` - The Chrome extension for extension mode (WXT)
 - `satchel.yaml` - Plugin package source for Claude Code and Codex. After editing it, `skills/`, `commands/`, `hooks/`, or `.mcp.json`, run `uv run --project ../satchel satchel generate .` and `... satchel check . --release`. `.claude-plugin/`, `.codex-plugin/`, and `.agents/plugins/` are generated; don't edit them by hand.
 - `.mcp.json` - The plugin's MCP server: a `node -e` loader that runs `mcp-shim.mjs` from `CLAUDE_PLUGIN_ROOT` or `PLUGIN_ROOT` (or the working directory), so one file works under both hosts
+- `scripts/setup.mjs` - Dependency-free setup: copies the runtime to `~/.dev-browser/app/<version>` (or `--link`s a checkout), installs dependencies and the browser, writes `~/.dev-browser/bin/dev-browser`, optional login item (`--service`), `--update`, `--uninstall [--purge]`. Tests set `DEV_BROWSER_SETUP_DRY=1`
 - `commands/setup.md` - `/dev-browser:setup` (Claude Code)
 - `hooks/session-start.mjs` - Reruns setup in the background when the plugin's version and the installed runtime's differ
 

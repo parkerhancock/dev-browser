@@ -15,6 +15,8 @@ Browser automation that maintains page state across script executions. Write sma
 
 ## Setup
 
+dev-browser runs from `~/.dev-browser/app/current`, with its CLI at `~/.dev-browser/bin/dev-browser`. If that folder doesn't exist, it isn't set up yet: tell the user to run `/dev-browser:setup` (Claude Code), or run `node <this plugin>/scripts/setup.mjs` with their OK. Scripts below run from `~/.dev-browser/app/current/skills/dev-browser`.
+
 Two modes available on different ports. **Both can run simultaneously** - useful when some agents debug a UI (standalone) while others automate logged-in sessions (extension).
 
 | Mode       | Port | Use Case                          |
@@ -24,10 +26,10 @@ Two modes available on different ports. **Both can run simultaneously** - useful
 
 ### Standalone Mode (Default)
 
-Launches a new Chromium browser for fresh automation sessions. From this skill's directory:
+Launches a new Chromium browser for fresh automation sessions. The MCP tools start it on their own; to start it yourself:
 
 ```bash
-node ../../mcp-server/bin/dev-browser.mjs start serve
+~/.dev-browser/bin/dev-browser start serve
 ```
 
 It runs in the background, headless by default; add `--headed` if the user wants to see the window. The command returns once the server answers, and running it again while it's up just reports "already running".
@@ -41,10 +43,10 @@ Connects to user's existing Chrome browser. Use this when:
 
 **Important**: The core flow is still the same. You create named pages inside of their browser. Use `connect({ mode: "extension" })` to connect.
 
-**Start the relay server** (from this skill's directory):
+**Start the relay server:**
 
 ```bash
-node ../../mcp-server/bin/dev-browser.mjs start relay
+~/.dev-browser/bin/dev-browser start relay
 ```
 
 It's safe to run more than once: it starts the relay in the background if it isn't running, or reports that it already is, and returns once the relay answers. If the extension hasn't connected yet, tell the user to launch and activate it. Download link: https://github.com/SawyerHood/dev-browser/releases
@@ -52,8 +54,8 @@ It's safe to run more than once: it starts the relay in the background if it isn
 **Check or stop the servers (optional):**
 
 ```bash
-node ../../mcp-server/bin/dev-browser.mjs status
-node ../../mcp-server/bin/dev-browser.mjs stop relay
+~/.dev-browser/bin/dev-browser status
+~/.dev-browser/bin/dev-browser stop relay
 ```
 
 Background servers log to `~/.dev-browser/<name>.log` (`relay.log`, `serve.log`, `mcp.log`).
@@ -97,7 +99,7 @@ Standalone servers take `dev-browser serve --proxy http://user:pass@host:port` (
 ### Fetch Script
 
 ```bash
-cd skills/dev-browser && npx tsx scripts/fetch.ts "https://example.com" [--format=markdown|html|text|json] [--engine=browser|http|auto] [--timeout=30000] [--mode=standalone|extension] [--fresh] [--headed] [--browser=chrome] [--proxy=url] [--screenshot=out.png] [--wacz=out.wacz]
+cd ~/.dev-browser/app/current/skills/dev-browser && npx tsx scripts/fetch.ts "https://example.com" [--format=markdown|html|text|json] [--engine=browser|http|auto] [--timeout=30000] [--mode=standalone|extension] [--fresh] [--headed] [--browser=chrome] [--proxy=url] [--screenshot=out.png] [--wacz=out.wacz]
 ```
 
 - Prints the page's main content (article, main, else body) as Markdown with absolute links. A status line goes to stderr naming the engine that served it.
@@ -141,7 +143,7 @@ await client.disconnect(); // Page automatically closed
 Execute scripts inline using heredocs:
 
 ```bash
-cd skills/dev-browser && npx tsx <<'EOF'
+cd ~/.dev-browser/app/current/skills/dev-browser && npx tsx <<'EOF'
 import { connect, navigateTo } from "@/client.js";
 
 const client = await connect();
@@ -640,7 +642,7 @@ writeFileSync("tmp/report.pdf", pdfBuffer);
 **Headless mode** is required for `page.pdf()` in standalone:
 
 ```bash
-cd skills/dev-browser && npx tsx -e '
+cd ~/.dev-browser/app/current/skills/dev-browser && npx tsx -e '
 import { serve } from "./src/index.js";
 await serve({ headless: true });
 '
@@ -821,7 +823,7 @@ curl http://localhost:9224/stats | jq   # Extension
 Page state persists after failures. Debug with:
 
 ```bash
-cd skills/dev-browser && npx tsx <<'EOF'
+cd ~/.dev-browser/app/current/skills/dev-browser && npx tsx <<'EOF'
 import { connect } from "@/client.js";
 
 const client = await connect();
