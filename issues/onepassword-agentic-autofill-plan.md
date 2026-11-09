@@ -1,7 +1,12 @@
 # Plan: 1Password agentic autofill in standalone dev-browser
 
 **Date:** 2026-11-08
-**Status:** draft. Coding tasks T1 and T2 can start now. T3 and T4 wait on Phase 0.
+**Status:** out of scope (decided 2026-11-09). The OAuth client requires a paid
+1Password Business account, about $9 per user per month, kept active for as
+long as the connection is used. There's also a possible partner agreement,
+which isn't worth it for this library. Sign-in automation stays with Claude in
+Chrome's own 1Password autofill in extension mode. This document is kept as a
+record of the verified findings in case that changes.
 **Owner:** Parker
 
 ## Problem
