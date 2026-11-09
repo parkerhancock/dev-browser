@@ -1,7 +1,7 @@
 # Plan: package dev-browser with Satchel
 
 **Date:** 2026-11-09 (rewritten after the research recorded below)
-**Status:** draft. Q1 to Q3 need Parker's answers before T4.
+**Status:** approved by Parker on 2026-11-09, with Q1 to Q3 settled as the plan assumed (D6 to D8).
 **Owner:** Parker
 
 ## Problem
@@ -76,8 +76,8 @@ already uses with its loopback MCP server.
 ## Requirements
 
 - R1. The repo shall have a `satchel.yaml` that declares:
-  - components: `./skills`, `./agents`, `./.mcp.json`, and `./hooks/hooks.json`
-    for Claude;
+  - components: `./skills`, `./agents`, `./commands`, `./.mcp.json`, and
+    `./hooks/hooks.json` for Claude;
   - Claude and Codex targets, with marketplaces sourced from
     `parkerhancock/dev-browser`;
   - every other target disabled, each with a `notApplicable` reason.
@@ -122,7 +122,11 @@ already uses with its loopback MCP server.
      it;
   5. print the result, and the Chrome extension download for extension mode.
 
-  A second run at the same version does nothing but verify.
+  A second run at the same version does nothing but verify. `--uninstall` shall
+  stop the MCP host, the relay, and the standalone server; remove the login
+  service; and delete `~/.dev-browser/app`. It shall keep the token, browser
+  profiles, and recordings in `~/.dev-browser` unless `--purge` is also given,
+  and say what it kept.
 
 - R7. The CLI shall gain `dev-browser start`, `stop`, `restart`, and `status` for
   the MCP host, the relay, and the standalone server. These are idempotent
@@ -139,7 +143,13 @@ already uses with its loopback MCP server.
 - R11. A CI job shall build the extension on version tags and attach
   `dev-browser-extension-<version>.zip` to the release. SKILL.md and setup's
   output shall link to the fork's releases.
-- R12. The plugin shall not ship `block-webfetch` (Q1).
+- R12. The plugin shall not ship `block-webfetch` (D6).
+- R13. The plugin shall include a `/dev-browser:setup` command that runs
+  `scripts/setup.mjs` from the plugin's own root and passes through its
+  arguments (`--service`, `--link`, `--uninstall`), so nobody has to find the
+  plugin's install path. It ships for Claude, and for Codex if Satchel's Codex
+  adapter supports commands; T4 checks. The shim's setup message (R3) names
+  the command where the host has it, and the full `node` path otherwise.
 
 ## Acceptance criteria
 
@@ -160,6 +170,11 @@ already uses with its loopback MCP server.
 - A6 (R7). `start` twice leaves one of each process, `stop` stops them, and
   `status` reports all three.
 - A7 (R11). A tag push attaches the extension zip, and it loads unpacked.
+- A8 (R6). After `--uninstall`, no dev-browser process or login service
+  remains, `~/.dev-browser/app` is gone, and the token and profiles are still
+  there. With `--purge`, `~/.dev-browser` is gone too.
+- A9 (R13). In a fresh Claude Code session with only the plugin installed,
+  `/dev-browser:setup` completes setup, and A3 then passes.
 - Checks for every task: `npx tsc --noEmit` and `npm test` in
   `skills/dev-browser` and `mcp-server`, `npm run test:run` in `extension`, and
   `satchel check .`.
@@ -180,6 +195,10 @@ already uses with its loopback MCP server.
 - D5. Use a login service for the MCP host and the relay. Both are light; the
   host starts the browser itself on demand. Without the service, the user runs
   `dev-browser start`.
+- D6. The plugin doesn't block the built-in WebFetch (was Q1).
+- D7. This is a hard fork of SawyerHood/dev-browser; the generated marketplace
+  carries Parker's name, and upstream merges stop (was Q2).
+- D8. Targets are Claude and Codex (was Q3).
 
 ## Research (2026-11-09)
 
@@ -211,9 +230,6 @@ already uses with its loopback MCP server.
 
 ## Open questions
 
-- Q1. Should the plugin block the built-in WebFetch? The plan assumes no.
-- Q2. Hard fork of SawyerHood/dev-browser? The plan assumes yes.
-- Q3. Targets: Claude and Codex (assumed), or Claude only?
 - Q4. Codex's session variable, if any, for R3's `X-DevBrowser-Session`. Without
   one, Codex sessions get a session per connection, which is today's HTTP
   behavior.
@@ -229,10 +245,12 @@ already uses with its loopback MCP server.
 - T3 (R3, A2). Write `mcp-shim.mjs` and a schema snapshot of the tools, with a
   test that the snapshot matches the live tool list. Test the shim against a
   running host and against none.
-- T4 (R1, R2, R9, R12, A1). Add `satchel.yaml`, `.mcp.json`, and the Claude
-  hook. Generate outputs, replacing the upstream `marketplace.json`.
-- T5 (R6, R8, A3, A5). Write `scripts/setup.mjs` and the launchd and systemd
-  service files. Repoint the docs and the agent to `~/.dev-browser/app/current`.
+- T4 (R1, R2, R9, R12, R13, A1). Add `satchel.yaml`, `.mcp.json`, the Claude
+  hook, and the setup command. Generate outputs, replacing the upstream
+  `marketplace.json`.
+- T5 (R6, R8, A3, A5, A8, A9). Write `scripts/setup.mjs`, including
+  `--uninstall` and `--purge`, and the launchd and systemd service files.
+  Repoint the docs and the agent to `~/.dev-browser/app/current`.
 - T6 (R11, A7). Add the extension release job and fix the download links.
 - T7. Move this Mac over:
   1. install the plugin in Claude Code and Codex;
