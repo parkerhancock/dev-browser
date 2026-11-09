@@ -1,0 +1,26 @@
+{
+  "name": "dev-browser",
+  "displayName": "Dev Browser",
+  "version": "0.1.0",
+  "description": "Browser automation for agents with pages that persist between steps, a hardened standalone browser or your own Chrome, and 27 MCP tools.",
+  "author": {
+    "name": "Parker Hancock",
+    "url": "https://github.com/parkerhancock"
+  },
+  "homepage": "https://github.com/parkerhancock/dev-browser",
+  "repository": "https://github.com/parkerhancock/dev-browser",
+  "license": "MIT",
+  "keywords": [
+    "browser",
+    "automation",
+    "playwright",
+    "mcp",
+    "scraping",
+    "testing",
+    "agents"
+  ],
+  "skills": "./skills/",
+  "commands": "./commands/",
+  "hooks": "./hooks/hooks.json",
+  "mcpServers": "./.mcp.json"
+}

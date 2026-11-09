@@ -83,6 +83,10 @@ Outside the skill, at the repo root:
 - `mcp-server/` - MCP tools and the `dev-browser` CLI (`src/server.ts` tools, `src/http.ts` streamable HTTP host, `src/daemon.ts` background start/stop/status, `src/tool-snapshot.ts`)
 - `mcp-shim.mjs` - The plugin's MCP entry point: dependency-free stdio shim that forwards to the MCP host on :9225, starts it when the runtime is installed, and answers from `mcp-shim-tools.json` with the setup command when it isn't
 - `extension/` - The Chrome extension for extension mode (WXT)
+- `satchel.yaml` - Plugin package source for Claude Code and Codex. After editing it, `skills/`, `commands/`, `hooks/`, or `.mcp.json`, run `uv run --project ../satchel satchel generate .` and `... satchel check . --release`. `.claude-plugin/`, `.codex-plugin/`, and `.agents/plugins/` are generated; don't edit them by hand.
+- `.mcp.json` - The plugin's MCP server: a `node -e` loader that runs `mcp-shim.mjs` from `CLAUDE_PLUGIN_ROOT` or `PLUGIN_ROOT` (or the working directory), so one file works under both hosts
+- `commands/setup.md` - `/dev-browser:setup` (Claude Code)
+- `hooks/session-start.mjs` - Reruns setup in the background when the plugin's version and the installed runtime's differ
 
 ### Path Aliases
 

@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "dev-browser": {
+      "type": "stdio",
+      "command": "node",
+      "args": [
+        "-e",
+        "const path = require('path'), url = require('url'); const root = process.env.CLAUDE_PLUGIN_ROOT || process.env.PLUGIN_ROOT || process.cwd(); import(url.pathToFileURL(path.join(root, 'mcp-shim.mjs')).href);"
+      ]
+    }
+  }
+}

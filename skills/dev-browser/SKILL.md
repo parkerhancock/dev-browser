@@ -84,16 +84,11 @@ const client = await connect({ mode: "extension", session: "shared-workspace" })
 
 ## Replacing Built-in WebFetch
 
-This plugin includes a `webfetch` agent that replaces Claude Code's built-in WebFetch with a stealth browser-based fetcher. This handles sites with bot protection that block the standard fetcher.
+This plugin includes a `webfetch` agent, a browser-based fetcher for sites whose bot protection blocks Claude Code's built-in WebFetch. The built-in WebFetch stays available; use the agent when it gets a 403, a challenge page, or an empty app shell.
 
 ### Setup
 
-**Zero configuration required.** The plugin:
-
-1. Automatically blocks built-in WebFetch via a PreToolUse hook
-2. Auto-starts the browser server on first fetch
-
-Just install and use. Ask Claude to fetch any URL and it routes to the stealth fetcher.
+No configuration is needed beyond setup: the fetcher starts the browser server on first use.
 
 ### Proxy, Locale, and Time Zone
 

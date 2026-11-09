@@ -1,0 +1,42 @@
+{
+  "name": "dev-browser",
+  "version": "0.1.0",
+  "description": "Browser automation for agents with pages that persist between steps, a hardened standalone browser or your own Chrome, and 27 MCP tools.",
+  "author": {
+    "name": "Parker Hancock",
+    "url": "https://github.com/parkerhancock"
+  },
+  "homepage": "https://github.com/parkerhancock/dev-browser",
+  "repository": "https://github.com/parkerhancock/dev-browser",
+  "license": "MIT",
+  "keywords": [
+    "browser",
+    "automation",
+    "playwright",
+    "mcp",
+    "scraping",
+    "testing",
+    "agents"
+  ],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "hooks": "./hooks/hooks.json",
+  "interface": {
+    "displayName": "Dev Browser",
+    "shortDescription": "Drive a browser whose pages persist between steps.",
+    "developerName": "Parker Hancock",
+    "category": "Developer Tools",
+    "longDescription": "Navigate, read, fill, click, screenshot, record, and fetch pages in a hardened standalone browser or your own Chrome, with pages that persist between steps. Run setup once per machine.",
+    "capabilities": [
+      "Interactive",
+      "Read",
+      "Write"
+    ],
+    "websiteURL": "https://github.com/parkerhancock/dev-browser",
+    "defaultPrompt": [
+      "Open a page with dev-browser and summarize it.",
+      "Take a screenshot of my local dev server."
+    ],
+    "brandColor": "#2563EB"
+  }
+}

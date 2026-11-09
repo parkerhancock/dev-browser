@@ -16,14 +16,13 @@ A browser automation plugin for [Claude Code](https://docs.anthropic.com/en/docs
 
 ## WebFetch Replacement
 
-This plugin includes a stealth web fetcher that replaces Claude Code's built-in WebFetch. Sites with bot protection (Cloudflare, etc.) that return 403s or CAPTCHAs to the standard fetcher work seamlessly with dev-browser.
+This plugin includes a web fetcher for sites whose bot protection (Cloudflare and the like) returns 403s or challenge pages to Claude Code's built-in WebFetch. The built-in WebFetch stays available; the plugin doesn't block it.
 
 **How it works:**
 
-1. A PreToolUse hook automatically blocks built-in WebFetch
-2. Requests route to the `webfetch` agent (runs on Haiku for cost efficiency)
-3. The agent uses a real browser to fetch pages, bypassing bot detection
-4. Content is converted to markdown and processed to answer your question
+1. Ask Claude to use the `webfetch` agent (it runs on Haiku for cost efficiency)
+2. The agent tries one fast HTTP request with Chrome's fingerprint, and loads the page in a real browser when that's blocked
+3. Content is converted to markdown and processed to answer your question
 
 **Zero configuration required.** The browser server auto-starts on first fetch. Just install the plugin and ask Claude to fetch any URL.
 

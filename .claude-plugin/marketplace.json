@@ -1,30 +1,42 @@
 {
-  "name": "dev-browser-marketplace",
-  "owner": {
-    "name": "Sawyer Hood",
-    "email": "sawyerjhood@gmail.com"
-  },
+  "$schema": "https://docs.claude.com/schemas/claude-plugin-marketplace-v1.json",
+  "name": "dev-browser",
+  "description": "Browser automation for agents with pages that persist between steps, a hardened standalone browser or your own Chrome, and 27 MCP tools.",
   "plugins": [
     {
       "name": "dev-browser",
-      "source": "./",
-      "description": "Browser automation skill with persistent page state for developers and AI agents",
-      "strict": false,
+      "source": {
+        "source": "github",
+        "repo": "parkerhancock/dev-browser",
+        "ref": "main"
+      },
+      "description": "Browser automation for agents with pages that persist between steps, a hardened standalone browser or your own Chrome, and 27 MCP tools.",
+      "version": "0.1.0",
+      "displayName": "Dev Browser",
+      "author": {
+        "name": "Parker Hancock",
+        "url": "https://github.com/parkerhancock"
+      },
+      "homepage": "https://github.com/parkerhancock/dev-browser",
+      "repository": "https://github.com/parkerhancock/dev-browser",
+      "license": "MIT",
       "keywords": [
         "browser",
-        "playwright",
         "automation",
+        "playwright",
+        "mcp",
+        "scraping",
         "testing",
-        "debugging",
-        "fetch",
-        "stealth"
+        "agents"
       ],
-      "skills": ["./skills/dev-browser"],
-      "agents": ["./agents"]
+      "category": "Developer Tools",
+      "skills": [
+        "./skills/dev-browser"
+      ]
     }
   ],
-  "metadata": {
-    "description": "Marketplace for the dev-browser skill",
-    "version": "1.0.1"
+  "owner": {
+    "name": "Parker Hancock",
+    "url": "https://github.com/parkerhancock"
   }
 }

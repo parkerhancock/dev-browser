@@ -1,0 +1,94 @@
+schema: satchel/v0
+name: dev-browser
+version: 0.1.0
+description: Browser automation for agents with pages that persist between steps, a hardened standalone browser or your own Chrome, and 27 MCP tools.
+author:
+  name: Parker Hancock
+  url: https://github.com/parkerhancock
+homepage: https://github.com/parkerhancock/dev-browser
+repository: https://github.com/parkerhancock/dev-browser
+license: MIT
+keywords:
+  - browser
+  - automation
+  - playwright
+  - mcp
+  - scraping
+  - testing
+  - agents
+
+components:
+  skills:
+    path: ./skills
+  # agents/ is left undeclared: Claude Code finds it by default, Codex has no
+  # agents, and Satchel's generated "agents": "./agents/" fails
+  # `claude plugin validate` (it wants .md file paths)
+  commands:
+    path: ./commands
+  mcp:
+    path: ./.mcp.json
+  hooks:
+    path: ./hooks/hooks.json
+
+targets:
+  claude:
+    enabled: true
+    manifest: ./.claude-plugin/plugin.json
+    displayName: Dev Browser
+    marketplace:
+      path: ./.claude-plugin/marketplace.json
+      name: dev-browser
+      source:
+        source: github
+        repo: parkerhancock/dev-browser
+        ref: main
+      category: Developer Tools
+
+  codex:
+    enabled: true
+    manifest: ./.codex-plugin/plugin.json
+    marketplace:
+      path: ./.agents/plugins/marketplace.json
+      name: dev-browser
+      displayName: Dev Browser
+      source:
+        source: github
+        repo: parkerhancock/dev-browser
+        ref: main
+      category: Developer Tools
+      installation: AVAILABLE
+      authentication: ON_INSTALL
+    interface:
+      displayName: Dev Browser
+      shortDescription: Drive a browser whose pages persist between steps.
+      longDescription: Navigate, read, fill, click, screenshot, record, and fetch pages in a hardened standalone browser or your own Chrome, with pages that persist between steps. Run setup once per machine.
+      developerName: Parker Hancock
+      category: Developer Tools
+      capabilities:
+        - Interactive
+        - Read
+        - Write
+      websiteURL: https://github.com/parkerhancock/dev-browser
+      defaultPrompt:
+        - Open a page with dev-browser and summarize it.
+        - Take a screenshot of my local dev server.
+      brandColor: "#2563EB"
+
+  copilot:
+    enabled: false
+    notApplicable: Not distributed for GitHub Copilot.
+  cowork:
+    enabled: false
+    notApplicable: Cowork needs a remote HTTPS MCP server; dev-browser runs locally.
+  chatgpt:
+    enabled: false
+    notApplicable: No hosted remote MCP service; dev-browser runs on the user's machine.
+  anthropic:
+    enabled: false
+    notApplicable: No hosted remote MCP service; dev-browser runs on the user's machine.
+  vibe:
+    enabled: false
+    notApplicable: Not distributed for Mistral Vibe.
+  antigravity:
+    enabled: false
+    notApplicable: Not distributed for Antigravity.

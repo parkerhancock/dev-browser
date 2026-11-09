@@ -85,9 +85,11 @@ already uses with its loopback MCP server.
   `satchel check .` and `satchel smoke .` shall pass, and the generated outputs
   shall be committed.
 
-- R2. `.mcp.json` shall run `node` with argument `./mcp-shim.mjs` and
-  `cwd: ${PLUGIN_ROOT}`. That satisfies Codex's rules (a bare executable, a
-  contained path); Satchel maps the variable for Claude.
+- R2. `.mcp.json` shall run `node -e` with a one-line loader that imports
+  `mcp-shim.mjs` from `CLAUDE_PLUGIN_ROOT`, `PLUGIN_ROOT`, or the working
+  directory. The command is a bare executable, as Codex requires, and no path
+  depends on either host expanding a variable inside `args` or `cwd`. Verified
+  under Claude Code with `--plugin-dir`; Codex is verified in T7.
 - R3. `mcp-shim.mjs` shall:
   - use only Node built-ins;
   - relay stdio JSON-RPC to streamable HTTP, carrying the `Mcp-Session-Id`
@@ -249,7 +251,12 @@ already uses with its loopback MCP server.
   running host and against none. **Done 2026-11-09.**
 - T4 (R1, R2, R9, R12, R13, A1). Add `satchel.yaml`, `.mcp.json`, the Claude
   hook, and the setup command. Generate outputs, replacing the upstream
-  `marketplace.json`.
+  `marketplace.json`. **Done 2026-11-09.** Notes:
+  agents are left undeclared because Satchel 0.4.0 writes `"agents": "./agents/"`,
+  which `claude plugin validate` rejects; Claude finds `agents/` by default. The
+  Claude marketplace uses a GitHub source so `satchel check --release` passes.
+  Because `.mcp.json` sits at the repo root, Claude Code also offers it as a
+  project MCP server in this repo. No plugin icon yet (a validator warning).
 - T5 (R6, R8, A3, A5, A8, A9). Write `scripts/setup.mjs`, including
   `--uninstall` and `--purge`, and the launchd and systemd service files.
   Repoint the docs and the agent to `~/.dev-browser/app/current`.
