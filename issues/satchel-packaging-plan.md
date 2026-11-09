@@ -97,9 +97,11 @@ already uses with its loopback MCP server.
   - read the endpoint from `DEV_BROWSER_MCP_URL` (default
     `http://127.0.0.1:9225/mcp`).
 
-  If the host is unreachable or the runtime is missing, the shim shall still
-  complete the MCP handshake. It shall list the dev-browser tools from a bundled
-  schema snapshot, and answer every call with an error naming the exact setup
+  If the host isn't running, the shim shall still complete the MCP handshake at
+  once and list the tools from a bundled schema snapshot. When the runtime is
+  installed, it starts the host in the background, and the first tool call
+  waits for it (up to 45 s; tool calls aren't under the startup limit). When
+  the runtime is missing, every call returns an error naming the exact setup
   command, including the plugin's own path.
 
 - R4. `dev-browser mcp --http` shall bind loopback only, require the token on
@@ -244,7 +246,7 @@ already uses with its loopback MCP server.
   on-demand standalone start, and add the `CLAUDE_CODE_SESSION_ID` fallback. **Done 2026-11-09.**
 - T3 (R3, A2). Write `mcp-shim.mjs` and a schema snapshot of the tools, with a
   test that the snapshot matches the live tool list. Test the shim against a
-  running host and against none.
+  running host and against none. **Done 2026-11-09.**
 - T4 (R1, R2, R9, R12, R13, A1). Add `satchel.yaml`, `.mcp.json`, the Claude
   hook, and the setup command. Generate outputs, replacing the upstream
   `marketplace.json`.

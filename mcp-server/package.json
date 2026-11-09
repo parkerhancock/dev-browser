@@ -9,7 +9,8 @@
   "scripts": {
     "mcp": "npx tsx src/cli.ts mcp",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "snapshot-tools": "npx tsx src/tool-snapshot.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.0",

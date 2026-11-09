@@ -29,6 +29,9 @@ cd skills/dev-browser && npx tsc --noEmit
 
 1. **TypeScript check**: `npx tsc --noEmit` - Ensure no type errors
 2. **Tests**: `npm test` - Ensure all tests pass
+3. **Tool snapshot**: after adding, removing, or changing an MCP tool, run `cd mcp-server && npm run snapshot-tools`. The plugin's shim serves `mcp-shim-tools.json` before setup, and a test fails while it's stale.
+
+Run checks in `skills/dev-browser`, `mcp-server`, and `extension` (`npm run test:run` there) for whatever you changed.
 
 Common TypeScript issues in this codebase:
 
@@ -74,6 +77,12 @@ All source code lives in `skills/dev-browser/`:
 - `scripts/start-relay.ts` - Entry point to start relay server (extension mode)
 - `scripts/fetch.ts` - Fetch CLI used by the webfetch agent
 - `tmp/` - Directory for temporary automation scripts
+
+Outside the skill, at the repo root:
+
+- `mcp-server/` - MCP tools and the `dev-browser` CLI (`src/server.ts` tools, `src/http.ts` streamable HTTP host, `src/daemon.ts` background start/stop/status, `src/tool-snapshot.ts`)
+- `mcp-shim.mjs` - The plugin's MCP entry point: dependency-free stdio shim that forwards to the MCP host on :9225, starts it when the runtime is installed, and answers from `mcp-shim-tools.json` with the setup command when it isn't
+- `extension/` - The Chrome extension for extension mode (WXT)
 
 ### Path Aliases
 

@@ -1,0 +1,722 @@
+{
+  "server": {
+    "name": "dev-browser",
+    "version": "0.0.1"
+  },
+  "tools": [
+    {
+      "name": "tabs_context",
+      "description": "List the current browser context: mode, named pages in this session, and every open browser tab.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "navigate",
+      "description": "Navigate a named page to a URL (creates the page if needed). Also accepts \"back\" and \"forward\". Reports a bot challenge or block page (Cloudflare, DataDome, captcha, short 403) when it detects one. If the page asks to confirm leaving because of unsaved changes, the page stays and the tool reports it; pass force to discard the changes and navigate anyway.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string",
+            "description": "URL to open, or \"back\" / \"forward\""
+          },
+          "force": {
+            "type": "boolean",
+            "description": "If the page shows a \"Leave site?\" dialog for unsaved changes, discard them and navigate anyway (default false)"
+          },
+          "page": {
+            "type": "string",
+            "description": "Named page/tab to act on (default: \"main\")"
+          }
+        },
+        "required": ["url"],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "read_page",
+      "description": "Read the page as an ARIA accessibility snapshot with interaction refs like [ref=e12]. Prefer this over screenshots for text and structure.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "page": {
+            "type": "string",
+            "description": "Named page/tab to act on (default: \"main\")"
+          },
+          "filter": {
+            "type": "string",
+            "enum": ["all", "interactive"],
+            "description": "\"interactive\" lists only elements you can act on (default \"all\")"
+          },
+          "depth": {
+            "type": "number",
+            "description": "Levels of the tree to keep"
+          },
+          "ref_id": {
+            "type": "string",
+            "description": "Return only this element's subtree, e.g. e12"
+          },
+          "max_chars": {
+            "type": "number",
+            "description": "Truncate output (default 50000)"
+          }
+        },
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "get_page_text",
+      "description": "Extract the page's visible text (or Markdown with format=\"markdown\").",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "page": {
+            "type": "string",
+            "description": "Named page/tab to act on (default: \"main\")"
+          },
+          "format": {
+            "type": "string",
+            "enum": ["text", "markdown"],
+            "description": "Default: text"
+          },
+          "max_chars": {
+            "type": "number",
+            "description": "Truncate output (default 50000)"
+          }
+        },
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "find",
+      "description": "Find elements whose accessibility-tree line contains the query (case-insensitive). Returns up to 20 matches with refs for ref_action.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "Text to look for in role/name/text"
+          },
+          "page": {
+            "type": "string",
+            "description": "Named page/tab to act on (default: \"main\")"
+          }
+        },
+        "required": ["query"],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "ref_action",
+      "description": "Click or fill an element by its ref from read_page/find (e.g. \"e12\").",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": ["click", "fill"]
+          },
+          "ref": {
+            "type": "string",
+            "description": "Ref id like e12"
+          },
+          "value": {
+            "type": "string",
+            "description": "Value for fill"
+          },
+          "page": {
+            "type": "string",
+            "description": "Named page/tab to act on (default: \"main\")"
+          }
+        },
+        "required": ["action", "ref"],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "form_input",
+      "description": "Set a form control by ref (text input, textarea, select by value or label, checkbox/radio with true/false, contenteditable), or fill several fields at once with a map of CSS selector to value.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "ref": {
+            "type": "string",
+            "description": "Ref id like e12 from read_page/find"
+          },
+          "value": {
+            "type": ["string", "number", "boolean"],
+            "description": "Value for ref: text, an option's value or label, or true/false for a checkbox"
+          },
+          "fields": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Selector map instead of ref: {\"#email\": \"x@y.com\", ...}"
+          },
+          "page": {
+            "type": "string",
+            "description": "Named page/tab to act on (default: \"main\")"
+          }
+        },
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "javascript",
+      "description": "Execute JavaScript in the page and return the result (REPL semantics: the last expression's value is returned; top-level await works).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "page": {
+            "type": "string",
+            "description": "Named page/tab to act on (default: \"main\")"
+          }
+        },
+        "required": ["code"],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "screenshot",
+      "description": "Take a screenshot of the page. Returns the image and saves a PNG under ~/.dev-browser/screenshots.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "page": {
+            "type": "string",
+            "description": "Named page/tab to act on (default: \"main\")"
+          },
+          "full_page": {
+            "type": "boolean",
+            "description": "Capture the full scrollable page"
+          },
+          "scale": {
+            "type": "number",
+            "description": "Shrink the viewport image (0.1-1, default 1)"
+          }
+        },
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "computer",
+      "description": "Use the mouse and keyboard on the page, or look at it. Coordinates are viewport pixels and match this tool's screenshots. Click actions and hover take `coordinate` or a `ref` from read_page/find.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "left_click",
+              "right_click",
+              "double_click",
+              "triple_click",
+              "type",
+              "key",
+              "scroll",
+              "scroll_to",
+              "left_click_drag",
+              "hover",
+              "screenshot",
+              "zoom",
+              "wait"
+            ]
+          },
+          "coordinate": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            },
+            "description": "[x, y] target"
+          },
+          "ref": {
+            "type": "string",
+            "description": "Ref id like e12; required for scroll_to"
+          },
+          "start_coordinate": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            },
+            "description": "[x, y] drag start for left_click_drag"
+          },
+          "text": {
+            "type": "string",
+            "description": "Text for type; space-separated keys for key, e.g. \"cmd+a Backspace\""
+          },
+          "repeat": {
+            "type": "number",
+            "description": "Times to repeat the keys for key (1-100)"
+          },
+          "modifiers": {
+            "type": "string",
+            "description": "Keys held during a click, e.g. \"shift\" or \"cmd+shift\""
+          },
+          "scroll_direction": {
+            "type": "string",
+            "enum": ["up", "down", "left", "right"]
+          },
+          "scroll_amount": {
+            "type": "number",
+            "description": "Wheel ticks for scroll (default 3)"
+          },
+          "duration": {
+            "type": "number",
+            "description": "Seconds for wait (0-10)"
+          },
+          "region": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            },
+            "description": "[x0, y0, x1, y1] viewport region for zoom"
+          },
+          "scale": {
+            "type": "number",
+            "description": "Shrink the returned image for screenshot and zoom (0.1-1, default 1)"
+          },
+          "page": {
+            "type": "string",
+            "description": "Named page/tab to act on (default: \"main\")"
+          }
+        },
+        "required": ["action"],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "resize_window",
+      "description": "Set the page viewport size, or a preset: mobile (375x812) and tablet (768x1024) also emulate a touch device with an Android user agent; desktop returns to the normal browser at 1440x900. Any width under 768 emulates a phone. color_scheme emulates light or dark mode. Reload the page after switching so load-time device checks re-run.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "width": {
+            "type": "number"
+          },
+          "height": {
+            "type": "number"
+          },
+          "preset": {
+            "type": "string",
+            "enum": ["mobile", "tablet", "desktop"]
+          },
+          "color_scheme": {
+            "type": "string",
+            "enum": ["light", "dark"]
+          },
+          "page": {
+            "type": "string",
+            "description": "Named page/tab to act on (default: \"main\")"
+          }
+        },
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "file_upload",
+      "description": "Set the files of a file input element (absolute paths on this machine), by ref or CSS selector.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "ref": {
+            "type": "string",
+            "description": "Ref id of the <input type=file> from read_page/find"
+          },
+          "selector": {
+            "type": "string",
+            "description": "CSS selector of the <input type=file>"
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Absolute file paths"
+          },
+          "page": {
+            "type": "string",
+            "description": "Named page/tab to act on (default: \"main\")"
+          }
+        },
+        "required": ["files"],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "tabs_create",
+      "description": "Create (or get) a named page/tab.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "page": {
+            "type": "string",
+            "description": "Name for the new page"
+          }
+        },
+        "required": ["page"],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "tabs_close",
+      "description": "Close a named page/tab.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "page": {
+            "type": "string"
+          }
+        },
+        "required": ["page"],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "tabs_select",
+      "description": "Bring a named page/tab to the front.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "page": {
+            "type": "string"
+          }
+        },
+        "required": ["page"],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "read_console_messages",
+      "description": "Read console output (console API calls, exceptions, browser log) captured for a page. pattern is a regex on the message text. In standalone mode, console API capture starts on the first call (earlier messages are replayed) and is detectable by bot checks from then on.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "page": {
+            "type": "string",
+            "description": "Named page/tab to act on (default: \"main\")"
+          },
+          "pattern": {
+            "type": "string"
+          },
+          "since": {
+            "type": "number",
+            "description": "Previous `total` for incremental reads"
+          },
+          "only_errors": {
+            "type": "boolean",
+            "description": "Only errors and exceptions"
+          },
+          "limit": {
+            "type": "number",
+            "description": "Return at most this many, newest last (default 100)"
+          }
+        },
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "read_network_requests",
+      "description": "Live network log for a page (id, method, URL, status). pattern is a regex on the URL. Pass request_id to get one request's headers and response body.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "page": {
+            "type": "string",
+            "description": "Named page/tab to act on (default: \"main\")"
+          },
+          "pattern": {
+            "type": "string"
+          },
+          "since": {
+            "type": "number",
+            "description": "Previous `total` for incremental reads"
+          },
+          "limit": {
+            "type": "number",
+            "description": "Return at most this many, newest last (default 100)"
+          },
+          "request_id": {
+            "type": "number",
+            "description": "A request's id from a previous listing"
+          },
+          "max_chars": {
+            "type": "number",
+            "description": "Truncate the body (default 50000)"
+          }
+        },
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "browser_batch",
+      "description": "Execute several of this server's tools sequentially in one call. Stops on the first error. Each action is {tool, input}.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "actions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "tool": {
+                  "type": "string"
+                },
+                "input": {
+                  "type": "object",
+                  "additionalProperties": {}
+                }
+              },
+              "required": ["tool"],
+              "additionalProperties": false
+            },
+            "description": "Tool calls to run in order"
+          }
+        },
+        "required": ["actions"],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "cdp_batch",
+      "description": "Execute several raw CDP commands against a page in one round trip. Each op is {method, params}. Stops on the first error.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "ops": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "method": {
+                  "type": "string"
+                },
+                "params": {
+                  "type": "object",
+                  "additionalProperties": {}
+                }
+              },
+              "required": ["method"],
+              "additionalProperties": false
+            }
+          },
+          "page": {
+            "type": "string",
+            "description": "Named page/tab to act on (default: \"main\")"
+          }
+        },
+        "required": ["ops"],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "switch_browser",
+      "description": "Switch between the standalone Chromium server (:9222) and the Chrome extension relay (:9224).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": ["standalone", "extension"]
+          }
+        },
+        "required": ["mode"],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "preview_start",
+      "description": "Start a dev server from the project's .claude/launch.json and open it in a page, or open a url. launch.json: {\"version\":\"0.0.1\",\"configurations\":[{\"name\":\"web\",\"runtimeExecutable\":\"npm\",\"runtimeArgs\":[\"run\",\"dev\"],\"port\":3000}]}. A configuration with \"url\" and no command attaches to a server that is already running. Reuses a server that is already up.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Configuration name from .claude/launch.json"
+          },
+          "url": {
+            "type": "string",
+            "description": "Open this URL instead of starting a server"
+          },
+          "page": {
+            "type": "string",
+            "description": "Named page/tab to act on (default: \"main\")"
+          }
+        },
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "preview_list",
+      "description": "List dev servers started with preview_start.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "preview_logs",
+      "description": "Read a preview server's stdout and stderr. level=error keeps lines mentioning error, exception, failed, or fatal.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "server_id": {
+            "type": "string"
+          },
+          "level": {
+            "type": "string",
+            "enum": ["all", "error"]
+          },
+          "search": {
+            "type": "string",
+            "description": "Keep lines containing this text"
+          },
+          "lines": {
+            "type": "number",
+            "description": "Most recent lines to return (default 50)"
+          }
+        },
+        "required": ["server_id"],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "preview_stop",
+      "description": "Stop a dev server started with preview_start.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "server_id": {
+            "type": "string"
+          }
+        },
+        "required": ["server_id"],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "gif_creator",
+      "description": "Record the page as an animated GIF. start_recording captures a frame now and after each action on the page (navigate, computer, ref_action, form_input, uploads, resize_window, javascript); stop_recording adds a last frame; export writes the GIF and returns its path; clear discards the frames. Frames carry overlays: an orange ring at clicks, a red arrow along drags, a label naming each action, and a progress bar; turn any of them off with export's options.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": ["start_recording", "stop_recording", "export", "clear"]
+          },
+          "path": {
+            "type": "string",
+            "description": "Where export writes the GIF (default ~/.dev-browser/recordings)"
+          },
+          "max_width": {
+            "type": "number",
+            "description": "Scale frames down to this width (default 800)"
+          },
+          "options": {
+            "type": "object",
+            "properties": {
+              "showClickIndicators": {
+                "type": "boolean",
+                "description": "Rings at click locations (default true)"
+              },
+              "showDragPaths": {
+                "type": "boolean",
+                "description": "Arrows along drags (default true)"
+              },
+              "showActionLabels": {
+                "type": "boolean",
+                "description": "Labels describing each action (default true)"
+              },
+              "showProgressBar": {
+                "type": "boolean",
+                "description": "Progress bar along the bottom (default true)"
+              }
+            },
+            "additionalProperties": false,
+            "description": "Overlay options for export"
+          },
+          "page": {
+            "type": "string",
+            "description": "Named page/tab to act on (default: \"main\")"
+          }
+        },
+        "required": ["action"],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "upload_image",
+      "description": "Upload an image or other file from this machine into the page: set it on a file input (ref), or drop it on an element like a drag-and-drop zone (ref or coordinate). Screenshots from this server are saved as files, so their paths work here.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Absolute path of the file to upload"
+          },
+          "ref": {
+            "type": "string",
+            "description": "Ref of a file input or drop target"
+          },
+          "coordinate": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            },
+            "description": "[x, y] viewport point of a drop target"
+          },
+          "filename": {
+            "type": "string",
+            "description": "Name the page sees (default: the file's own name)"
+          },
+          "page": {
+            "type": "string",
+            "description": "Named page/tab to act on (default: \"main\")"
+          }
+        },
+        "required": ["path"],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "list_connected_browsers",
+      "description": "List reachable dev-browser servers and their status.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    }
+  ]
+}
