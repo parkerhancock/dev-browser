@@ -1,7 +1,7 @@
 # Plan: package dev-browser with Satchel
 
-**Date:** 2026-11-09
-**Status:** draft. Open questions Q1 to Q3 need Parker's answers before T2.
+**Date:** 2026-11-09 (rewritten after the research recorded below)
+**Status:** draft. Q1 to Q3 need Parker's answers before T4.
 **Owner:** Parker
 
 ## Problem
@@ -9,196 +9,234 @@
 dev-browser reaches agents through hand-made links into one checkout on one
 Mac:
 
-- **Skill:** `~/.claude/skills/dev-browser` is a symlink into the repo.
-- **MCP server:** `~/.claude.json` runs `node …/mcp-server/bin/dev-browser.mjs mcp`.
-- **webfetch agent:** `~/.claude/agents/webfetch.md` is a January copy that
-  predates `--engine=auto`.
-- **Hooks:** `hooks/hooks.json` isn't registered anywhere.
-- **Extension:** loaded unpacked from `extension/.output/chrome-mv3`, which a
-  fresh clone has to build. SKILL.md's download link points at upstream
-  releases, which lack this fork's extension fixes.
-- **Relay:** runs through `start.sh` and `stop.sh`, because the CLI has no
-  background mode.
-- **Plugin manifest:** `.claude-plugin/marketplace.json` still names the
-  upstream author, and nothing installs from it.
+- **Skill:** a symlink at `~/.claude/skills/dev-browser`.
+- **MCP server:** an entry in `~/.claude.json` that runs `mcp-server/bin/dev-browser.mjs`.
+- **webfetch agent:** a stale January copy in `~/.claude/agents`.
+- **Hooks:** none registered.
+- **Extension:** loaded unpacked from a folder a fresh clone has to build.
+- **Relay:** started by shell scripts.
 
-Satchel (`tools/satchel`) generates plugin manifests and marketplaces for
-Claude, Codex, and other hosts from one `satchel.yaml`, the way carrel and
-patent-client-agents ship. It covers skills, agents, hooks, and MCP. It
-doesn't install runtime dependencies, so dev-browser needs a bootstrap step,
-following carrel's SessionStart `bootstrap-runtime` hook.
+Satchel (`tools/satchel`) generates Claude and Codex plugin manifests and
+marketplaces from one `satchel.yaml`, but plugins can't install runtime
+dependencies within the hosts' MCP startup limits:
+
+- **Claude Code** waits 30 s (`MCP_TIMEOUT`) and doesn't retry a stdio server
+  that misses it.
+- **Codex** waits 10 s (`startup_timeout_sec`), and a plugin can't raise it.
+- **Codex hooks** run only for plugins installed by hand in its desktop app,
+  after the user trusts them.
+
+dev-browser needs about a minute of `npm ci` plus a Chromium download on first
+use. So the plugin ships only light files, and a one-time setup installs the
+runtime outside any startup path. That's the pattern `gcp-enterprise-ocr`
+already uses with its loopback MCP server.
+
+## Design
+
+1. **Plugin.** Satchel generates a plugin containing:
+   - the skill;
+   - the webfetch agent;
+   - an MCP entry that runs `node ./mcp-shim.mjs`;
+   - `scripts/setup.mjs`;
+   - on Claude only, a SessionStart hook (R9).
+2. **Shim.** `mcp-shim.mjs` uses Node built-ins only and starts in well under
+   a second. It speaks MCP over stdio to the host and forwards each message to
+   the local MCP host's `/mcp` endpoint, with the token from
+   `~/.dev-browser/token`.
+3. **Setup.** `node <plugin>/scripts/setup.mjs`, also dependency-free:
+   - installs the runtime into `~/.dev-browser/app`;
+   - runs `npm ci` and `npx patchright install chromium` there;
+   - with permission, registers a login service that runs the MCP host and the
+     extension relay.
+4. **MCP host.** `dev-browser mcp --http`, hardened (R4). It starts the
+   standalone browser server on demand (R5), and connects to the relay when the
+   extension is in use.
+5. **Scripts.** The skill and the agent run scripts from `~/.dev-browser/app`.
 
 ## Goals
 
-- G1. One command per machine installs the skill, the webfetch agent, and the
-  MCP server, and later updates them together.
-- G2. The first use installs Node dependencies and patchright's Chromium with
-  no manual step. Later sessions skip that work.
-- G3. Development on this Mac stays live: edits in the checkout take effect
-  without a release.
-- G4. The extension has a download that matches the fork.
+- G1. One plugin install per host (Claude Code or Codex) plus one `setup` run
+  per machine gives the skill, the webfetch agent, and the MCP tools.
+- G2. No host waits on an install. A session started before setup gets tools
+  that say exactly what to run.
+- G3. Development on this Mac stays live: the runtime can point at the checkout.
+- G4. Per-session page persistence works without any hook.
+- G5. The extension has a download that matches the fork.
 
 ## Non-goals
 
-- Publishing npm packages (rejected, D2).
-- The npm-workspace and `exports` restructuring. The plugin keeps the repo
-  layout, so the MCP server's relative imports keep working. It's cleanup for
-  later, not a prerequisite.
+- Publishing npm packages.
+- The npm-workspace and `exports` restructuring. The runtime keeps the repo
+  layout.
 - The Chrome Web Store.
 - A hosted remote MCP service, so the ChatGPT and Anthropic targets are
-  disabled as not applicable.
-- The Docker image, which stays as it is.
+  disabled.
+- Windows. Setup supports macOS (launchd) and Linux (systemd user units).
 
 ## Requirements
 
 - R1. The repo shall have a `satchel.yaml` that declares:
-  - components: `./skills`, `./agents`, `./hooks/hooks.json`, `./.mcp.json`;
+  - components: `./skills`, `./agents`, `./.mcp.json`, and `./hooks/hooks.json`
+    for Claude;
   - Claude and Codex targets, with marketplaces sourced from
     `parkerhancock/dev-browser`;
-  - Copilot, Cowork, ChatGPT, Anthropic, Vibe, and Antigravity disabled, each
-    with a `notApplicable` reason.
+  - every other target disabled, each with a `notApplicable` reason.
 
-  `satchel check .` and `satchel smoke .` shall pass, and the generated
-  manifests shall be committed as build outputs.
+  `satchel check .` and `satchel smoke .` shall pass, and the generated outputs
+  shall be committed.
 
-- R2. `scripts/bootstrap` shall:
-  - run `npm ci` in `skills/dev-browser` and `mcp-server`;
-  - run `npx patchright install chromium`;
-  - create a stable link, `~/.dev-browser/app`, to the plugin root;
-  - write a stamp keyed to the lockfiles' hash, so a later run with an
-    unchanged stamp exits in under a second;
-  - take a lock, so concurrent runs wait instead of installing twice.
-- R3. The SessionStart hook shall run the bootstrap in the background with
-  errors ignored, as carrel does.
-- R4. The MCP config shall start the server through `scripts/run-mcp`, which
-  runs the bootstrap first. This covers a session where the server starts
-  before the hook finishes.
-- R5. SKILL.md and `agents/webfetch.md` shall refer to `~/.dev-browser/app`
-  instead of `~/.claude/skills/dev-browser`, so they work from a plugin
-  install, a checkout, or Codex alike.
-- R6. The CLI shall gain `dev-browser start [relay|serve]`, `stop`, and
-  `status`. These are idempotent background starts, using the same pidfile and
-  log locations as `start.sh`. The shell scripts and their doc references then
-  go.
-- R7. A CI job shall build the extension on version tags and attach
-  `dev-browser-extension-<version>.zip` to the GitHub release. SKILL.md shall
-  link to the fork's releases.
-- R8. The plugin shall not ship `block-webfetch` (Q1) or `expose-session-id`
-  (D3).
+- R2. `.mcp.json` shall run `node` with argument `./mcp-shim.mjs` and
+  `cwd: ${PLUGIN_ROOT}`. That satisfies Codex's rules (a bare executable, a
+  contained path); Satchel maps the variable for Claude.
+- R3. `mcp-shim.mjs` shall:
+  - use only Node built-ins;
+  - relay stdio JSON-RPC to streamable HTTP, carrying the `Mcp-Session-Id`
+    header and handling both JSON and SSE responses;
+  - send `X-DevBrowser-Token`, and `X-DevBrowser-Session` from
+    `CLAUDE_CODE_SESSION_ID` when it's set (G4);
+  - read the endpoint from `DEV_BROWSER_MCP_URL` (default
+    `http://127.0.0.1:9225/mcp`).
+
+  If the host is unreachable or the runtime is missing, the shim shall still
+  complete the MCP handshake. It shall list the dev-browser tools from a bundled
+  schema snapshot, and answer every call with an error naming the exact setup
+  command, including the plugin's own path.
+
+- R4. `dev-browser mcp --http` shall bind loopback only, require the token on
+  every request, and reject requests with an http(s) `Origin`, matching the
+  relay. When a request carries `X-DevBrowser-Session`, that connection shall
+  use that session instead of `mcp-<id>`.
+- R5. When a tool needs standalone mode and no server answers on 9222, the MCP
+  host shall start one headless, the way `scripts/fetch.ts` does today. That
+  logic moves into the library and is reused. Extension mode keeps requiring
+  the relay and the extension.
+- R6. `scripts/setup.mjs` shall:
+  1. copy the plugin's runtime files into `~/.dev-browser/app/<version>` and
+     point `~/.dev-browser/app/current` at it; `--link <checkout>` points at a
+     checkout instead (G3);
+  2. run `npm ci` in `skills/dev-browser` and `mcp-server`, and
+     `npx patchright install chromium`;
+  3. write `~/.dev-browser/app/current/VERSION`;
+  4. after confirmation, or with `--service`, install a launchd agent or systemd
+     user unit that runs the MCP host on 9225 and the relay on 9224, and start
+     it;
+  5. print the result, and the Chrome extension download for extension mode.
+
+  A second run at the same version does nothing but verify.
+
+- R7. The CLI shall gain `dev-browser start`, `stop`, `restart`, and `status` for
+  the MCP host, the relay, and the standalone server. These are idempotent
+  background starts using `~/.dev-browser/*.pid`. `server.sh`, `start.sh`, and
+  `stop.sh` go, along with their doc references.
+- R8. SKILL.md, AGENTS.md, and `agents/webfetch.md` shall run scripts from
+  `~/.dev-browser/app/current`, and say to run setup when that's missing.
+- R9. On Claude Code, a SessionStart hook shall compare the plugin's version with
+  `VERSION` and, on a mismatch, start setup in the background without the
+  service step. Errors are ignored. Codex users rerun setup by hand after
+  updates.
+- R10. The client shall use `CLAUDE_CODE_SESSION_ID` when `CLAUDE_SESSION_ID`
+  isn't set. `expose-session-id.sh` and `inject-session-id.sh` go.
+- R11. A CI job shall build the extension on version tags and attach
+  `dev-browser-extension-<version>.zip` to the release. SKILL.md and setup's
+  output shall link to the fork's releases.
+- R12. The plugin shall not ship `block-webfetch` (Q1).
 
 ## Acceptance criteria
 
-- A1 (R1). `satchel check . --release` and `satchel smoke .` pass, and
-  `claude plugin validate .` passes.
-- A2 (R2–R4). On a machine with no `node_modules`, installing the plugin and
-  opening a session leaves the MCP tools working, from both the hook path and
-  the run-mcp path. A second session's bootstrap exits immediately.
-- A3 (R5). The webfetch agent and a SKILL.md script example run unchanged from
-  a plugin install and from the checkout.
-- A4 (R6). `dev-browser start relay` twice leaves one relay running.
-  `dev-browser stop` stops it. `status` reports both servers.
-- A5 (G3). On this Mac, with a local-directory marketplace pointing at the
-  checkout, an edit to the MCP server shows up after restarting the session.
-- A6 (R7). A tag push produces a release with the extension zip, and it loads
-  unpacked in Chrome.
-
-## Decisions
-
-- D1. Use Satchel instead of hand-maintaining `.claude-plugin/`. It matches
-  carrel and patent-client-agents and adds Codex for free.
-- D2. Don't publish npm packages. There's one user, the `dev-browser` name may
-  clash with upstream, and publishing is public. The plugin carries the source
-  instead.
-- D3. Drop `expose-session-id.sh`, and have the client fall back to
-  `CLAUDE_CODE_SESSION_ID`. Claude Code sets that variable natively in Bash,
-  hook, and stdio MCP subprocesses (env-vars docs). `CLAUDE_SESSION_ID` is not
-  native; on this Mac it comes from Parker's global
-  `~/.claude/hooks/set-session-env.sh`.
-- D4. Keep `node_modules` inside the plugin root, where the relative imports
-  expect it. A plugin update replaces the root, and the stamp check reinstalls.
-  Patchright's browsers live in the shared cache
-  (`~/Library/Caches/ms-playwright`) and survive updates.
-
-## Open questions
-
-- Q1. Should the plugin block the built-in WebFetch and route fetches to the
-  webfetch agent? The plan assumes no. Blocking applies to every session with
-  the plugin enabled.
-- Q2. Hard fork? Generating the marketplace under Parker's name makes it one in
-  practice. The plan assumes yes, so upstream merges stop.
-- Q3. Targets: Claude and Codex (assumed), or Claude only?
-- Q4 (researched 2026-11-09). Local-directory installs:
-  - **Claude Code docs:** a plugin with a relative-path `source` in a marketplace
-    added from a local path loads in place, and edits apply at the next session
-    or `/reload-plugins` (code.claude.com/docs/en/plugins/loading).
-    `--plugin-dir` also loads in place, for one session.
-  - **Conflicting evidence on this Mac:** `gcp-enterprise-ocr` (source `./`,
-    directory marketplace) sits as a copy in
-    `~/.claude/plugins/cache/gcp-enterprise-ocr-marketplace/gcp-enterprise-ocr/0.5.1`,
-    installed September 2. That may be older behavior. T5 checks it on Claude
-    Code 2.1.306.
-  - **Codex:** copies local plugins to
-    `~/.codex/plugins/cache/<marketplace>/<plugin>/local/` and picks up edits
-    only after you update the source and restart.
-- Q5 (researched). Startup timeouts:
-  - **Claude Code:** `MCP_TIMEOUT` defaults to 30 s. A stdio server that misses it
-    is marked failed, not retried; `/mcp` can reconnect it.
-  - **Codex:** `startup_timeout_sec` defaults to 10 s, and a plugin can't raise it
-    for its own server.
-
-  A first-run `npm ci` plus a Chromium download fits neither. R2–R4 need
-  rework (see "Revision under consideration").
-
-- Q6 (researched). Variables:
-  - **Codex:** hooks get `PLUGIN_ROOT` and `PLUGIN_DATA`, plus
-    `CLAUDE_PLUGIN_ROOT` and `CLAUDE_PLUGIN_DATA` for compatibility. Its binary
-    expands `${PLUGIN_ROOT}` and `${PLUGIN_DATA}` in MCP configs. A stdio
-    `command` must be a bare executable or a contained `./` path, and `cwd` must
-    be `./`, `${PLUGIN_ROOT}`, or `${PLUGIN_DATA}`. Codex runs plugin hooks only
-    for plugins installed manually in the desktop app, and only after the user
-    trusts them; a changed script needs another review.
-  - **Claude Code:** expands `${CLAUDE_PLUGIN_ROOT}` and `${CLAUDE_PLUGIN_DATA}`
-    in hooks, MCP stdio command, args, and env, and inline in skill and agent
-    Markdown. The Bash tool doesn't get them.
-  - **Data folders:** `CLAUDE_PLUGIN_DATA` is
-    `~/.claude/plugins/data/<id>/` and survives plugin updates; Codex keeps
-    `~/.codex/plugins/data/…` the same way.
-
-## Revision under consideration
-
-Installing at MCP startup can't fit 10 s on Codex, and hooks are unreliable
-there. One option is the pattern `gcp-enterprise-ocr` uses: the plugin ships
-only light files, and the heavy runtime is installed once, outside the host's
-startup path.
-
-- The plugin's MCP entry is a dependency-free stdio shim, `node ./mcp-shim.mjs`,
-  using Node built-ins only. It starts in well under a second and forwards MCP
-  messages to the local server's `/mcp` endpoint, reading the token from
-  `~/.dev-browser/token`. When the server isn't installed or running, every
-  tool returns "run `dev-browser setup`".
-- `dev-browser setup` (run once, and again after updates) installs the runtime
-  into a stable folder, `~/.dev-browser/app`, installs the patchright browser,
-  and starts the server, optionally as a login item.
-- On Claude Code, a SessionStart hook can run setup in the background when the
-  runtime's version doesn't match the plugin's. That's a convenience, not a
-  requirement.
-
-## Tasks
-
-- T1 (R6, A4). Add CLI `start`, `stop`, and `status`. Move the docs to them and
-  remove `server.sh`, `start.sh`, and `stop.sh`. This is independent of
-  Satchel and can go first.
-- T2 (R1, R8, A1). Add `satchel.yaml`, the plugin hooks file, and `.mcp.json`.
-  Generate and commit the outputs, replacing the upstream `marketplace.json`.
-- T3 (R2–R4, A2). Write `scripts/bootstrap` and `scripts/run-mcp`, with a test
-  that runs the bootstrap against a temporary copy of the repo.
-- T4 (R5, A3). Repoint SKILL.md, AGENTS.md, and `agents/webfetch.md` to
-  `~/.dev-browser/app`.
-- T5 (A5). Install on this Mac from a local-directory marketplace, then retire
-  the manual links: the skill symlink, the `~/.claude.json` entry, and the
-  agent copy. Ask Parker before each removal.
-- T6 (R7, A6). Add the release job for the extension zip and update the
-  SKILL.md link.
+- A1 (R1, R2). `satchel check . --release`, `satchel smoke .`, and
+  `claude plugin validate .` pass.
+- A2 (R3). Before setup, the plugin's tools appear in both hosts within their
+  startup limits. A call returns the setup command.
+- A3 (R3–R6). After setup on a machine with no prior install, `navigate` and
+  `screenshot` work from Claude Code and from Codex. The standalone server
+  starts on first use.
+- A4 (R4). A request without the token gets 401. A request with
+  `Origin: https://example.com` gets 403. Two sessions with different
+  `CLAUDE_CODE_SESSION_ID` values keep separate pages, and the same ID across
+  two connections shares them.
+- A5 (R6). A second setup run at the same version finishes in under 2 s and
+  changes nothing. `--link` makes edits to the checkout take effect after
+  `dev-browser restart`.
+- A6 (R7). `start` twice leaves one of each process, `stop` stops them, and
+  `status` reports all three.
+- A7 (R11). A tag push attaches the extension zip, and it loads unpacked.
 - Checks for every task: `npx tsc --noEmit` and `npm test` in
   `skills/dev-browser` and `mcp-server`, `npm run test:run` in `extension`, and
   `satchel check .`.
+
+## Decisions
+
+- D1. Use Satchel for manifests and marketplaces. It matches carrel,
+  patent-client-agents, and gcp-enterprise-ocr, and adds Codex.
+- D2. Don't publish npm packages. There's one user, the name may clash with
+  upstream, and publishing is public.
+- D3. Use a stdio shim over HTTP, not an HTTP MCP entry. Plugin MCP configs
+  can't read the token file, and the shim can serve helpful errors before
+  setup. Rejected: an unauthenticated loopback endpoint, which any web page
+  could POST to.
+- D4. Install the runtime in `~/.dev-browser/app`, not the plugin root. Plugin
+  roots change on every update, and the Bash tool doesn't get the plugin-root
+  variables, so skills need one stable path.
+- D5. Use a login service for the MCP host and the relay. Both are light; the
+  host starts the browser itself on demand. Without the service, the user runs
+  `dev-browser start`.
+
+## Research (2026-11-09)
+
+- **Local-folder installs.**
+  - Claude Code's docs say a relative-path plugin from a marketplace added by
+    local path loads in place, with edits applied at the next session or
+    `/reload-plugins`. `--plugin-dir` also loads in place, for one session.
+  - On this Mac, though, `gcp-enterprise-ocr`, set up the same way, sits as a
+    copy in `~/.claude/plugins/cache/.../0.5.1`, from September 2.
+  - Codex copies local plugins to `~/.codex/plugins/cache/<mkt>/<plugin>/local/`
+    and needs a restart to see edits.
+  - D4 makes this matter less: the runtime, not the plugin copy, runs the code.
+- **Startup timeouts.** Claude Code waits 30 s and doesn't retry a stdio server
+  that misses it; you can reconnect from `/mcp`. Codex waits 10 s, and a plugin
+  can't raise that.
+- **Variables.**
+  - Codex expands `${PLUGIN_ROOT}` and `${PLUGIN_DATA}` in MCP configs, gives
+    hooks those names plus the `CLAUDE_` ones, and requires a stdio command to
+    be a bare executable or a contained `./` path.
+  - Claude Code expands `${CLAUDE_PLUGIN_ROOT}` and `${CLAUDE_PLUGIN_DATA}` in
+    hooks, MCP configs, and skill and agent Markdown, but not in Bash.
+  - Both hosts keep per-plugin data folders across updates.
+- **Session IDs.** Claude Code sets `CLAUDE_CODE_SESSION_ID` natively in Bash,
+  hook, and MCP subprocesses. `CLAUDE_SESSION_ID` on this Mac comes from the
+  global `~/.claude/hooks/set-session-env.sh`. I haven't checked what Codex
+  sets.
+- **MCP host today.** `dev-browser mcp --http` has no token check. The MCP tools
+  don't start a browser server on their own.
+
+## Open questions
+
+- Q1. Should the plugin block the built-in WebFetch? The plan assumes no.
+- Q2. Hard fork of SawyerHood/dev-browser? The plan assumes yes.
+- Q3. Targets: Claude and Codex (assumed), or Claude only?
+- Q4. Codex's session variable, if any, for R3's `X-DevBrowser-Session`. Without
+  one, Codex sessions get a session per connection, which is today's HTTP
+  behavior.
+- Q5. Should setup install the login service by default, or only with
+  `--service`? The plan asks interactively.
+
+## Tasks
+
+- T1 (R7, A6). CLI `start`, `stop`, `restart`, and `status`; retire the shell
+  scripts. Independent; can go first.
+- T2 (R4, R5, R10, A4). Harden `mcp --http`, honor `X-DevBrowser-Session`, add
+  on-demand standalone start, and add the `CLAUDE_CODE_SESSION_ID` fallback.
+- T3 (R3, A2). Write `mcp-shim.mjs` and a schema snapshot of the tools, with a
+  test that the snapshot matches the live tool list. Test the shim against a
+  running host and against none.
+- T4 (R1, R2, R9, R12, A1). Add `satchel.yaml`, `.mcp.json`, and the Claude
+  hook. Generate outputs, replacing the upstream `marketplace.json`.
+- T5 (R6, R8, A3, A5). Write `scripts/setup.mjs` and the launchd and systemd
+  service files. Repoint the docs and the agent to `~/.dev-browser/app/current`.
+- T6 (R11, A7). Add the extension release job and fix the download links.
+- T7. Move this Mac over:
+  1. install the plugin in Claude Code and Codex;
+  2. run setup with `--link` to the checkout;
+  3. verify A3;
+  4. retire the skill symlink, the `~/.claude.json` entry, the agent copy, and
+     the running `start.sh` relay, asking Parker before each.
