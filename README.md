@@ -1,236 +1,234 @@
 <p align="center">
-  <img src="assets/header.png" alt="Dev Browser - Browser automation for Claude Code" width="100%">
+  <img src="assets/header.png" alt="Dev Browser" width="100%">
 </p>
 
-A browser automation plugin for [Claude Code](https://docs.anthropic.com/en/docs/claude-code) that lets Claude control your browser to test and verify your work as you develop.
+<p align="center">
+  <a href="https://github.com/parkerhancock/dev-browser/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/parkerhancock/dev-browser/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
+  <img alt="Node.js 22 or later" src="https://img.shields.io/badge/node-%E2%89%A522-brightgreen.svg">
+  <img alt="Claude Code and Codex" src="https://img.shields.io/badge/plugin-Claude%20Code%20%7C%20Codex-8A2BE2.svg">
+</p>
 
-**Key features:**
+# dev-browser
 
-- **Persistent pages** - Navigate once, interact across multiple scripts
-- **Flexible execution** - Full scripts when possible, step-by-step when exploring
-- **LLM-friendly DOM snapshots** - Structured page inspection optimized for AI
-- **Stealth WebFetch replacement** - Bypass bot protection that blocks built-in WebFetch
-- **Resilient navigation** - `navigateTo()` never hangs on sites with websockets or heavy analytics
-- **One-call archiving** - `saveArchive()` captures WACZ + rendered HTML + PDF in a single `.zip`
-- **Auto HAR recording** - Network traffic recording starts automatically, no setup needed
+Browser automation for coding agents, with pages that stay open between steps.
 
-## WebFetch Replacement
+dev-browser gives Claude Code and Codex a real browser to work in. An agent can open your app, click through a flow, read the page, check the console and network log, take a screenshot, and then come back on the next turn to the same page in the same state. Pages have names and persist across tool calls, scripts, and sessions, so the agent never re-navigates just to look again.
 
-This plugin includes a web fetcher for sites whose bot protection (Cloudflare and the like) returns 403s or challenge pages to Claude Code's built-in WebFetch. The built-in WebFetch stays available; the plugin doesn't block it.
+It drives a browser in one of two modes. Standalone mode launches its own Chromium, headless by default, for testing local apps and reading public sites. Extension mode drives your everyday Chrome through a small extension, for sites where you're already signed in.
 
-**How it works:**
+## Highlights
 
-1. Ask Claude to use the `webfetch` agent (it runs on Haiku for cost efficiency)
-2. The agent tries one fast HTTP request with Chrome's fingerprint, and loads the page in a real browser when that's blocked
-3. Content is converted to markdown and processed to answer your question
+- 27 MCP tools modeled on the browser tools built into Claude's apps: navigate, read the page, find elements, fill forms, click and type, screenshot, run JavaScript, read console and network logs, manage tabs, emulate phones and dark mode, record GIFs, and run your dev servers.
+- Named pages that persist between steps, with a separate namespace for each agent session, so several agents can share one browser.
+- A TypeScript library with a Playwright-compatible `Page` API, for multi-step scripts that run in one go.
+- A standalone browser built on [patchright](https://github.com/Kaliiiiiiiiii-Vinyzu/patchright) with a launch recipe that removes the usual automation tells. Driving Google Chrome, it passes the [rebrowser bot detector](https://bot-detector.rebrowser.net).
+- Detection of Cloudflare, DataDome, hCaptcha, Turnstile, and reCAPTCHA challenges on every navigation. dev-browser reports challenges to the agent and never solves them.
+- One-shot fetching to Markdown, with a no-browser tier that uses Chrome's TLS fingerprint and falls back to the browser when a site blocks it.
+- HAR recording on every page, and WACZ, HTML, and PDF archives in one call.
+- A service mode: token-authenticated HTTP, CDP, and MCP on one port, with a Dockerfile.
 
-**Zero configuration required.** The browser server auto-starts on first fetch. Just install the plugin and ask Claude to fetch any URL.
+## Quick start
 
-```
-> "Fetch https://example.com/pricing and summarize the plans"
-> "What does the documentation at docs.example.com say about authentication?"
-```
-
-**Mode priority:**
-
-| Mode       | Port | Stealth Level | Notes                                               |
-| ---------- | ---- | ------------- | --------------------------------------------------- |
-| Extension  | 9224 | Best          | Uses your real Chrome with logged-in sessions       |
-| Standalone | 9222 | Good          | Auto-starts fresh Chromium if extension unavailable |
-
-For maximum stealth (real browser fingerprint, existing cookies), install the Chrome extension.
-
-## Prerequisites
-
-- [Claude Code](https://docs.anthropic.com/en/docs/claude-code) or Codex
-- [Node.js](https://nodejs.org) 22 or later with npm (dev-browser uses Node's built-in WebSocket)
-- macOS or Linux
-
-## Installation
+You need Claude Code or Codex, Node.js 22 or later, and macOS or Linux.
 
 1. Install the plugin.
 
-   Claude Code:
+   In Claude Code:
 
    ```
    /plugin marketplace add parkerhancock/dev-browser
    /plugin install dev-browser@dev-browser
    ```
 
-   Codex: add the `parkerhancock/dev-browser` marketplace and install `dev-browser` from it.
+   In Codex:
 
-2. Run setup once per machine. In Claude Code, run `/dev-browser:setup`. Elsewhere, run the command dev-browser's tools print until setup is done (`node <plugin folder>/scripts/setup.mjs`). Setup installs the runtime into `~/.dev-browser/app`, downloads the browser, and asks whether to start dev-browser at login. It takes a minute or two.
+   ```bash
+   codex plugin marketplace add parkerhancock/dev-browser
+   codex plugin add dev-browser@dev-browser
+   ```
 
-The browser tools work after that, and the browser starts on first use. After a plugin update, Claude Code reruns setup in the background; in Codex, run setup again. To remove dev-browser, run setup with `--uninstall` (add `--purge` to delete `~/.dev-browser` too).
+2. Run setup once per machine. In Claude Code, run `/dev-browser:setup`. In Codex, dev-browser's tools answer with the exact setup command until you've run it (`node <plugin folder>/scripts/setup.mjs`). Setup installs the runtime into `~/.dev-browser`, downloads the browser, and asks whether to start dev-browser when you log in. It takes a minute or two.
 
-For development, `node scripts/setup.mjs --link .` from a checkout makes the runtime use the checkout, so edits take effect after `~/.dev-browser/bin/dev-browser restart`.
+3. Ask for something.
 
-### Chrome Extension (Optional)
+   > Open localhost:3000, sign up with a test account, and tell me what breaks.
 
-The Chrome extension allows Dev Browser to control your existing Chrome browser instead of launching a separate Chromium instance. This gives you access to your logged-in sessions, bookmarks, and extensions.
+   > Screenshot the pricing page as a phone in dark mode.
 
-**Installation:**
+   > Fetch https://example.com/docs/auth and summarize the token flow.
 
-1. Download `dev-browser-extension-<version>.zip` from the [latest release](https://github.com/parkerhancock/dev-browser/releases/latest)
-2. Unzip the file to a permanent location (e.g., `~/.dev-browser-extension`)
-3. Open Chrome and go to `chrome://extensions`
-4. Enable "Developer mode" (toggle in top right)
-5. Click "Load unpacked" and select the unzipped extension folder
+The browser starts the first time a tool needs it. After a plugin update, Claude Code reruns setup in the background; in Codex, run setup again.
 
-**Using the extension:**
+## How it works
 
-1. Click the Dev Browser extension icon in Chrome's toolbar
-2. Toggle it to "Active" - this enables browser control
-3. Ask Claude to connect to your browser (e.g., "connect to my Chrome" or "use the extension")
-
-When active, Claude can control your existing Chrome tabs with all your logged-in sessions, cookies, and extensions intact.
-
-### Multi-Agent Support
-
-Multiple Claude Code instances can share the same relay server without conflicts. Each instance automatically gets an isolated session with its own page namespace.
-
-Session persistence needs no setup: Claude Code gives each session a `CLAUDE_CODE_SESSION_ID`, and `connect()` uses it as the session.
-
-**Start the shared relay:**
-
-```bash
-~/.dev-browser/bin/dev-browser start relay
+```mermaid
+flowchart LR
+  agent["Claude Code or Codex"] -->|stdio MCP| shim["mcp-shim.mjs<br/>(in the plugin)"]
+  shim -->|HTTP + token| host["MCP host<br/>:9225"]
+  host --> serve["Standalone server :9222<br/>patchright Chromium"]
+  host --> relay["Extension relay<br/>:9224"]
+  relay -->|WebSocket| ext["Extension in<br/>your Chrome"]
+  scripts["Your scripts<br/>(TypeScript library)"] --> serve
+  scripts --> relay
 ```
 
-It's idempotent: run it from any Claude Code instance and it either starts the relay in the background or reports that it's already running.
+The plugin itself is light: a skill, a fetch agent, a setup command, and a shim with no dependencies that the agent's host starts as its MCP server. The shim forwards everything to the MCP host, a long-running process that setup installs. The MCP host owns the browser connections and starts the standalone server the first time a tool needs it.
 
-**Session isolation:**
+Because the MCP host and the browsers outlive any one agent session, pages persist. In Claude Code, each session gets its own namespace for page names, keyed by the session ID, so two agents can both have a page called `main` without colliding. To share pages between agents, connect with the same explicit session name.
 
-```typescript
-// Each connect() auto-generates a unique session ID
-const client = await connect();
-const page = await client.page("github"); // Isolated to this session
+## Standalone and extension modes
 
-// To share pages between sessions, use the same session ID:
-const client = await connect("http://localhost:9222", { session: "shared-workspace" });
-```
+Standalone mode is the default. dev-browser launches Chromium (or Chrome or Edge, with `--browser`) with a persistent profile in `~/.dev-browser`, headless unless you ask for a window. Each page opens in its own window, so pages stay visible to their own scripts, and the browser reports a normal user agent, viewport, and pointer. Use it for local development, testing, and public sites.
 
-**Stop the relay:**
+Extension mode drives tabs in your everyday Chrome, with your cookies and sign-ins. Use it for sites behind a login.
 
-```bash
-~/.dev-browser/bin/dev-browser stop relay
-```
+1. Download `dev-browser-extension-<version>.zip` from the [latest release](https://github.com/parkerhancock/dev-browser/releases/latest).
+2. Unzip it somewhere permanent.
+3. In `chrome://extensions`, turn on Developer mode, click **Load unpacked**, and choose the folder.
+4. Click the dev-browser toolbar icon and switch it to **Active**.
 
-`~/.dev-browser/bin/dev-browser status` shows every dev-browser server and whether `start` launched it.
+The extension connects to the extension relay. Setup's login item starts the relay; without it, run `~/.dev-browser/bin/dev-browser start relay`. While the extension is connected, tools work in your Chrome, and `switch_browser` moves between the two modes mid-session.
 
-## Permissions
+## MCP tools
 
-To skip permission prompts, add to `~/.claude/settings.json`:
+| Group                   | Tools                                                                                                                               |
+| ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| Navigation and tabs     | `navigate` (also back, forward, and `force` past "Leave site?" dialogs), `tabs_context`, `tabs_create`, `tabs_select`, `tabs_close` |
+| Reading                 | `read_page`, `find`, `get_page_text`, `screenshot`, `read_console_messages`, `read_network_requests`                                |
+| Acting                  | `computer` (mouse, keyboard, zoom), `ref_action`, `form_input`, `file_upload`, `upload_image`, `javascript`                         |
+| Batching                | `browser_batch`, `cdp_batch`                                                                                                        |
+| Emulation and recording | `resize_window` (phone and tablet presets, dark mode), `gif_creator`                                                                |
+| Dev servers             | `preview_start`, `preview_list`, `preview_logs`, `preview_stop` (from your project's `.claude/launch.json`)                         |
+| Browsers                | `switch_browser`, `list_connected_browsers`                                                                                         |
 
-```json
-{
-  "permissions": {
-    "allow": ["Skill(dev-browser:dev-browser)", "Bash(npx tsx:*)"]
-  }
-}
-```
+`read_page` returns the page's accessibility tree with a ref for each element, and `ref_action`, `form_input`, `computer`, and the upload tools act on those refs.
 
-Or run with `claude --dangerously-skip-permissions` (skips all prompts).
+## Scripting
 
-## Usage
-
-Just ask Claude to interact with your browser:
-
-> "Open localhost:3000 and verify the signup flow works"
-
-> "Go to the settings page and figure out why the save button isn't working"
-
-## Benchmarks
-
-| Method                  | Time    | Cost  | Turns | Success |
-| ----------------------- | ------- | ----- | ----- | ------- |
-| **Dev Browser**         | 3m 53s  | $0.88 | 29    | 100%    |
-| Playwright MCP          | 4m 31s  | $1.45 | 51    | 100%    |
-| Playwright Skill        | 8m 07s  | $1.45 | 38    | 67%     |
-| Claude Chrome Extension | 12m 54s | $2.81 | 80    | 100%    |
-
-_See [dev-browser-eval](https://github.com/SawyerHood/dev-browser-eval) for methodology._
-
-### How It's Different
-
-| Approach                                                         | How It Works                                      | Tradeoff                                               |
-| ---------------------------------------------------------------- | ------------------------------------------------- | ------------------------------------------------------ |
-| [Playwright MCP](https://github.com/microsoft/playwright-mcp)    | Observe-think-act loop with individual tool calls | Simple but slow; each action is a separate round-trip  |
-| [Playwright Skill](https://github.com/lackeyjb/playwright-skill) | Full scripts that run end-to-end                  | Fast but fragile; scripts start fresh every time       |
-| **Dev Browser**                                                  | Stateful server + agentic script execution        | Best of both: persistent state with flexible execution |
-
-## Resilient Navigation
-
-`navigateTo()` replaces `page.goto()` as the default navigation method. It uses a two-phase approach that works reliably on any site:
-
-1. **Phase 1:** Navigate with `waitUntil: "commit"` (server started responding)
-2. **Phase 2:** Smart load polling via `document.readyState` + Performance API with graceful timeout
-
-Unlike `page.goto()`, it never throws on timeout — it returns a result object so your script can continue:
+For multi-step work, the agent (or you) writes a short TypeScript script against the library. The page survives the script, so the next one starts where this one stopped.
 
 ```typescript
 import { connect, navigateTo } from "@/client.js";
 
-const client = await connect();
-const page = await client.page("research");
+const client = await connect(); // standalone; pass { mode: "extension" } for your Chrome
+const page = await client.page("checkout"); // created on first use, reused after
 
-const result = await navigateTo(page, "https://example.com");
-// result.success — fully loaded?
-// result.navigationTimedOut / result.loadTimedOut — partial failure details
-// Page is always usable regardless of timeout
+await navigateTo(page, "http://localhost:3000/cart");
+await page.getByRole("button", { name: "Checkout" }).click();
+console.log(await page.locator("h1").textContent());
 
-await page.screenshot({ path: "tmp/page.png" });
-await client.disconnect();
+await client.disconnect(); // the page stays open for the next script
 ```
 
-This solves the common problem where `page.goto()` hangs for 30 seconds on sites with websockets, long-polling, or persistent analytics connections, causing agent scripts to fail and need rewriting.
+Run scripts from the installed runtime:
 
-## Page Archiving
-
-HAR recording starts automatically when you call `client.page()`. When you're done, `saveArchive()` bundles everything into a single `.zip`:
-
-| File          | Contents               | Use case                    |
-| ------------- | ---------------------- | --------------------------- |
-| `<name>.wacz` | WARC network archive   | Archival replay, provenance |
-| `<name>.html` | Rendered DOM snapshot  | Full-text search indexing   |
-| `<name>.pdf`  | PDF rendering (Letter) | Human-readable reference    |
-
-```typescript
-import { connect, navigateTo, saveArchive } from "@/client.js";
-
-const client = await connect();
-const page = await client.page("research");
-await navigateTo(page, "https://example.com");
-
-// One call: stops recording, captures HTML + PDF, bundles into .zip
-const archivePath = await saveArchive(client, "research");
-// => ~/.dev-browser/archives/research-2026-02-05T13-30-00-000Z.zip
-
-await client.disconnect();
+```bash
+cd ~/.dev-browser/app/current/skills/dev-browser && npx tsx my-script.ts
 ```
 
-For just the network archive without HTML/PDF, use `saveWacz()`:
+`navigateTo` never throws on slow pages: it returns the HTTP status, any bot challenge, and a classified error (timeout, DNS, TLS, or connection). The client also offers accessibility snapshots, `find`, Markdown and text extraction, HAR entries, downloads, cookie and storage export, and `saveArchive()`, which bundles WACZ, rendered HTML, and a PDF into one zip. The [skill guide](skills/dev-browser/SKILL.md) documents the full API.
 
-```typescript
-import { saveWacz } from "@/client.js";
+## Fetching pages
 
-const waczPath = await saveWacz(client, "research");
+In Claude Code, the `dev-browser:webfetch` agent fetches a URL and answers questions about it. It runs a CLI you can also call directly:
+
+```bash
+cd ~/.dev-browser/app/current/skills/dev-browser
+npx tsx scripts/fetch.ts https://example.com --engine=auto
 ```
 
-The recording lifecycle is fully automatic:
+With `--engine=auto`, it makes one fast HTTP request with Chrome's TLS fingerprint, and loads the page in the browser only when that request is blocked, fails, or returns an empty app shell. The main content prints to stdout as Markdown. The exit code is 0 when the page loaded, 1 when navigation failed, and 2 when a bot challenge is still showing. Other flags include `--format` (markdown, html, text, or json), `--fresh` for a throwaway profile, `--headed`, `--proxy`, `--screenshot`, `--wacz`, and `--mode=extension`.
 
-- **`page()`** — auto-starts HAR recording (opt out with `{ record: false }`)
-- **`saveArchive()` / `saveWacz()`** — stops recording and saves
-- **`close()` / `disconnect()`** — silently cleans up any active recordings
+## Command line
 
-## Related Projects
+Setup installs the CLI at `~/.dev-browser/bin/dev-browser`. Add `~/.dev-browser/bin` to your `PATH` to call it as `dev-browser`.
 
-- [dev-terminal](https://github.com/parkerhancock/dev-terminal) - Terminal/PTY automation with persistent sessions. The terminal equivalent of dev-browser for TUI apps, CLI workflows, and interactive shell sessions.
+```bash
+dev-browser start [relay|serve|mcp]    # run in the background; safe to repeat (default: relay)
+dev-browser stop [relay|serve|mcp]     # stop what start launched (default: all)
+dev-browser restart [relay|serve|mcp]
+dev-browser status [--json]
+
+dev-browser serve [--headed] [--browser chrome|msedge] [--profile NAME] [--proxy URL] \
+                  [--locale de-DE] [--timezone Europe/Berlin] [--host 0.0.0.0] [--mcp]
+dev-browser relay [--mcp]
+dev-browser mcp [--http PORT]
+```
+
+## Configuration
+
+| Variable                                                                   | Default                                | Effect                                                                                  |
+| -------------------------------------------------------------------------- | -------------------------------------- | --------------------------------------------------------------------------------------- |
+| `DEV_BROWSER_DIR`                                                          | `~/.dev-browser`                       | Where the token, profiles, logs, and runtime live                                       |
+| `DEV_BROWSER_SERVE_PORT`, `DEV_BROWSER_RELAY_PORT`, `DEV_BROWSER_MCP_PORT` | 9222, 9224, 9225                       | Ports for the standalone server, extension relay, and MCP host                          |
+| `DEV_BROWSER_TOKEN`                                                        | the contents of `~/.dev-browser/token` | The shared token, for clients on another machine                                        |
+| `DEV_BROWSER_PROXY`                                                        | none                                   | Proxy for the standalone browser (`http://user:pass@host:port` or `socks5://host:port`) |
+| `DEV_BROWSER_DIALOG_POLICY`                                                | `dismiss`                              | How the relay answers JavaScript dialogs: `dismiss`, `accept`, or `ignore`              |
+| `DEV_BROWSER_IDLE_TIMEOUT_MS`                                              | 60000                                  | How long the relay keeps an unnamed, idle tab before closing it                         |
+
+An optional `~/.dev-browser/policy.json` limits navigation to listed domains and raw CDP to a safe set of methods; the [skill guide](skills/dev-browser/SKILL.md#security--policy) describes its fields.
+
+To skip Claude Code's permission prompts for dev-browser's tools, add `"mcp__plugin_dev-browser_dev-browser"` to `permissions.allow` in `~/.claude/settings.json`.
+
+## Security
+
+- Every request to the standalone server, the extension relay, and the MCP host needs the token in `~/.dev-browser/token`, which is readable only by you. Requests that carry a web page's `Origin` are refused, so sites you visit can't drive your browser.
+- The servers listen on 127.0.0.1. `serve --host 0.0.0.0` exposes the standalone server for containers, still behind the token.
+- Chromium's own debug port stays on loopback. Remote clients reach the browser only through the server's authenticated `/cdp` proxy.
+- Extension mode acts in your real, signed-in Chrome, so an agent there can do anything you could. A policy file can confine it to the domains you list.
+
+## Running as a service
+
+The Dockerfile runs the standalone server, its HTTP API, and MCP on one port, with the profile and token in a volume.
+
+```bash
+docker build -t dev-browser .
+docker run -d -p 9222:9222 -v dev-browser-data:/data dev-browser
+docker exec <container> cat /data/token
+```
+
+Connect the library with `connect("http://host:9222", { token })`, or add the MCP endpoint `http://host:9222/mcp` with the header `X-DevBrowser-Token: <token>`. The image drives Google Chrome by default; on Apple Silicon, build with `--build-arg BROWSER=chromium`, because Chrome has no Linux ARM64 build.
+
+## Troubleshooting
+
+If a tool says dev-browser isn't set up, run `/dev-browser:setup` in Claude Code, or the command the tool prints.
+
+If setup stops with a Node.js version error, install Node 22 or later. dev-browser uses Node's built-in WebSocket, which older versions lack.
+
+If extension mode fails on a login form with "Cannot access a chrome-extension:// URL of different extension", a password manager's inline menu is open in the page, and Chrome blocks dev-browser while another extension's frame is present. Close the menu, use standalone mode for that form, or, on pages you control, add `data-1p-ignore` to the field.
+
+If a tool reports a bot challenge in standalone mode, try extension mode, which uses your real Chrome and its history with the site.
+
+`dev-browser status` shows each server's state, and `~/.dev-browser` holds the logs: `relay.log`, `serve.log`, `mcp.log`, and `setup.log`.
+
+## Development
+
+```bash
+git clone https://github.com/parkerhancock/dev-browser
+cd dev-browser
+(cd skills/dev-browser && npm ci) && (cd mcp-server && npm ci) && (cd extension && npm ci)
+node scripts/setup.mjs --link .   # make this checkout the installed runtime
+```
+
+With `--link`, your edits take effect after `dev-browser restart mcp relay`.
+
+| Path                                | Contents                                                                                                   |
+| ----------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| `skills/dev-browser/`               | The library, the standalone server, the extension relay, the fetch CLI, and the agent skill                |
+| `mcp-server/`                       | The MCP tools, the MCP host, and the `dev-browser` CLI                                                     |
+| `extension/`                        | The Chrome extension (WXT)                                                                                 |
+| `scripts/setup.mjs`, `mcp-shim.mjs` | Setup and the plugin's MCP entry point, both free of dependencies                                          |
+| `satchel.yaml`                      | Plugin packaging for Claude Code and Codex, built with [Satchel](https://github.com/parkerhancock/satchel) |
+
+Each package runs its own checks: `npx tsc --noEmit` and `npm test` in `skills/dev-browser` and `mcp-server`, and `npm run test:run` in `extension`. After changing an MCP tool, regenerate the shim's tool list with `npm run snapshot-tools` in `mcp-server`. To release, bump `version` in `satchel.yaml`, regenerate the plugin files with Satchel, and push a matching `v<version>` tag; the release workflow attaches the extension zip. [AGENTS.md](AGENTS.md) maps the code in more detail, and [CONTRIBUTING.md](CONTRIBUTING.md) covers proposing changes.
+
+## Acknowledgments
+
+dev-browser began as [Sawyer Hood's dev-browser](https://github.com/SawyerHood/dev-browser), which introduced persistent named pages for agents. His [evaluation](https://github.com/SawyerHood/dev-browser-eval) found that design finished a reference task in 3m 53s for $0.88, against 4m 31s and $1.45 for Playwright MCP. This fork adds the patchright standalone engine, the MCP tools, the extension mode improvements, the fetch tiers, and the plugin packaging; it hasn't been re-measured.
+
+[dev-terminal](https://github.com/parkerhancock/dev-terminal) applies the same persistent-session idea to terminals and TUIs.
 
 ## License
 
-MIT
-
-## Author
-
-[Sawyer Hood](https://github.com/sawyerhood)
+[MIT](LICENSE)
