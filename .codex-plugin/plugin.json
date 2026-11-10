@@ -1,6 +1,6 @@
 {
   "name": "dev-browser",
-  "version": "0.1.0",
+  "version": "2.0.0",
   "description": "Browser automation for agents with pages that persist between steps, a hardened standalone browser or your own Chrome, and 27 MCP tools.",
   "author": {
     "name": "Parker Hancock",
