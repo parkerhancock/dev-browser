@@ -7,6 +7,12 @@ name: Release
 on:
   push:
     tags: ["v*"]
+  # Rerun the release for a tag that already exists (Actions > Release > Run workflow)
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to release, like v2.0.0"
+        required: true
 
 permissions:
   contents: write
@@ -15,9 +21,13 @@ jobs:
   extension:
     name: Extension release
     runs-on: ubuntu-latest
+    env:
+      RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -28,8 +38,8 @@ jobs:
         id: version
         run: |
           version=$(node -p "require('./.claude-plugin/plugin.json').version")
-          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
-            echo "Tag $GITHUB_REF_NAME doesn't match the plugin version $version (satchel.yaml)"
+          if [ "v$version" != "$RELEASE_TAG" ]; then
+            echo "Tag $RELEASE_TAG doesn't match the plugin version $version (satchel.yaml)"
             exit 1
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
@@ -38,9 +48,12 @@ jobs:
         working-directory: extension
         run: npm ci
 
+      # tsconfig.json extends the .wxt/ config that `wxt prepare` generates
       - name: Test
         working-directory: extension
-        run: npm run test:run
+        run: |
+          npx wxt prepare
+          npm run test:run
 
       - name: Build and zip
         working-directory: extension
@@ -54,8 +67,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           ZIP: dev-browser-extension-${{ steps.version.outputs.version }}.zip
         run: |
-          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            gh release upload "$GITHUB_REF_NAME" "$ZIP" --clobber
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" "$ZIP" --clobber
           else
-            gh release create "$GITHUB_REF_NAME" "$ZIP" --title "dev-browser $GITHUB_REF_NAME" --generate-notes
+            gh release create "$RELEASE_TAG" "$ZIP" --title "dev-browser $RELEASE_TAG" --generate-notes
           fi
