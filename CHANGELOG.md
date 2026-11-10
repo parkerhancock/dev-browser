@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.0.1] - 2026-11-09
+
+### Fixed
+
+- The Chrome extension reports the release version. The 2.0.0 zip shipped
+  an extension that called itself 1.0.0; a test now keeps the extension's
+  version equal to the plugin's.
+
 ## [2.0.0] - 2026-11-09
 
 The first release of this fork. It installs as a plugin for Claude Code and
