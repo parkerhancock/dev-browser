@@ -61,13 +61,32 @@ export interface RenameGroupMessage {
   };
 }
 
+export interface CollapseGroupMessage {
+  id: number;
+  method: "collapseGroup";
+  params: {
+    key: string;
+    collapsed: boolean;
+  };
+}
+
+export interface SweepGroupsMessage {
+  id: number;
+  method: "sweepGroups";
+  params: {
+    live: Array<{ key: string; tabIds: number[] }>;
+  };
+}
+
 export type ExtensionCommandMessage =
   | ForwardCDPCommandMessage
   | GetAvailableTargetsMessage
   | AttachToTabMessage
   | CloseTabMessage
   | ReleaseTabMessage
-  | RenameGroupMessage;
+  | RenameGroupMessage
+  | CollapseGroupMessage
+  | SweepGroupsMessage;
 
 // Messages from extension to relay (responses)
 export interface ExtensionResponseMessage {

@@ -95,8 +95,21 @@ export function createRelayContext(options: RelayOptions) {
   const SESSION_IDLE_MS =
     parseInt(process.env.DEV_BROWSER_SESSION_IDLE_MS ?? "", 10) || 60 * 60 * 1000;
 
+  // Collapse a session's tab group after this long without activity, and
+  // expand it again when the session wakes up. Override via
+  // DEV_BROWSER_GROUP_COLLAPSE_MS.
+  const GROUP_COLLAPSE_MS =
+    parseInt(process.env.DEV_BROWSER_GROUP_COLLAPSE_MS ?? "", 10) || 10 * 60 * 1000;
+  // How often to close agent tab groups no live session owns
+  const GROUP_SWEEP_INTERVAL_MS = 10 * 60 * 1000;
+
   // Check every 5 seconds (or faster when a timeout itself is shorter, e.g. in tests)
-  const IDLE_CHECK_INTERVAL_MS = Math.min(5 * 1000, IDLE_TIMEOUT_MS, SESSION_IDLE_MS);
+  const IDLE_CHECK_INTERVAL_MS = Math.min(
+    5 * 1000,
+    IDLE_TIMEOUT_MS,
+    SESSION_IDLE_MS,
+    GROUP_COLLAPSE_MS
+  );
 
   // PDF storage for large printToPDF responses
   const pdfDir = join(homedir(), ".dev-browser", "pdfs");
@@ -230,10 +243,12 @@ export function createRelayContext(options: RelayOptions) {
     }
   }
 
-  // End sessions none of whose pages has seen activity for SESSION_IDLE_MS.
+  // End sessions none of whose pages has seen activity for SESSION_IDLE_MS,
+  // and collapse the groups of sessions idle for GROUP_COLLAPSE_MS.
   async function expireIdleSessions(): Promise<void> {
     if (!live.extensionWs || live.isRecovering) return;
     const threshold = Date.now() - SESSION_IDLE_MS;
+    const collapseThreshold = Date.now() - GROUP_COLLAPSE_MS;
 
     for (const [agentSession, session] of Array.from(sessions)) {
       let lastActivity = 0;
@@ -242,7 +257,20 @@ export function createRelayContext(options: RelayOptions) {
         const target = cdpSessionId ? connectedTargets.get(cdpSessionId) : undefined;
         if (target) lastActivity = Math.max(lastActivity, target.lastActivity);
       }
-      if (lastActivity === 0 || lastActivity >= threshold) continue;
+      if (lastActivity === 0) continue;
+
+      if (lastActivity >= threshold) {
+        const idle = lastActivity < collapseThreshold;
+        if (idle !== (session.collapsed ?? false)) {
+          session.collapsed = idle;
+          await sendToExtension({
+            method: "collapseGroup",
+            params: { key: agentSession, collapsed: idle },
+            timeout: 5000,
+          }).catch((err) => log(`Failed to ${idle ? "collapse" : "expand"} tab group: ${err}`));
+        }
+        continue;
+      }
 
       log(
         `Session ${agentSession} idle for ${Math.round((Date.now() - lastActivity) / 60000)} min - ending it`
@@ -291,7 +319,33 @@ export function createRelayContext(options: RelayOptions) {
 
     live.persistedPages = live.persistedPages.filter((p) => !p.key.startsWith(prefix));
     savePersistedPages(live.persistedPages);
+    // Close what's left in the session's group (tabs its pages opened, say)
+    await sweepTabGroups();
     return { closed, released, errors };
+  }
+
+  /**
+   * Have the extension close agent tab groups that no live session owns:
+   * ended sessions' groups, groups Chrome restored after a restart, and the
+   * shared group older versions made. Skipped mid-recovery, when the relay
+   * doesn't yet know which sessions are live.
+   */
+  async function sweepTabGroups(): Promise<void> {
+    if (!live.extensionWs || live.isRecovering) return;
+    const liveSessions = Array.from(sessions.keys(), (key) => ({
+      key,
+      tabIds: live.persistedPages.filter((p) => p.key.startsWith(`${key}:`)).map((p) => p.tabId),
+    }));
+    try {
+      const result = (await sendToExtension({
+        method: "sweepGroups",
+        params: { live: liveSessions },
+        timeout: 10000,
+      })) as { closedTabs?: number } | undefined;
+      if (result?.closedTabs) log(`Tab group sweep closed ${result.closedTabs} tab(s)`);
+    } catch (err) {
+      log(`Tab group sweep failed: ${err}`);
+    }
   }
 
   /** The tab group a session's new tabs join: the agent's name for it, else its folder. */
@@ -305,6 +359,7 @@ export function createRelayContext(options: RelayOptions) {
       .then(expireIdleSessions)
       .catch((err) => log(`Idle cleanup failed: ${err}`));
   }, IDLE_CHECK_INTERVAL_MS);
+  const groupSweepInterval = setInterval(() => void sweepTabGroups(), GROUP_SWEEP_INTERVAL_MS);
 
   // Persistence for page mappings (survives extension disconnects)
   live.persistedPages = loadPersistedPages();
@@ -349,11 +404,12 @@ export function createRelayContext(options: RelayOptions) {
   }
 
   // Recover persisted pages by re-attaching to existing tabs
-  async function recoverPersistedPages(): Promise<void> {
+  /** Reattach persisted pages to their tabs. Resolves false if recovery couldn't run. */
+  async function recoverPersistedPages(): Promise<boolean> {
     if (live.persistedPages.length === 0) {
       log("No persisted pages to recover");
       live.isRecovering = false;
-      return;
+      return true;
     }
 
     log(`Attempting to recover ${live.persistedPages.length} persisted pages...`);
@@ -374,7 +430,7 @@ export function createRelayContext(options: RelayOptions) {
     } catch (err) {
       log("Failed to get available targets:", err);
       live.isRecovering = false;
-      return;
+      return false;
     }
 
     log(`Found ${availableTargets.length} available targets`);
@@ -464,6 +520,7 @@ export function createRelayContext(options: RelayOptions) {
 
     log(`Recovery complete: ${recovered.length} recovered, ${stale.length} stale`);
     live.isRecovering = false;
+    return true;
   }
 
   async function sendToExtension({
@@ -789,6 +846,8 @@ export function createRelayContext(options: RelayOptions) {
     SESSION_IDLE_MS,
     expireIdleSessions,
     endSession,
+    sweepTabGroups,
+    groupSweepInterval,
     tabGroupFor,
     debouncedSave,
     extensionPendingRequests,

@@ -59,6 +59,8 @@ export interface SessionState {
   groupName?: string;
   /** Fallback tab group name until the agent picks one: its project folder. */
   label?: string;
+  /** Whether the relay collapsed the session's tab group for inactivity. */
+  collapsed?: boolean;
 }
 
 export interface TargetRegistry {

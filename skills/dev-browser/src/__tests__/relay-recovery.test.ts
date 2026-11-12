@@ -16,7 +16,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { serveRelay, type RelayServer } from "../relay.js";
-import { MockExtension, randomPort, fetchJson } from "./mock-extension.js";
+import { MockExtension, randomPort, fetchJson, waitFor } from "./mock-extension.js";
 
 // Isolate persistence for this whole file (persistence paths resolve lazily).
 process.env.DEV_BROWSER_DIR = mkdtempSync(join(tmpdir(), "dev-browser-recovery-test-"));
@@ -283,12 +283,98 @@ describe("Relay Server - Session Expiry", () => {
       session,
     });
 
-    await new Promise((r) => setTimeout(r, 1500));
+    await waitFor(() => ext.received.some((m) => m.method === "releaseTab"), 5000);
 
     expect(closedTargetIds(ext)).toContain(scratch.body.targetId);
     expect(ext.received.filter((m) => m.method === "releaseTab")).toHaveLength(1);
     const { body } = await fetchJson(port, "/pages", { session });
     expect(body.pages).toEqual([]);
+  });
+});
+
+// ============================================================================
+// Tab group upkeep: sweep after recovery and session end, collapse when idle
+// ============================================================================
+
+describe("Relay Server - Tab Group Upkeep", () => {
+  let relay: RelayServer;
+  let port: number;
+  let ext: MockExtension;
+
+  const sweeps = () =>
+    ext.received
+      .filter((m) => m.method === "sweepGroups")
+      .map((m) => (m.params as { live: Array<{ key: string; tabIds: number[] }> }).live);
+  const collapses = (key: string) =>
+    ext.received
+      .filter((m) => m.method === "collapseGroup")
+      .map((m) => m.params as { key: string; collapsed: boolean })
+      .filter((p) => p.key === key)
+      .map((p) => p.collapsed);
+
+  beforeAll(async () => {
+    process.env.DEV_BROWSER_GROUP_COLLAPSE_MS = "400";
+    port = randomPort();
+    relay = await serveRelay({ port, host: "127.0.0.1" });
+    ext = new MockExtension(port);
+    await ext.connect();
+    await new Promise((r) => setTimeout(r, 900));
+  });
+
+  afterAll(async () => {
+    delete process.env.DEV_BROWSER_GROUP_COLLAPSE_MS;
+    await ext.disconnect();
+    await relay.stop();
+  });
+
+  test("sweeps tab groups once recovery finishes", () => {
+    expect(sweeps().length).toBeGreaterThanOrEqual(1);
+  });
+
+  test("ending a session sweeps with that session no longer live", async () => {
+    const session = "sweep-end-session";
+    await fetchJson(port, "/pages", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "work" }),
+      session,
+    });
+    const before = sweeps().length;
+
+    await fetchJson(port, `/sessions/${session}`, { method: "DELETE" });
+
+    expect(sweeps().length).toBe(before + 1);
+    expect(
+      sweeps()
+        .at(-1)!
+        .map((s) => s.key)
+    ).not.toContain(session);
+  });
+
+  test("collapses an idle session's group and expands it when work resumes", async () => {
+    const session = "collapse-session";
+    await fetchJson(port, "/pages", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "work" }),
+      session,
+    });
+
+    await waitFor(() => collapses(session).length >= 1, 3000);
+    expect(collapses(session)).toEqual([true]);
+
+    await fetchJson(port, "/cdp", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        page: "work",
+        method: "Runtime.evaluate",
+        params: { expression: "1" },
+      }),
+      session,
+    });
+    await waitFor(() => collapses(session).length >= 2, 3000);
+    expect(collapses(session).slice(0, 2)).toEqual([true, false]);
   });
 });
 

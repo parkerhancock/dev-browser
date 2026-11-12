@@ -42,6 +42,7 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
     live,
     pdfCleanupInterval,
     idleCleanupInterval,
+    groupSweepInterval,
   } = ctx;
 
   // ============================================================================
@@ -133,6 +134,7 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
       live.extensionWs?.close(1000, "Server stopped");
       clearInterval(pdfCleanupInterval);
       clearInterval(idleCleanupInterval);
+      clearInterval(groupSweepInterval);
       server.close();
     },
   };

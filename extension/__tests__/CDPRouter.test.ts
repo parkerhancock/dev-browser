@@ -12,6 +12,7 @@ const mockTabsGroup = vi.fn();
 const mockTabsQuery = vi.fn();
 const mockTabsCreate = vi.fn();
 const mockTabsUngroup = vi.fn();
+const mockTabsRemove = vi.fn();
 const mockTabGroupsGet = vi.fn();
 const mockTabGroupsQuery = vi.fn();
 const mockTabGroupsUpdate = vi.fn();
@@ -25,6 +26,7 @@ vi.stubGlobal("chrome", {
     query: mockTabsQuery,
     create: mockTabsCreate,
     ungroup: mockTabsUngroup,
+    remove: mockTabsRemove,
   },
   tabGroups: {
     get: mockTabGroupsGet,
@@ -55,6 +57,7 @@ describe("CDPRouter", () => {
     mockTabsQuery.mockReset();
     mockTabsCreate.mockReset();
     mockTabsUngroup.mockReset().mockResolvedValue(undefined);
+    mockTabsRemove.mockReset().mockResolvedValue(undefined);
     mockTabGroupsGet.mockReset();
     mockTabGroupsQuery.mockReset();
     mockTabGroupsUpdate.mockReset();
@@ -129,7 +132,7 @@ describe("CDPRouter", () => {
       expect(groups).toHaveLength(1);
       expect(mockTabGroupsUpdate).toHaveBeenCalledOnce();
       expect(mockTabGroupsUpdate).toHaveBeenCalledWith(100, {
-        title: "proj ab12",
+        title: "🤖 proj ab12",
         color: groupColor("s1"),
       });
       expect(mockTabsGroup).toHaveBeenNthCalledWith(2, { tabIds: [2], groupId: 100 });
@@ -139,7 +142,7 @@ describe("CDPRouter", () => {
       await createTab("s1", "proj ab12");
       await createTab("s2", "proj cd34");
 
-      expect(groups.map((group) => group.title)).toEqual(["proj ab12", "proj cd34"]);
+      expect(groups.map((group) => group.title)).toEqual(["🤖 proj ab12", "🤖 proj cd34"]);
     });
 
     it("opens a session's later tabs in the window holding its group", async () => {
@@ -183,7 +186,7 @@ describe("CDPRouter", () => {
         params: { key: "s1", title: "Aetna benefits" },
       } as ExtensionCommandMessage);
 
-      expect(mockTabGroupsUpdate).toHaveBeenLastCalledWith(100, { title: "Aetna benefits" });
+      expect(mockTabGroupsUpdate).toHaveBeenLastCalledWith(100, { title: "🤖 Aetna benefits" });
     });
 
     it("ignores a rename for a session without a group", async () => {
@@ -208,6 +211,91 @@ describe("CDPRouter", () => {
 
       expect(mockTabsUngroup).toHaveBeenCalledWith(9);
       expect(detach).toHaveBeenCalledWith(9, true);
+    });
+  });
+
+  describe("tab group sweep and collapse", () => {
+    type Group = { id: number; windowId: number; title: string; collapsed: boolean };
+    let groups: Group[];
+    let tabsByGroup: Record<number, Array<{ id: number; active?: boolean }>>;
+
+    const sweep = (live: Array<{ key: string; tabIds: number[] }>) =>
+      cdpRouter.handleCommand({
+        id: 1,
+        method: "sweepGroups",
+        params: { live },
+      } as ExtensionCommandMessage);
+
+    beforeEach(() => {
+      groups = [];
+      tabsByGroup = {};
+      mockTabGroupsQuery.mockImplementation(async () => groups);
+      mockTabGroupsGet.mockImplementation(async (id: number) => {
+        const group = groups.find((g) => g.id === id);
+        if (!group) throw new Error("No group");
+        return group;
+      });
+      mockTabsQuery.mockImplementation(
+        async ({ groupId, active }: { groupId: number; active?: boolean }) =>
+          (tabsByGroup[groupId] ?? []).filter((tab) => !active || tab.active)
+      );
+    });
+
+    const addGroup = (id: number, title: string, tabIds: number[]) => {
+      groups.push({ id, windowId: 1, title, collapsed: false });
+      tabsByGroup[id] = tabIds.map((tabId) => ({ id: tabId }));
+    };
+
+    it("closes agent groups no live session owns and leaves the person's groups alone", async () => {
+      addGroup(1, "🤖 Old task", [11, 12]); // restored after a restart, session gone
+      addGroup(2, "Dev Browser", [21]); // made by an older version
+      addGroup(3, "Recipes", [31]); // the person's own group
+
+      await expect(sweep([])).resolves.toEqual({ closedTabs: 3 });
+
+      expect(mockTabsRemove).toHaveBeenCalledWith([11, 12]);
+      expect(mockTabsRemove).toHaveBeenCalledWith([21]);
+      expect(mockTabsRemove).not.toHaveBeenCalledWith([31]);
+    });
+
+    it("keeps a live session's group and closes an ended session's", async () => {
+      await chrome.storage.session.set({ tabGroupIds: { live: 1, ended: 2 } });
+      addGroup(1, "🤖 Live", [11]);
+      addGroup(2, "🤖 Ended", [21]);
+
+      await sweep([{ key: "live", tabIds: [] }]);
+
+      expect(mockTabsRemove).toHaveBeenCalledOnce();
+      expect(mockTabsRemove).toHaveBeenCalledWith([21]);
+    });
+
+    it("adopts a restored group that holds a live session's recovered tab", async () => {
+      addGroup(5, "🤖 Aetna benefits", [51, 52]);
+
+      await sweep([{ key: "s1", tabIds: [52] }]);
+
+      expect(mockTabsRemove).not.toHaveBeenCalled();
+      expect(await chrome.storage.session.get("tabGroupIds")).toEqual({
+        tabGroupIds: { s1: 5 },
+      });
+    });
+
+    it("collapses an idle session's group but not one the person is looking at", async () => {
+      await chrome.storage.session.set({ tabGroupIds: { idle: 1, watched: 2 } });
+      addGroup(1, "🤖 Idle", [11]);
+      addGroup(2, "🤖 Watched", [21]);
+      tabsByGroup[2]![0]!.active = true;
+
+      for (const key of ["idle", "watched"]) {
+        await cdpRouter.handleCommand({
+          id: 1,
+          method: "collapseGroup",
+          params: { key, collapsed: true },
+        } as ExtensionCommandMessage);
+      }
+
+      expect(mockTabGroupsUpdate).toHaveBeenCalledOnce();
+      expect(mockTabGroupsUpdate).toHaveBeenCalledWith(1, { collapsed: true });
     });
   });
 

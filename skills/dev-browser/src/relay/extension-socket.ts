@@ -34,6 +34,7 @@ export function registerExtensionSocket(
     extensionPendingRequests,
     removeChildTargetTree,
     recoverPersistedPages,
+    sweepTabGroups,
     sendToExtension,
     connectedTargets,
     namedPages,
@@ -71,9 +72,12 @@ export function registerExtensionSocket(
 
           // Attempt recovery of persisted pages after connection stabilizes
           setTimeout(() => {
-            recoverPersistedPages().catch((err) => {
-              log("Recovery failed:", err);
-            });
+            recoverPersistedPages()
+              // Once the relay knows which sessions survived, close the rest
+              .then((recovered) => (recovered ? sweepTabGroups() : undefined))
+              .catch((err) => {
+                log("Recovery failed:", err);
+              });
           }, 500);
         },
 

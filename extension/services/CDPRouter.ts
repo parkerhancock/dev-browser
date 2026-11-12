@@ -16,7 +16,28 @@ export interface TabGroupSpec {
 const GROUP_IDS_KEY = "tabGroupIds";
 
 /** Tabs created without a session (older relays) share one group. */
-const DEFAULT_GROUP: TabGroupSpec = { key: "default", title: "Dev Browser" };
+const DEFAULT_GROUP: TabGroupSpec = { key: "default", title: "dev-browser" };
+
+/**
+ * Prefix on every group dev-browser makes. It tells the person which groups
+ * an agent owns, and lets the sweep recognize them after Chrome restores
+ * them with new ids. A group the person renames without it becomes theirs.
+ */
+export const GROUP_MARKER = "🤖 ";
+
+/** Title of the shared group versions before 2.1 made. */
+const LEGACY_GROUP_TITLE = "Dev Browser";
+
+const displayTitle = (title: string): string => GROUP_MARKER + title;
+
+const isAgentGroupTitle = (title: string | undefined): boolean =>
+  !!title && (title.startsWith(GROUP_MARKER) || title === LEGACY_GROUP_TITLE);
+
+/** A live session on the relay and the tab ids of its pages. */
+export interface LiveSession {
+  key: string;
+  tabIds: number[];
+}
 
 type GroupColor = `${chrome.tabGroups.Color}`;
 
@@ -119,8 +140,67 @@ export class CDPRouter {
   private renameGroup(key: string, title: string): Promise<void> {
     return this.runGroupOperation(key, async () => {
       const group = await this.findGroup(key);
-      if (group) await chrome.tabGroups.update(group.id, { title });
+      if (group) await chrome.tabGroups.update(group.id, { title: displayTitle(title) });
     });
+  }
+
+  /**
+   * Collapse or expand the session's group. Never collapses a group holding
+   * the tab the person is looking at.
+   */
+  private setGroupCollapsed(key: string, collapsed: boolean): Promise<void> {
+    return this.runGroupOperation(key, async () => {
+      const group = await this.findGroup(key);
+      if (!group || group.collapsed === collapsed) return;
+      if (collapsed) {
+        const active = await chrome.tabs.query({ groupId: group.id, active: true });
+        if (active.length > 0) return;
+      }
+      await chrome.tabGroups.update(group.id, { collapsed });
+    });
+  }
+
+  /**
+   * Close agent groups no live session owns: groups of ended sessions, groups
+   * Chrome restored after a restart, and the shared group older versions made.
+   * A restored group holding a live session's tab becomes that session's group.
+   * Groups without the agent marker belong to the person and are never touched.
+   */
+  async sweepGroups(live: LiveSession[]): Promise<{ closedTabs: number }> {
+    await this.loadGroupIds();
+    const liveKeys = new Set(live.map((session) => session.key));
+    const keyByTabId = new Map(
+      live.flatMap((session) => session.tabIds.map((tabId) => [tabId, session.key] as const))
+    );
+    const keyByGroupId = new Map(Array.from(this.groupIds, ([key, id]) => [id, key]));
+    let closedTabs = 0;
+
+    for (const group of await chrome.tabGroups.query({})) {
+      const key = keyByGroupId.get(group.id);
+      if (key === undefined && !isAgentGroupTitle(group.title)) continue;
+      if (key !== undefined && liveKeys.has(key)) continue;
+
+      const tabs = await chrome.tabs.query({ groupId: group.id });
+      const owner = tabs
+        .map((tab) => (tab.id === undefined ? undefined : keyByTabId.get(tab.id)))
+        .find((k) => k !== undefined);
+      if (owner !== undefined) {
+        // A live session's tab sits here (recovered after a restart): adopt the group
+        if (!this.groupIds.has(owner)) this.groupIds.set(owner, group.id);
+        continue;
+      }
+
+      if (key !== undefined) this.groupIds.delete(key);
+      const tabIds = tabs.flatMap((tab) => (tab.id === undefined ? [] : [tab.id]));
+      if (tabIds.length > 0) {
+        await chrome.tabs.remove(tabIds);
+        closedTabs += tabIds.length;
+      }
+      this.logger.log(`Swept tab group "${group.title}": closed ${tabIds.length} tab(s)`);
+    }
+
+    await this.saveGroupIds();
+    return { closedTabs };
   }
 
   /**
@@ -143,7 +223,7 @@ export class CDPRouter {
         } else {
           const groupId = await chrome.tabs.group({ tabIds: [tab.id] });
           await chrome.tabGroups.update(groupId, {
-            title: spec.title,
+            title: displayTitle(spec.title),
             color: groupColor(spec.key),
           });
           this.groupIds.set(spec.key, groupId);
@@ -198,6 +278,13 @@ export class CDPRouter {
           this.tabManager.detach(msg.params.tabId, true);
         }
         return { success: true };
+
+      case "collapseGroup":
+        await this.setGroupCollapsed(msg.params.key, msg.params.collapsed);
+        return { success: true };
+
+      case "sweepGroups":
+        return this.sweepGroups(msg.params.live);
 
       case "renameGroup":
         await this.renameGroup(msg.params.key, msg.params.title);
