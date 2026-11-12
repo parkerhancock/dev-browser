@@ -55,7 +55,9 @@ export interface SessionState {
   id: string;
   pageNames: Set<string>;
   targetSessions: Set<string>;
-  /** Short human label for the session's tab group, e.g. the agent's project folder. */
+  /** Tab group name the agent chose for its task, e.g. "Aetna benefits". */
+  groupName?: string;
+  /** Fallback tab group name until the agent picks one: its project folder. */
   label?: string;
 }
 

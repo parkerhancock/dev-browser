@@ -205,6 +205,12 @@ export interface DevBrowserClient {
    * @param pinned - true to pin (default), false to unpin
    */
   pin: (name: string, pinned?: boolean) => Promise<void>;
+  /**
+   * Name this session's tab group in the user's Chrome (extension mode), e.g.
+   * "Aetna benefits". New tabs join a group with this name, and an existing
+   * group is renamed. Standalone mode has no tab groups and ignores it.
+   */
+  setTabGroup: (title: string) => Promise<void>;
   disconnect: () => Promise<void>;
   /**
    * Get AI-friendly ARIA snapshot for a page.

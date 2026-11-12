@@ -24,6 +24,7 @@ import {
   fetchCloseTarget,
   fetchCleanup,
   fetchPin,
+  fetchSetTabGroup,
   deleteSessionPages,
   pageInnerText,
   pageMarkdown,
@@ -228,6 +229,10 @@ export async function connectExtensionMode(
 
     async pin(name: string, pinned = true): Promise<void> {
       return fetchPin(serverUrl, sessionHeaders, name, pinned);
+    },
+
+    async setTabGroup(title: string): Promise<void> {
+      return fetchSetTabGroup(serverUrl, sessionHeaders, session, title);
     },
 
     async disconnect(): Promise<void> {

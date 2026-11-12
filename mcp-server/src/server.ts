@@ -78,6 +78,8 @@ export interface BrowserState {
   activeMode?: BrowserMode;
   session: string;
   label?: string;
+  /** The tab group name the agent chose, if it named one. */
+  tabGroup?: string;
   clients: Map<BrowserMode, DevBrowserClient>;
   /** Dev servers started by preview_start, created on first use. */
   previews?: PreviewManager;
@@ -162,6 +164,18 @@ async function resolveMode(state: BrowserState): Promise<BrowserMode> {
   // Nothing is running: getClient starts the standalone server
   state.activeMode = "standalone";
   return "standalone";
+}
+
+/** Name the session's tab group when the agent passed tab_group. */
+async function applyTabGroup(
+  state: BrowserState,
+  client: DevBrowserClient,
+  args: Record<string, unknown>
+): Promise<void> {
+  const title = typeof args.tab_group === "string" ? args.tab_group.trim() : "";
+  if (!title || title === state.tabGroup) return;
+  await client.setTabGroup(title);
+  state.tabGroup = title;
 }
 
 async function getClient(state: BrowserState): Promise<DevBrowserClient> {
@@ -293,6 +307,14 @@ const pageParam = z
   .string()
   .optional()
   .describe(`Named page/tab to act on (default: "${DEFAULT_PAGE}")`);
+const tabGroupParam = z
+  .string()
+  .optional()
+  .describe(
+    "In extension mode, name the tab group your tabs share in the user's Chrome: " +
+      '2-4 words on what you are doing, like "Aetna benefits" or "Checkout bug repro". ' +
+      "Pass it on your first call that opens a page; pass it again to rename the group."
+  );
 
 export function buildServer(state: BrowserState): McpServer {
   const server = new McpServer({ name: "dev-browser", version: "0.0.1" });
@@ -366,7 +388,7 @@ export function buildServer(state: BrowserState): McpServer {
 
   tool(
     "tabs_context",
-    "List the current browser context: mode, named pages in this session, and every open browser tab.",
+    "List the current browser context: mode, this session's tab group name (null until you name it), named pages in this session, and every open browser tab.",
     {},
     async () => {
       const client = await getClient(state);
@@ -379,6 +401,7 @@ export function buildServer(state: BrowserState): McpServer {
         mode: info.mode,
         extensionConnected: info.extensionConnected,
         session: state.session,
+        tabGroup: state.tabGroup ?? null,
         namedPages: pages,
         allTabs: targets,
       });
@@ -398,9 +421,11 @@ export function buildServer(state: BrowserState): McpServer {
           'If the page shows a "Leave site?" dialog for unsaved changes, discard them and navigate anyway (default false)'
         ),
       page: pageParam,
+      tab_group: tabGroupParam,
     },
     async (args) => {
       const client = await getClient(state);
+      await applyTabGroup(state, client, args);
       const p = await client.page(pageName(args));
       const url = String(args.url);
       const force = args.force === true;
@@ -700,9 +725,10 @@ export function buildServer(state: BrowserState): McpServer {
   tool(
     "tabs_create",
     "Create (or get) a named page/tab.",
-    { page: z.string().describe("Name for the new page") },
+    { page: z.string().describe("Name for the new page"), tab_group: tabGroupParam },
     async (args) => {
       const client = await getClient(state);
+      await applyTabGroup(state, client, args);
       const p = await client.page(String(args.page));
       return textResult({ success: true, page: args.page, url: p.url() });
     }

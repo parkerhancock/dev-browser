@@ -356,7 +356,7 @@ describe("Relay Server", () => {
     });
 
     test("POST /pages opens the tab in the session's labeled tab group", async () => {
-      const session = "group-session-ab12";
+      const session = "group-session";
       await fetchJson(port, "/pages", {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-DevBrowser-Label": "my%20project" },
@@ -368,7 +368,49 @@ describe("Relay Server", () => {
         .forwardedCdpCommands()
         .filter((c) => c.method === "Target.createTarget")
         .at(-1);
-      expect(create?.params?.group).toEqual({ key: session, title: "my project ab12" });
+      expect(create?.params?.group).toEqual({ key: session, title: "my project" });
+    });
+
+    test("PUT /sessions/:id/group names new tabs' group and renames the existing one", async () => {
+      const session = "named-group-session";
+      await fetchJson(port, "/pages", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: "first" }),
+        session,
+      });
+
+      const renamed = await fetchJson(port, `/sessions/${session}/group`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: "  Aetna benefits\n" }),
+      });
+      expect(renamed.body.title).toBe("Aetna benefits");
+      expect(ext.received.filter((m) => m.method === "renameGroup").at(-1)?.params).toEqual({
+        key: session,
+        title: "Aetna benefits",
+      });
+
+      await fetchJson(port, "/pages", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: "second" }),
+        session,
+      });
+      const create = ext
+        .forwardedCdpCommands()
+        .filter((c) => c.method === "Target.createTarget")
+        .at(-1);
+      expect(create?.params?.group).toEqual({ key: session, title: "Aetna benefits" });
+    });
+
+    test("PUT /sessions/:id/group rejects an empty title", async () => {
+      const { status } = await fetchJson(port, `/sessions/any-session/group`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: "  " }),
+      });
+      expect(status).toBe(400);
     });
 
     test("DELETE /sessions/:id?releasePinned=1 leaves pinned tabs open", async () => {

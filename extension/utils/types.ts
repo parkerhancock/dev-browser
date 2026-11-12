@@ -52,12 +52,22 @@ export interface ReleaseTabMessage {
   };
 }
 
+export interface RenameGroupMessage {
+  id: number;
+  method: "renameGroup";
+  params: {
+    key: string;
+    title: string;
+  };
+}
+
 export type ExtensionCommandMessage =
   | ForwardCDPCommandMessage
   | GetAvailableTargetsMessage
   | AttachToTabMessage
   | CloseTabMessage
-  | ReleaseTabMessage;
+  | ReleaseTabMessage
+  | RenameGroupMessage;
 
 // Messages from extension to relay (responses)
 export interface ExtensionResponseMessage {

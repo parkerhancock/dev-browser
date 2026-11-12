@@ -3,10 +3,11 @@
  */
 
 import type { Hono } from "hono";
+import { cleanGroupTitle } from "../types.js";
 import type { RelayContext } from "./context.js";
 
 export function registerTabRoutes(app: Hono, ctx: RelayContext): void {
-  const { live, sendToExtension, sessions, endSession, log } = ctx;
+  const { live, sendToExtension, sessions, getOrCreateSession, endSession, log } = ctx;
 
   // ============================================================================
   // Tab Management Endpoints (bypass session isolation for management)
@@ -91,6 +92,33 @@ export function registerTabRoutes(app: Hono, ctx: RelayContext): void {
       released: released.length > 0 ? released : undefined,
       errors: errors.length > 0 ? errors : undefined,
     });
+  });
+
+  // Name (or rename) a session's tab group. New tabs take the name; an
+  // existing group is renamed in place.
+  app.put("/sessions/:sessionId/group", async (c) => {
+    const sessionId = c.req.param("sessionId");
+    const body = (await c.req.json().catch(() => ({}))) as { title?: unknown };
+    const title = typeof body.title === "string" ? cleanGroupTitle(body.title) : undefined;
+    if (!title) return c.json({ error: "title must be a non-empty string" }, 400);
+
+    const sessionState = getOrCreateSession(sessionId);
+    sessionState.groupName = title;
+
+    if (live.extensionWs && sessionState.pageNames.size > 0) {
+      try {
+        await sendToExtension({
+          method: "renameGroup",
+          params: { key: sessionId, title },
+          timeout: 5000,
+        });
+      } catch (err) {
+        log(`Failed to rename tab group for ${sessionId}: ${err}`);
+      }
+    }
+
+    log(`PUT /sessions/${sessionId}/group - ${title}`);
+    return c.json({ title });
   });
 
   // Close all tabs matching a URL pattern

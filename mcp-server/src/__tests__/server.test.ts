@@ -88,6 +88,36 @@ describe("dev-browser MCP server", () => {
     }
   });
 
+  test("tab_group names the session's tab group before the page opens", async () => {
+    const calls: string[] = [];
+    const state = createState({ mode: "extension", session: "mcp-test" });
+    const browser = {
+      setTabGroup: vi.fn(async (title: string) => void calls.push(`group:${title}`)),
+      page: vi.fn(
+        async (name: string) => (calls.push(`page:${name}`), { url: () => "about:blank" })
+      ),
+      getServerInfo: vi.fn(async () => ({ mode: "extension", extensionConnected: true })),
+      list: vi.fn(async () => ["work"]),
+      allTargets: vi.fn(async () => []),
+    };
+    state.clients.set("extension", browser as unknown as DevBrowserClient);
+    const client = await connectedClient(state);
+
+    await client.callTool({
+      name: "tabs_create",
+      arguments: { page: "work", tab_group: "Aetna benefits" },
+    });
+    await client.callTool({
+      name: "tabs_create",
+      arguments: { page: "work", tab_group: "Aetna benefits" },
+    });
+    const context = await client.callTool({ name: "tabs_context", arguments: {} });
+
+    expect(calls).toEqual(["group:Aetna benefits", "page:work", "page:work"]);
+    const text = (context.content as Array<{ text: string }>)[0]!.text;
+    expect(JSON.parse(text).tabGroup).toBe("Aetna benefits");
+  });
+
   test("list_connected_browsers works without any server running", async () => {
     const client = await connectedClient();
     const result = await client.callTool({

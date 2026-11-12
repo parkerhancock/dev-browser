@@ -6,7 +6,7 @@
   "tools": [
     {
       "name": "tabs_context",
-      "description": "List the current browser context: mode, named pages in this session, and every open browser tab.",
+      "description": "List the current browser context: mode, this session's tab group name (null until you name it), named pages in this session, and every open browser tab.",
       "inputSchema": {
         "type": "object",
         "properties": {},
@@ -30,6 +30,10 @@
           "page": {
             "type": "string",
             "description": "Named page/tab to act on (default: \"main\")"
+          },
+          "tab_group": {
+            "type": "string",
+            "description": "In extension mode, name the tab group your tabs share in the user's Chrome: 2-4 words on what you are doing, like \"Aetna benefits\" or \"Checkout bug repro\". Pass it on your first call that opens a page; pass it again to rename the group."
           }
         },
         "required": ["url"],
@@ -369,6 +373,10 @@
           "page": {
             "type": "string",
             "description": "Name for the new page"
+          },
+          "tab_group": {
+            "type": "string",
+            "description": "In extension mode, name the tab group your tabs share in the user's Chrome: 2-4 words on what you are doing, like \"Aetna benefits\" or \"Checkout bug repro\". Pass it on your first call that opens a page; pass it again to rename the group."
           }
         },
         "required": ["page"],

@@ -294,12 +294,10 @@ export function createRelayContext(options: RelayOptions) {
     return { closed, released, errors };
   }
 
-  /** The tab group a session's new tabs join: its label plus a short id suffix. */
+  /** The tab group a session's new tabs join: the agent's name for it, else its folder. */
   function tabGroupFor(agentSession: string): { key: string; title: string } {
-    const label = sessions.get(agentSession)?.label ?? "dev-browser";
-    if (agentSession === "default") return { key: agentSession, title: label };
-    const suffix = agentSession.replace(/[^A-Za-z0-9]/g, "").slice(-4);
-    return { key: agentSession, title: `${label} ${suffix}` };
+    const session = sessions.get(agentSession);
+    return { key: agentSession, title: session?.groupName ?? session?.label ?? "dev-browser" };
   }
 
   const idleCleanupInterval = setInterval(() => {

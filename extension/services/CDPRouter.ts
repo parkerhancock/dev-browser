@@ -12,6 +12,9 @@ export interface TabGroupSpec {
   title: string;
 }
 
+/** chrome.storage.session key holding the session -> tab group id map. */
+const GROUP_IDS_KEY = "tabGroupIds";
+
 /** Tabs created without a session (older relays) share one group. */
 const DEFAULT_GROUP: TabGroupSpec = { key: "default", title: "Dev Browser" };
 
@@ -51,6 +54,7 @@ export class CDPRouter {
   private logger: Logger;
   private tabManager: TabManager;
   private groupIds = new Map<string, number>(); // session key -> tab group id
+  private groupIdsLoaded?: Promise<void>;
   private groupOperations = new Map<string, Promise<void>>();
 
   constructor(deps: CDPRouterDeps) {
@@ -76,23 +80,47 @@ export class CDPRouter {
     return current;
   }
 
-  /** The session's existing tab group, if it still exists. */
-  private async findGroup(spec: TabGroupSpec): Promise<chrome.tabGroups.TabGroup | undefined> {
-    const cachedId = this.groupIds.get(spec.key);
-    if (cachedId !== undefined) {
-      try {
-        return await chrome.tabGroups.get(cachedId);
-      } catch {
-        // The group closed, or disappeared while the service worker was suspended.
-        this.groupIds.delete(spec.key);
-      }
-    }
+  /** Load the session -> group map, which survives service-worker restarts. */
+  private loadGroupIds(): Promise<void> {
+    this.groupIdsLoaded ??= chrome.storage.session
+      .get(GROUP_IDS_KEY)
+      .then((stored) => {
+        const saved = (stored[GROUP_IDS_KEY] ?? {}) as Record<string, number>;
+        for (const [key, id] of Object.entries(saved)) {
+          if (!this.groupIds.has(key)) this.groupIds.set(key, id);
+        }
+      })
+      .catch((err) => this.logger.debug("Could not load tab group ids:", err));
+    return this.groupIdsLoaded;
+  }
 
-    // After a service-worker restart the cache is empty; the title names the session.
-    const groups = await chrome.tabGroups.query({ title: spec.title });
-    const match = groups.find((group) => group.title === spec.title);
-    if (match) this.groupIds.set(spec.key, match.id);
-    return match;
+  private async saveGroupIds(): Promise<void> {
+    await chrome.storage.session
+      .set({ [GROUP_IDS_KEY]: Object.fromEntries(this.groupIds) })
+      .catch((err) => this.logger.debug("Could not save tab group ids:", err));
+  }
+
+  /** The session's tab group, if it still exists. */
+  private async findGroup(key: string): Promise<chrome.tabGroups.TabGroup | undefined> {
+    await this.loadGroupIds();
+    const id = this.groupIds.get(key);
+    if (id === undefined) return undefined;
+    try {
+      return await chrome.tabGroups.get(id);
+    } catch {
+      // The person closed the group, or Chrome restarted and renumbered groups
+      this.groupIds.delete(key);
+      await this.saveGroupIds();
+      return undefined;
+    }
+  }
+
+  /** Rename the session's tab group, if it has one. */
+  private renameGroup(key: string, title: string): Promise<void> {
+    return this.runGroupOperation(key, async () => {
+      const group = await this.findGroup(key);
+      if (group) await chrome.tabGroups.update(group.id, { title });
+    });
   }
 
   /**
@@ -101,7 +129,7 @@ export class CDPRouter {
    */
   private createGroupedTab(url: string, spec: TabGroupSpec): Promise<chrome.tabs.Tab> {
     return this.runGroupOperation(spec.key, async () => {
-      const group = await this.findGroup(spec);
+      const group = await this.findGroup(spec.key);
       const tab = await chrome.tabs.create({
         url,
         active: false,
@@ -119,6 +147,7 @@ export class CDPRouter {
             color: groupColor(spec.key),
           });
           this.groupIds.set(spec.key, groupId);
+          await this.saveGroupIds();
         }
       } catch (err) {
         // A tab that can't be grouped still works; don't fail the request over it.
@@ -168,6 +197,10 @@ export class CDPRouter {
         if (this.tabManager.has(msg.params.tabId)) {
           this.tabManager.detach(msg.params.tabId, true);
         }
+        return { success: true };
+
+      case "renameGroup":
+        await this.renameGroup(msg.params.key, msg.params.title);
         return { success: true };
 
       case "forwardCDPCommand":

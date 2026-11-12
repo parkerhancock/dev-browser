@@ -480,6 +480,9 @@ export async function connectStandaloneMode(
 
     pin: (name: string, pinned = true) => fetchPin(serverUrl, sessionHeaders, name, pinned),
 
+    // Standalone pages open in their own windows; there are no tab groups
+    setTabGroup: async () => {},
+
     async disconnect(): Promise<void> {
       for (const name of [...harRecorders.keys()]) {
         await discardHarRecording(name);

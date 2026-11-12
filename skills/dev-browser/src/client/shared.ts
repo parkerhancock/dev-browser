@@ -98,6 +98,22 @@ export async function fetchPin(
   }
 }
 
+export async function fetchSetTabGroup(
+  serverUrl: string,
+  sessionHeaders: Record<string, string>,
+  session: string,
+  title: string
+): Promise<void> {
+  const res = await fetch(`${serverUrl}/sessions/${encodeURIComponent(session)}/group`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", ...sessionHeaders },
+    body: JSON.stringify({ title }),
+  });
+  if (!res.ok) {
+    throw new Error(`Failed to name the tab group: ${await res.text()}`);
+  }
+}
+
 export async function deleteSessionPages(
   serverUrl: string,
   sessionHeaders: Record<string, string>,

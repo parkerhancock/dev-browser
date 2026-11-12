@@ -10,21 +10,24 @@ export const TAB_LIMIT = 5;
 /** Short label naming the agent's tab group, URI-encoded (e.g. the project folder). */
 export const LABEL_HEADER = "X-DevBrowser-Label";
 
+/** Strip control characters and trim a name to fit a tab group title. */
+export function cleanGroupTitle(raw: string): string | undefined {
+  const title = raw
+    .replace(/[\u0000-\u001f\u007f]/g, "")
+    .trim()
+    .slice(0, 32);
+  return title || undefined;
+}
+
 /** The session label from a request, decoded and trimmed to fit a tab group title. */
 export function getSessionLabel(c: Context): string | undefined {
   const raw = c.req.header(LABEL_HEADER);
   if (!raw) return undefined;
-  let label: string;
   try {
-    label = decodeURIComponent(raw);
+    return cleanGroupTitle(decodeURIComponent(raw));
   } catch {
     return undefined;
   }
-  label = label
-    .replace(/[\u0000-\u001f\u007f]/g, "")
-    .trim()
-    .slice(0, 24);
-  return label || undefined;
 }
 
 /** Extract the agent session ID from a Hono request context (header first, then `session` query param). */

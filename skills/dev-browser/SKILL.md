@@ -718,7 +718,7 @@ await client.cleanup("^about:blank$"); // Close by URL pattern (extension mode)
 
 ### Session End
 
-In extension mode each agent session's tabs share one Chrome tab group. The plugin's SessionEnd hook ends the session on the relay when Claude Code exits or clears: unpinned tabs close, and pinned tabs stay open outside the group. A session whose pages see no activity for an hour ends the same way (`DEV_BROWSER_SESSION_IDLE_MS`), which covers agents that crash or run without the plugin. Scripts end a session themselves with `client.closeAll()`, which closes pinned tabs too.
+In extension mode each agent session's tabs share one Chrome tab group. Name it for your task before opening pages, so the user can tell your tabs apart: `await client.setTabGroup("Aetna benefits")` (MCP: the `tab_group` parameter on `navigate` or `tabs_create`). Call it again to rename the group. Unnamed groups carry the project folder's name. The plugin's SessionEnd hook ends the session on the relay when Claude Code exits or clears: unpinned tabs close, and pinned tabs stay open outside the group. A session whose pages see no activity for an hour ends the same way (`DEV_BROWSER_SESSION_IDLE_MS`), which covers agents that crash or run without the plugin. Scripts end a session themselves with `client.closeAll()`, which closes pinned tabs too.
 
 ### Subagent Cleanup Pattern
 

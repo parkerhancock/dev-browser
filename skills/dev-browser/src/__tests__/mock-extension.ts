@@ -194,7 +194,7 @@ export class MockExtension {
       return;
     }
 
-    if (msg.method === "releaseTab") {
+    if (msg.method === "releaseTab" || msg.method === "renameGroup") {
       this.ws.send(JSON.stringify({ id: msg.id, result: { success: true } }));
       return;
     }

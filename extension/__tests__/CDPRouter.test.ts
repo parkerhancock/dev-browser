@@ -105,17 +105,14 @@ describe("CDPRouter", () => {
         groups.push(group);
         return group.id;
       });
-      mockTabGroupsUpdate.mockImplementation(async (id: number, { title }: { title: string }) => {
-        groups.find((group) => group.id === id)!.title = title;
+      mockTabGroupsUpdate.mockImplementation(async (id: number, { title }: { title?: string }) => {
+        if (title !== undefined) groups.find((group) => group.id === id)!.title = title;
       });
       mockTabGroupsGet.mockImplementation(async (id: number) => {
         const group = groups.find((g) => g.id === id);
         if (!group) throw new Error("No group");
         return group;
       });
-      mockTabGroupsQuery.mockImplementation(async ({ title }: { title: string }) =>
-        groups.filter((group) => group.title === title)
-      );
       // Skip debugger attachment; these tests cover grouping only
       vi.spyOn(tabManager, "attach").mockResolvedValue({
         targetId: "t",
@@ -159,17 +156,44 @@ describe("CDPRouter", () => {
       expect(mockTabsGroup).toHaveBeenLastCalledWith({ tabIds: [2], groupId: 100 });
     });
 
-    it("finds the session's group by title after a service-worker restart", async () => {
-      groups.push({ id: 55, windowId: 3, title: "proj ab12" });
+    it("keeps using the session's group after a service-worker restart", async () => {
+      await createTab("s1", "Aetna benefits");
 
-      await createTab("s1", "proj ab12");
+      // A new router has an empty in-memory map; session storage still has the group
+      cdpRouter = new CDPRouter({ logger: mockLogger, tabManager });
+      await createTab("s1", "Aetna benefits");
 
-      expect(mockTabsCreate).toHaveBeenCalledWith({
-        url: "about:blank",
-        active: false,
-        windowId: 3,
-      });
-      expect(mockTabsGroup).toHaveBeenCalledWith({ tabIds: [1], groupId: 55 });
+      expect(groups).toHaveLength(1);
+      expect(mockTabsGroup).toHaveBeenLastCalledWith({ tabIds: [2], groupId: 100 });
+    });
+
+    it("never joins another session's group that shares its title", async () => {
+      await createTab("s1", "dev-browser");
+      await createTab("s2", "dev-browser");
+
+      expect(groups).toHaveLength(2);
+    });
+
+    it("renames the session's group", async () => {
+      await createTab("s1", "dev-browser");
+
+      await cdpRouter.handleCommand({
+        id: 1,
+        method: "renameGroup",
+        params: { key: "s1", title: "Aetna benefits" },
+      } as ExtensionCommandMessage);
+
+      expect(mockTabGroupsUpdate).toHaveBeenLastCalledWith(100, { title: "Aetna benefits" });
+    });
+
+    it("ignores a rename for a session without a group", async () => {
+      await cdpRouter.handleCommand({
+        id: 1,
+        method: "renameGroup",
+        params: { key: "nobody", title: "x" },
+      } as ExtensionCommandMessage);
+
+      expect(mockTabGroupsUpdate).not.toHaveBeenCalled();
     });
 
     it("releases a tab by ungrouping it and detaching the debugger", async () => {
