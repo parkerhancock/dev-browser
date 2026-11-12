@@ -88,8 +88,15 @@ export function createRelayContext(options: RelayOptions) {
   // cleaned up explicitly (close/closeAll/session end). Override via
   // DEV_BROWSER_IDLE_TIMEOUT_MS env var.
   const IDLE_TIMEOUT_MS = parseInt(process.env.DEV_BROWSER_IDLE_TIMEOUT_MS ?? "", 10) || 60 * 1000;
-  // Check every 5 seconds (or faster when the timeout itself is shorter, e.g. in tests)
-  const IDLE_CHECK_INTERVAL_MS = Math.min(5 * 1000, IDLE_TIMEOUT_MS);
+  // A session ends when its agent's SessionEnd hook calls DELETE /sessions/:id,
+  // or when none of its pages has seen activity for this long (an agent that
+  // crashes or gets killed never runs the hook). Pinned tabs stay open either
+  // way. Override via DEV_BROWSER_SESSION_IDLE_MS.
+  const SESSION_IDLE_MS =
+    parseInt(process.env.DEV_BROWSER_SESSION_IDLE_MS ?? "", 10) || 60 * 60 * 1000;
+
+  // Check every 5 seconds (or faster when a timeout itself is shorter, e.g. in tests)
+  const IDLE_CHECK_INTERVAL_MS = Math.min(5 * 1000, IDLE_TIMEOUT_MS, SESSION_IDLE_MS);
 
   // PDF storage for large printToPDF responses
   const pdfDir = join(homedir(), ".dev-browser", "pdfs");
@@ -223,7 +230,83 @@ export function createRelayContext(options: RelayOptions) {
     }
   }
 
-  const idleCleanupInterval = setInterval(cleanupIdlePages, IDLE_CHECK_INTERVAL_MS);
+  // End sessions none of whose pages has seen activity for SESSION_IDLE_MS.
+  async function expireIdleSessions(): Promise<void> {
+    if (!live.extensionWs || live.isRecovering) return;
+    const threshold = Date.now() - SESSION_IDLE_MS;
+
+    for (const [agentSession, session] of Array.from(sessions)) {
+      let lastActivity = 0;
+      for (const pageName of session.pageNames) {
+        const cdpSessionId = namedPages.get(`${agentSession}:${pageName}`);
+        const target = cdpSessionId ? connectedTargets.get(cdpSessionId) : undefined;
+        if (target) lastActivity = Math.max(lastActivity, target.lastActivity);
+      }
+      if (lastActivity === 0 || lastActivity >= threshold) continue;
+
+      log(
+        `Session ${agentSession} idle for ${Math.round((Date.now() - lastActivity) / 60000)} min - ending it`
+      );
+      await endSession(agentSession, { releasePinned: true });
+    }
+  }
+
+  /**
+   * End an agent session: close its tabs and forget its pages. With
+   * releasePinned, pinned tabs stay open for the person using them, leave the
+   * session's tab group, and are no longer debugged.
+   */
+  async function endSession(
+    agentSession: string,
+    { releasePinned = false }: { releasePinned?: boolean } = {}
+  ): Promise<{ closed: string[]; released: string[]; errors: string[] }> {
+    const prefix = `${agentSession}:`;
+    const tabIds = new Map(
+      live.persistedPages.filter((p) => p.key.startsWith(prefix)).map((p) => [p.key, p.tabId])
+    );
+    const evicted = registry.evictSession(agentSession);
+    const closed: string[] = [];
+    const released: string[] = [];
+    const errors: string[] = [];
+
+    for (const { pageKey, pageName, target } of evicted) {
+      if (!target) continue;
+      const tabId = tabIds.get(pageKey);
+      try {
+        if (releasePinned && target.pinned && tabId !== undefined) {
+          await sendToExtension({ method: "releaseTab", params: { tabId }, timeout: 5000 });
+          released.push(pageName);
+        } else {
+          await sendToExtension({
+            method: "forwardCDPCommand",
+            params: { method: "Target.closeTarget", params: { targetId: target.targetId } },
+            timeout: 5000,
+          });
+          closed.push(pageName);
+        }
+      } catch (err) {
+        errors.push(`${pageName}: ${err}`);
+      }
+    }
+
+    live.persistedPages = live.persistedPages.filter((p) => !p.key.startsWith(prefix));
+    savePersistedPages(live.persistedPages);
+    return { closed, released, errors };
+  }
+
+  /** The tab group a session's new tabs join: its label plus a short id suffix. */
+  function tabGroupFor(agentSession: string): { key: string; title: string } {
+    const label = sessions.get(agentSession)?.label ?? "dev-browser";
+    if (agentSession === "default") return { key: agentSession, title: label };
+    const suffix = agentSession.replace(/[^A-Za-z0-9]/g, "").slice(-4);
+    return { key: agentSession, title: `${label} ${suffix}` };
+  }
+
+  const idleCleanupInterval = setInterval(() => {
+    cleanupIdlePages()
+      .then(expireIdleSessions)
+      .catch((err) => log(`Idle cleanup failed: ${err}`));
+  }, IDLE_CHECK_INTERVAL_MS);
 
   // Persistence for page mappings (survives extension disconnects)
   live.persistedPages = loadPersistedPages();
@@ -581,6 +664,12 @@ export function createRelayContext(options: RelayOptions) {
       }
 
       case "Target.createTarget":
+        // Forward to extension, into the session's tab group
+        return await sendToExtension({
+          method: "forwardCDPCommand",
+          params: { method, params: { ...params, group: tabGroupFor(agentSession) } },
+        });
+
       case "Target.closeTarget":
         // Forward to extension
         return await sendToExtension({
@@ -699,6 +788,10 @@ export function createRelayContext(options: RelayOptions) {
     handleHarNetworkEvent,
     cleanupIdlePages,
     idleCleanupInterval,
+    SESSION_IDLE_MS,
+    expireIdleSessions,
+    endSession,
+    tabGroupFor,
     debouncedSave,
     extensionPendingRequests,
     getOrCreateSession,

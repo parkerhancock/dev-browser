@@ -3,11 +3,10 @@
  */
 
 import type { Hono } from "hono";
-import { savePersistedPages } from "../persistence.js";
 import type { RelayContext } from "./context.js";
 
 export function registerTabRoutes(app: Hono, ctx: RelayContext): void {
-  const { registry, live, sendToExtension, sessions, log } = ctx;
+  const { live, sendToExtension, sessions, endSession, log } = ctx;
 
   // ============================================================================
   // Tab Management Endpoints (bypass session isolation for management)
@@ -64,7 +63,8 @@ export function registerTabRoutes(app: Hono, ctx: RelayContext): void {
     }
   });
 
-  // Close all pages for a session (for SessionEnd hook integration)
+  // End a session: close its pages (client closeAll, and the plugin's
+  // SessionEnd hook). ?releasePinned=1 leaves pinned tabs open for the person.
   app.delete("/sessions/:sessionId", async (c) => {
     const sessionId = c.req.param("sessionId");
     const sessionState = sessions.get(sessionId);
@@ -78,38 +78,17 @@ export function registerTabRoutes(app: Hono, ctx: RelayContext): void {
       return c.json({ error: "Extension not connected" }, 503);
     }
 
-    // Atomically remove all pages from registry (returns info for tab closing)
-    const evicted = registry.evictSession(sessionId);
-
-    const closedPages: string[] = [];
-    const errors: string[] = [];
-
-    // Close each tab via extension
-    for (const { pageName, target } of evicted) {
-      if (target) {
-        try {
-          await sendToExtension({
-            method: "forwardCDPCommand",
-            params: { method: "Target.closeTarget", params: { targetId: target.targetId } },
-            timeout: 5000,
-          });
-          closedPages.push(pageName);
-        } catch (err) {
-          errors.push(`${pageName}: ${err}`);
-        }
-      }
-    }
-
-    // Remove persistence entries for this session
-    live.persistedPages = live.persistedPages.filter((p) => !p.key.startsWith(`${sessionId}:`));
-    savePersistedPages(live.persistedPages);
+    const releasePinned = c.req.query("releasePinned") === "1";
+    const { closed, released, errors } = await endSession(sessionId, { releasePinned });
 
     log(
-      `DELETE /sessions/${sessionId} - closed ${closedPages.length} pages: ${closedPages.join(", ")}`
+      `DELETE /sessions/${sessionId} - closed ${closed.length} pages: ${closed.join(", ")}` +
+        (released.length > 0 ? `; released ${released.join(", ")}` : "")
     );
     return c.json({
-      closed: closedPages.length,
-      pages: closedPages,
+      closed: closed.length,
+      pages: closed,
+      released: released.length > 0 ? released : undefined,
       errors: errors.length > 0 ? errors : undefined,
     });
   });

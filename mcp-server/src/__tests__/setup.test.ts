@@ -6,6 +6,8 @@
  */
 
 import { execFile, spawn } from "node:child_process";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import {
   accessSync,
   constants,
@@ -208,4 +210,53 @@ describe("SessionStart hook", () => {
     expect(lstatSync(join(dir, "app", "current")).isSymbolicLink()).toBe(true);
     expect(readlinkSync(join(dir, "app", "current"))).toBe(realpathSync(checkout));
   }, 60000);
+});
+
+describe("SessionEnd hook", () => {
+  test("ends the session on the relay and keeps pinned tabs", async () => {
+    const requests: Array<{ method?: string; url?: string; token?: string | string[] }> = [];
+    const relay = createServer((req, res) => {
+      requests.push({ method: req.method, url: req.url, token: req.headers["x-devbrowser-token"] });
+      res.end("{}");
+    });
+    await new Promise<void>((resolve) => relay.listen(0, "127.0.0.1", resolve));
+    const { port } = relay.address() as AddressInfo;
+
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const hook = spawn(process.execPath, [join(REPO, "hooks", "session-end.mjs")], {
+          env: {
+            PATH: process.env.PATH,
+            DEV_BROWSER_RELAY_PORT: String(port),
+            DEV_BROWSER_TOKEN: "test-token",
+          },
+          stdio: ["pipe", "ignore", "ignore"],
+        });
+        hook.stdin.end(JSON.stringify({ session_id: "abc-123", reason: "prompt_input_exit" }));
+        hook.on("exit", (code) =>
+          code === 0 ? resolve() : reject(new Error(`hook exited ${code}`))
+        );
+      });
+    } finally {
+      relay.close();
+    }
+
+    expect(requests).toEqual([
+      { method: "DELETE", url: "/sessions/abc-123?releasePinned=1", token: "test-token" },
+    ]);
+  });
+
+  test("exits quietly when no relay is running", async () => {
+    // A port that was just free has nothing listening on it
+    const probe = createServer();
+    await new Promise<void>((resolve) => probe.listen(0, "127.0.0.1", resolve));
+    const { port } = probe.address() as AddressInfo;
+    await new Promise((resolve) => probe.close(resolve));
+
+    const hook = run(process.execPath, [join(REPO, "hooks", "session-end.mjs")], {
+      env: { PATH: process.env.PATH, DEV_BROWSER_RELAY_PORT: String(port), DEV_BROWSER_TOKEN: "t" },
+    });
+    hook.child.stdin?.end(JSON.stringify({ session_id: "abc-123" }));
+    await hook;
+  }, 15000);
 });

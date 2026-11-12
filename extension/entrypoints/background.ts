@@ -195,10 +195,6 @@ export default defineBackground(() => {
 
   logger.log("Extension initialized");
 
-  cdpRouter.reconcileDevBrowserGroups().catch((err) => {
-    logger.debug("Error reconciling Dev Browser tab groups:", err);
-  });
-
   // Initialize from stored state
   stateManager
     .getState()

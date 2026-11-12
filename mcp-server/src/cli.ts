@@ -18,6 +18,7 @@
  * start/stop/restart/status run the servers in the background (see daemon.ts).
  */
 
+import { basename } from "node:path";
 import { parseArgs } from "node:util";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { createServer as createHttpServer } from "node:http";
@@ -154,6 +155,8 @@ async function main(): Promise<void> {
         const state = createState({
           mode: values.mode as BrowserMode | undefined,
           session: values.session,
+          // stdio runs in the agent's own folder
+          label: basename(process.cwd()),
         });
         const server = buildServer(state);
         await server.connect(new StdioServerTransport());

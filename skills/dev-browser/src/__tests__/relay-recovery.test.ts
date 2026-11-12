@@ -245,6 +245,54 @@ describe("Relay Server - Idle Cleanup", () => {
 });
 
 // ============================================================================
+// Session expiry: a session idle past DEV_BROWSER_SESSION_IDLE_MS ends
+// ============================================================================
+
+describe("Relay Server - Session Expiry", () => {
+  let relay: RelayServer;
+  let port: number;
+  let ext: MockExtension;
+
+  beforeAll(async () => {
+    process.env.DEV_BROWSER_SESSION_IDLE_MS = "500";
+    port = randomPort();
+    relay = await serveRelay({ port, host: "127.0.0.1" });
+    ext = new MockExtension(port);
+    await ext.connect();
+    await new Promise((r) => setTimeout(r, 600));
+  });
+
+  afterAll(async () => {
+    delete process.env.DEV_BROWSER_SESSION_IDLE_MS;
+    await ext.disconnect();
+    await relay.stop();
+  });
+
+  test("closes an idle session's tabs and releases its pinned ones", async () => {
+    const session = "expiring-session";
+    const scratch = await fetchJson(port, "/pages", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "scratch" }),
+      session,
+    });
+    await fetchJson(port, "/pages", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "shared", pinned: true }),
+      session,
+    });
+
+    await new Promise((r) => setTimeout(r, 1500));
+
+    expect(closedTargetIds(ext)).toContain(scratch.body.targetId);
+    expect(ext.received.filter((m) => m.method === "releaseTab")).toHaveLength(1);
+    const { body } = await fetchJson(port, "/pages", { session });
+    expect(body.pages).toEqual([]);
+  });
+});
+
+// ============================================================================
 // Rebind, don't orphan: POST /pages reuses a surviving tab
 // ============================================================================
 

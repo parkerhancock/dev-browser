@@ -5,7 +5,13 @@
 import type { Hono } from "hono";
 import { savePersistedPages } from "../persistence.js";
 import type { TargetInfo } from "../relay-registry.js";
-import { getAgentSession, validatePageName, TAB_WARNING_THRESHOLD, TAB_LIMIT } from "../types.js";
+import {
+  getAgentSession,
+  getSessionLabel,
+  validatePageName,
+  TAB_WARNING_THRESHOLD,
+  TAB_LIMIT,
+} from "../types.js";
 import type { RelayContext } from "./context.js";
 
 export function registerPageRoutes(app: Hono, ctx: RelayContext): void {
@@ -17,6 +23,7 @@ export function registerPageRoutes(app: Hono, ctx: RelayContext): void {
     live,
     debouncedSave,
     getOrCreateSession,
+    tabGroupFor,
     sendToExtension,
     connectedTargets,
     namedPages,
@@ -103,6 +110,7 @@ export function registerPageRoutes(app: Hono, ctx: RelayContext): void {
 
     // Ensure session exists
     const sessionState = getOrCreateSession(agentSession);
+    sessionState.label = getSessionLabel(c) ?? sessionState.label;
 
     const sessionPageCount = sessionState.pageNames.size;
 
@@ -283,7 +291,10 @@ export function registerPageRoutes(app: Hono, ctx: RelayContext): void {
     try {
       const result = (await sendToExtension({
         method: "forwardCDPCommand",
-        params: { method: "Target.createTarget", params: { url: "about:blank" } },
+        params: {
+          method: "Target.createTarget",
+          params: { url: "about:blank", group: tabGroupFor(agentSession) },
+        },
         timeout: 60000,
       })) as { targetId: string; tabId: number };
 

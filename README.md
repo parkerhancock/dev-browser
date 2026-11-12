@@ -81,7 +81,7 @@ Because the MCP host and the browsers outlive any one agent session, pages persi
 
 Standalone mode is the default. dev-browser launches Chromium (or Chrome or Edge, with `--browser`) with a persistent profile in `~/.dev-browser`, headless unless you ask for a window. Each page opens in its own window, so pages stay visible to their own scripts, and the browser reports a normal user agent, viewport, and pointer. Use it for local development, testing, and public sites.
 
-Extension mode drives tabs in your everyday Chrome, with your cookies and sign-ins. Use it for sites behind a login.
+Extension mode drives tabs in your everyday Chrome, with your cookies and sign-ins. Use it for sites behind a login. Each agent session gets its own tab group, named for the agent's project folder plus a few characters of its session id. When the session ends, or sits idle for an hour, its tabs close; tabs it pinned for you stay open, outside the group.
 
 1. Download `dev-browser-extension-<version>.zip` from the [latest release](https://github.com/parkerhancock/dev-browser/releases/latest).
 2. Unzip it somewhere permanent.
@@ -166,6 +166,7 @@ dev-browser mcp [--http PORT]
 | `DEV_BROWSER_PROXY`                                                        | none                                   | Proxy for the standalone browser (`http://user:pass@host:port` or `socks5://host:port`) |
 | `DEV_BROWSER_DIALOG_POLICY`                                                | `dismiss`                              | How the relay answers JavaScript dialogs: `dismiss`, `accept`, or `ignore`              |
 | `DEV_BROWSER_IDLE_TIMEOUT_MS`                                              | 60000                                  | How long the relay keeps an unnamed, idle tab before closing it                         |
+| `DEV_BROWSER_SESSION_IDLE_MS`                                              | 3600000                                | How long an agent session's tabs can sit idle before the relay ends the session         |
 
 An optional `~/.dev-browser/policy.json` limits navigation to listed domains and raw CDP to a safe set of methods; the [skill guide](skills/dev-browser/SKILL.md#security--policy) describes its fields.
 

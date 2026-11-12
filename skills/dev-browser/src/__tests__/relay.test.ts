@@ -355,6 +355,48 @@ describe("Relay Server", () => {
       expect((list.body.pages as string[]).length).toBe(0);
     });
 
+    test("POST /pages opens the tab in the session's labeled tab group", async () => {
+      const session = "group-session-ab12";
+      await fetchJson(port, "/pages", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-DevBrowser-Label": "my%20project" },
+        body: JSON.stringify({ name: "grouped" }),
+        session,
+      });
+
+      const create = ext
+        .forwardedCdpCommands()
+        .filter((c) => c.method === "Target.createTarget")
+        .at(-1);
+      expect(create?.params?.group).toEqual({ key: session, title: "my project ab12" });
+    });
+
+    test("DELETE /sessions/:id?releasePinned=1 leaves pinned tabs open", async () => {
+      const session = "release-pinned-session";
+      for (const [name, pinned] of [
+        ["scratch", false],
+        ["shared", true],
+      ] as const) {
+        await fetchJson(port, "/pages", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name, pinned }),
+          session,
+        });
+      }
+      const releasesBefore = ext.received.filter((m) => m.method === "releaseTab").length;
+
+      const { body } = await fetchJson(port, `/sessions/${session}?releasePinned=1`, {
+        method: "DELETE",
+      });
+
+      expect(body.pages).toEqual(["scratch"]);
+      expect(body.released).toEqual(["shared"]);
+      expect(ext.received.filter((m) => m.method === "releaseTab").length).toBe(releasesBefore + 1);
+      const list = await fetchJson(port, "/pages", { session });
+      expect(list.body.pages).toEqual([]);
+    });
+
     test("DELETE /sessions/:id for empty session returns 0", async () => {
       const { body } = await fetchJson(port, `/sessions/nonexistent-session`, {
         method: "DELETE",

@@ -89,6 +89,7 @@ Outside the skill, at the repo root:
 - `commands/setup.md` - `/dev-browser:setup` (Claude Code)
 - `.github/workflows/release.yml` - On a `v<version>` tag matching `satchel.yaml`'s version, builds the extension and attaches `dev-browser-extension-<version>.zip` to the GitHub release
 - `hooks/session-start.mjs` - Reruns setup in the background when the plugin's version and the installed runtime's differ
+- `hooks/session-end.mjs` - Ends the agent's session on the relay (`DELETE /sessions/<id>?releasePinned=1`), closing its tabs and tab group
 
 ### Path Aliases
 

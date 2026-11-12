@@ -716,30 +716,9 @@ await client.close("old-page"); // Close by name
 await client.cleanup("^about:blank$"); // Close by URL pattern (extension mode)
 ```
 
-### SessionEnd Hook (Recommended for Agents)
+### Session End
 
-For Claude Code agents, add a SessionEnd hook to `~/.claude/settings.json` for automatic cleanup:
-
-```json
-{
-  "hooks": {
-    "SessionEnd": [
-      {
-        "matcher": "*",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "curl -X DELETE \"http://localhost:9224/sessions/$CLAUDE_SESSION_ID\" 2>/dev/null || true",
-            "timeout": 5
-          }
-        ]
-      }
-    ]
-  }
-}
-```
-
-This closes all pages when your Claude Code session ends, regardless of how it terminates.
+In extension mode each agent session's tabs share one Chrome tab group. The plugin's SessionEnd hook ends the session on the relay when Claude Code exits or clears: unpinned tabs close, and pinned tabs stay open outside the group. A session whose pages see no activity for an hour ends the same way (`DEV_BROWSER_SESSION_IDLE_MS`), which covers agents that crash or run without the plugin. Scripts end a session themselves with `client.closeAll()`, which closes pinned tabs too.
 
 ### Subagent Cleanup Pattern
 

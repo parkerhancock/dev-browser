@@ -44,11 +44,20 @@ export interface CloseTabMessage {
   };
 }
 
+export interface ReleaseTabMessage {
+  id: number;
+  method: "releaseTab";
+  params: {
+    tabId: number;
+  };
+}
+
 export type ExtensionCommandMessage =
   | ForwardCDPCommandMessage
   | GetAvailableTargetsMessage
   | AttachToTabMessage
-  | CloseTabMessage;
+  | CloseTabMessage
+  | ReleaseTabMessage;
 
 // Messages from extension to relay (responses)
 export interface ExtensionResponseMessage {

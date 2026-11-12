@@ -3,6 +3,7 @@
  * implementation lives under ./client/ (extension.ts, standalone.ts).
  */
 
+import { basename } from "node:path";
 import type { ElementHandle } from "patchright";
 import type { ViewportSize } from "./types";
 import type { Page } from "./page.js";
@@ -140,6 +141,12 @@ export interface ConnectOptions {
    * 3. Auto-generated unique session ID
    */
   session?: string;
+  /**
+   * Short label for this session's tab group in extension mode, shown before
+   * a few characters of the session id. Pass "" to send none.
+   * @default the current working directory's folder name
+   */
+  label?: string;
   /**
    * Create an ephemeral session that auto-closes all pages on disconnect.
    * Useful for quick one-off browser tasks that shouldn't persist.
@@ -438,8 +445,10 @@ export async function connect(
   }
 
   // Headers to include session (and the server auth token, when present) in all requests
+  const label = opts.label ?? basename(process.cwd());
   const sessionHeaders: Record<string, string> = {
     "X-DevBrowser-Session": session,
+    ...(label ? { "X-DevBrowser-Label": encodeURIComponent(label) } : {}),
     ...(opts.token ? { [TOKEN_HEADER]: opts.token } : authHeaders()),
   };
 

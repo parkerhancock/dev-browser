@@ -6,6 +6,42 @@ import type { Logger } from "../utils/logger";
 import type { TabManager } from "./TabManager";
 import type { ExtensionCommandMessage, TabInfo, TargetInfo } from "../utils/types";
 
+/** The tab group a new tab joins: one per agent session. */
+export interface TabGroupSpec {
+  key: string;
+  title: string;
+}
+
+/** Tabs created without a session (older relays) share one group. */
+const DEFAULT_GROUP: TabGroupSpec = { key: "default", title: "Dev Browser" };
+
+type GroupColor = `${chrome.tabGroups.Color}`;
+
+const GROUP_COLORS: GroupColor[] = [
+  "blue",
+  "red",
+  "yellow",
+  "green",
+  "pink",
+  "purple",
+  "cyan",
+  "orange",
+];
+
+/** A stable color per session, so neighboring sessions' groups look different. */
+export function groupColor(key: string): GroupColor {
+  let hash = 0;
+  for (const char of key) hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
+  return GROUP_COLORS[hash % GROUP_COLORS.length]!;
+}
+
+function parseGroupSpec(value: unknown): TabGroupSpec {
+  const spec = value as Partial<TabGroupSpec> | undefined;
+  return typeof spec?.key === "string" && typeof spec.title === "string" && spec.title
+    ? { key: spec.key, title: spec.title }
+    : DEFAULT_GROUP;
+}
+
 export interface CDPRouterDeps {
   logger: Logger;
   tabManager: TabManager;
@@ -14,101 +50,81 @@ export interface CDPRouterDeps {
 export class CDPRouter {
   private logger: Logger;
   private tabManager: TabManager;
-  private devBrowserGroupIds = new Map<number, number>();
-  private groupOperations = new Map<number, Promise<void>>();
+  private groupIds = new Map<string, number>(); // session key -> tab group id
+  private groupOperations = new Map<string, Promise<void>>();
 
   constructor(deps: CDPRouterDeps) {
     this.logger = deps.logger;
     this.tabManager = deps.tabManager;
   }
 
-  private async runGroupOperation<T>(windowId: number, operation: () => Promise<T>): Promise<T> {
-    const previous = this.groupOperations.get(windowId) ?? Promise.resolve();
+  private async runGroupOperation<T>(key: string, operation: () => Promise<T>): Promise<T> {
+    const previous = this.groupOperations.get(key) ?? Promise.resolve();
     const current = previous.catch(() => {}).then(operation);
     const settled = current.then(
       () => undefined,
       () => undefined
     );
 
-    this.groupOperations.set(windowId, settled);
+    this.groupOperations.set(key, settled);
     settled.finally(() => {
-      if (this.groupOperations.get(windowId) === settled) {
-        this.groupOperations.delete(windowId);
+      if (this.groupOperations.get(key) === settled) {
+        this.groupOperations.delete(key);
       }
     });
 
     return current;
   }
 
-  private async mergeDevBrowserGroups(windowId: number): Promise<number | undefined> {
-    const groups = await chrome.tabGroups.query({ title: "Dev Browser", windowId });
-    const primary = groups[0];
-    if (!primary) return undefined;
-
-    for (const duplicate of groups.slice(1)) {
-      const tabs = await chrome.tabs.query({ groupId: duplicate.id });
-      const tabIds = tabs.flatMap((tab) => (tab.id === undefined ? [] : [tab.id]));
-      const [firstTabId, ...remainingTabIds] = tabIds;
-      if (firstTabId !== undefined) {
-        await chrome.tabs.group({
-          tabIds: [firstTabId, ...remainingTabIds],
-          groupId: primary.id,
-        });
+  /** The session's existing tab group, if it still exists. */
+  private async findGroup(spec: TabGroupSpec): Promise<chrome.tabGroups.TabGroup | undefined> {
+    const cachedId = this.groupIds.get(spec.key);
+    if (cachedId !== undefined) {
+      try {
+        return await chrome.tabGroups.get(cachedId);
+      } catch {
+        // The group closed, or disappeared while the service worker was suspended.
+        this.groupIds.delete(spec.key);
       }
     }
 
-    this.devBrowserGroupIds.set(windowId, primary.id);
-    return primary.id;
+    // After a service-worker restart the cache is empty; the title names the session.
+    const groups = await chrome.tabGroups.query({ title: spec.title });
+    const match = groups.find((group) => group.title === spec.title);
+    if (match) this.groupIds.set(spec.key, match.id);
+    return match;
   }
 
-  /** Merge duplicate groups left by service-worker restarts or earlier races. */
-  async reconcileDevBrowserGroups(): Promise<void> {
-    const groups = await chrome.tabGroups.query({ title: "Dev Browser" });
-    const windowIds = new Set(groups.map((group) => group.windowId));
-    await Promise.all(
-      Array.from(windowIds, (windowId) =>
-        this.runGroupOperation(windowId, async () => {
-          await this.mergeDevBrowserGroups(windowId);
-        })
-      )
-    );
-  }
-
-  /** Gets or creates the window's "Dev Browser" tab group. */
-  private async getOrCreateDevBrowserGroup(tabId: number): Promise<number> {
-    const tab = await chrome.tabs.get(tabId);
-    if (tab.windowId === undefined) {
-      throw new Error(`Tab ${tabId} has no window`);
-    }
-
-    return this.runGroupOperation(tab.windowId, async () => {
-      const cachedGroupId = this.devBrowserGroupIds.get(tab.windowId);
-      if (cachedGroupId !== undefined) {
-        try {
-          const group = await chrome.tabGroups.get(cachedGroupId);
-          if (group.windowId === tab.windowId) {
-            await chrome.tabs.group({ tabIds: [tabId], groupId: cachedGroupId });
-            return cachedGroupId;
-          }
-        } catch {
-          // The group disappeared while the service worker was suspended.
-        }
-        this.devBrowserGroupIds.delete(tab.windowId);
-      }
-
-      const existingGroupId = await this.mergeDevBrowserGroups(tab.windowId);
-      if (existingGroupId !== undefined) {
-        await chrome.tabs.group({ tabIds: [tabId], groupId: existingGroupId });
-        return existingGroupId;
-      }
-
-      const groupId = await chrome.tabs.group({ tabIds: [tabId] });
-      await chrome.tabGroups.update(groupId, {
-        title: "Dev Browser",
-        color: "blue",
+  /**
+   * Open a tab in the session's tab group. The session's first tab opens in the
+   * focused window; later tabs open in whichever window holds its group.
+   */
+  private createGroupedTab(url: string, spec: TabGroupSpec): Promise<chrome.tabs.Tab> {
+    return this.runGroupOperation(spec.key, async () => {
+      const group = await this.findGroup(spec);
+      const tab = await chrome.tabs.create({
+        url,
+        active: false,
+        ...(group ? { windowId: group.windowId } : {}),
       });
-      this.devBrowserGroupIds.set(tab.windowId, groupId);
-      return groupId;
+      if (tab.id === undefined) throw new Error("Failed to create tab");
+
+      try {
+        if (group) {
+          await chrome.tabs.group({ tabIds: [tab.id], groupId: group.id });
+        } else {
+          const groupId = await chrome.tabs.group({ tabIds: [tab.id] });
+          await chrome.tabGroups.update(groupId, {
+            title: spec.title,
+            color: groupColor(spec.key),
+          });
+          this.groupIds.set(spec.key, groupId);
+        }
+      } catch (err) {
+        // A tab that can't be grouped still works; don't fail the request over it.
+        this.logger.debug(`Could not group tab ${tab.id}:`, err);
+      }
+      return tab;
     });
   }
 
@@ -143,6 +159,15 @@ export class CDPRouter {
 
       case "closeTab":
         await chrome.tabs.remove(msg.params.tabId);
+        return { success: true };
+
+      case "releaseTab":
+        // The session ended but a person is using this tab: leave it open,
+        // take it out of the session's group, and stop debugging it.
+        await chrome.tabs.ungroup(msg.params.tabId).catch(() => {});
+        if (this.tabManager.has(msg.params.tabId)) {
+          this.tabManager.detach(msg.params.tabId, true);
+        }
         return { success: true };
 
       case "forwardCDPCommand":
@@ -219,11 +244,8 @@ export class CDPRouter {
       case "Target.createTarget": {
         const url = (msg.params.params?.url as string) || "about:blank";
         this.logger.debug("Creating new tab with URL:", url);
-        const tab = await chrome.tabs.create({ url, active: false });
+        const tab = await this.createGroupedTab(url, parseGroupSpec(msg.params.params?.group));
         if (!tab.id) throw new Error("Failed to create tab");
-
-        // Add tab to "Dev Browser" group
-        await this.getOrCreateDevBrowserGroup(tab.id);
 
         // Wait for tab to be ready, then attach debugger (retry on transient failures)
         const targetInfo = await this.attachWithRetry(tab.id);

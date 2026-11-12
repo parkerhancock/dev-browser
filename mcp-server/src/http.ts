@@ -22,6 +22,7 @@ import { buildServer, createState, type BrowserMode } from "./server.js";
 import { TOKEN_HEADER, tokensMatch } from "../../skills/dev-browser/src/auth.js";
 
 export const SESSION_HEADER = "x-devbrowser-session";
+export const LABEL_HEADER = "x-devbrowser-label";
 const VALID_SESSION = /^[A-Za-z0-9._:-]{1,128}$/;
 
 /**
@@ -132,10 +133,21 @@ export function createMcpNodeHandler(options: McpHttpOptions = {}): McpNodeHandl
         return;
       }
 
+      // The tab group label (URI-encoded); the relay decodes and trims it
+      const labelHeader = req.headers[LABEL_HEADER];
+      const encodedLabel = Array.isArray(labelHeader) ? labelHeader[0] : labelHeader;
+      let label: string | undefined;
+      try {
+        label = encodedLabel ? decodeURIComponent(encodedLabel) : undefined;
+      } catch {
+        label = undefined;
+      }
+
       const newSid = randomUUID();
       const state = createState({
         mode: options.mode,
         session: options.session ?? requested ?? `mcp-${newSid.slice(0, 8)}`,
+        label,
       });
       const server = buildServer(state);
       const transport = new StreamableHTTPServerTransport({

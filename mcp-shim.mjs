@@ -26,7 +26,7 @@
 import { spawn } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 
@@ -85,6 +85,8 @@ function headers(extra = {}) {
     Accept: "application/json, text/event-stream",
     "X-DevBrowser-Token": readToken(),
     ...(SESSION ? { "X-DevBrowser-Session": SESSION } : {}),
+    // Names the session's tab group after the agent's project folder
+    "X-DevBrowser-Label": encodeURIComponent(basename(process.cwd())),
     ...(mcpSessionId ? { "Mcp-Session-Id": mcpSessionId } : {}),
     ...(protocolVersion ? { "MCP-Protocol-Version": protocolVersion } : {}),
     ...extra,

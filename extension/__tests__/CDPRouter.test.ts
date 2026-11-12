@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { fakeBrowser } from "wxt/testing";
-import { CDPRouter } from "../services/CDPRouter";
+import { CDPRouter, groupColor } from "../services/CDPRouter";
 import { TabManager } from "../services/TabManager";
 import type { Logger } from "../utils/logger";
 import type { ExtensionCommandMessage } from "../utils/types";
@@ -10,6 +10,8 @@ const mockDebuggerSendCommand = vi.fn();
 const mockTabsGet = vi.fn();
 const mockTabsGroup = vi.fn();
 const mockTabsQuery = vi.fn();
+const mockTabsCreate = vi.fn();
+const mockTabsUngroup = vi.fn();
 const mockTabGroupsGet = vi.fn();
 const mockTabGroupsQuery = vi.fn();
 const mockTabGroupsUpdate = vi.fn();
@@ -21,6 +23,8 @@ vi.stubGlobal("chrome", {
     get: mockTabsGet,
     group: mockTabsGroup,
     query: mockTabsQuery,
+    create: mockTabsCreate,
+    ungroup: mockTabsUngroup,
   },
   tabGroups: {
     get: mockTabGroupsGet,
@@ -49,6 +53,8 @@ describe("CDPRouter", () => {
     mockTabsGet.mockReset();
     mockTabsGroup.mockReset();
     mockTabsQuery.mockReset();
+    mockTabsCreate.mockReset();
+    mockTabsUngroup.mockReset().mockResolvedValue(undefined);
     mockTabGroupsGet.mockReset();
     mockTabGroupsQuery.mockReset();
     mockTabGroupsUpdate.mockReset();
@@ -72,60 +78,112 @@ describe("CDPRouter", () => {
     });
   });
 
-  describe("Dev Browser tab groups", () => {
-    it("serializes concurrent group creation in the same window", async () => {
-      let groupExists = false;
+  describe("session tab groups", () => {
+    const createTab = (key: string, title: string) =>
+      cdpRouter.handleCommand({
+        id: 1,
+        method: "forwardCDPCommand",
+        params: {
+          method: "Target.createTarget",
+          params: { url: "about:blank", group: { key, title } },
+        },
+      } as ExtensionCommandMessage);
 
-      mockTabsGet.mockImplementation(async (tabId: number) => ({ id: tabId, windowId: 1 }));
-      mockTabGroupsQuery.mockImplementation(async () => {
-        const existsAtQueryStart = groupExists;
-        await Promise.resolve();
-        return existsAtQueryStart
-          ? [{ id: 10, windowId: 1, title: "Dev Browser", color: "blue", collapsed: false }]
-          : [];
-      });
+    let nextTabId: number;
+    let groups: Array<{ id: number; windowId: number; title: string }>;
+
+    beforeEach(() => {
+      nextTabId = 1;
+      groups = [];
+      mockTabsCreate.mockImplementation(async ({ windowId }: { windowId?: number }) => ({
+        id: nextTabId++,
+        windowId: windowId ?? 1,
+      }));
       mockTabsGroup.mockImplementation(async ({ groupId }: { groupId?: number }) => {
-        if (groupId === undefined) {
-          groupExists = true;
-          return 10;
-        }
-        return groupId;
+        if (groupId !== undefined) return groupId;
+        const group = { id: 100 + groups.length, windowId: 1, title: "" };
+        groups.push(group);
+        return group.id;
       });
-
-      const groupTab = (tabId: number) =>
-        (
-          cdpRouter as unknown as {
-            getOrCreateDevBrowserGroup(id: number): Promise<number>;
-          }
-        ).getOrCreateDevBrowserGroup(tabId);
-
-      await expect(Promise.all([groupTab(1), groupTab(2)])).resolves.toEqual([10, 10]);
-
-      expect(mockTabsGroup).toHaveBeenCalledTimes(2);
-      expect(mockTabsGroup).toHaveBeenNthCalledWith(1, { tabIds: [1] });
-      expect(mockTabsGroup).toHaveBeenNthCalledWith(2, { tabIds: [2], groupId: 10 });
+      mockTabGroupsUpdate.mockImplementation(async (id: number, { title }: { title: string }) => {
+        groups.find((group) => group.id === id)!.title = title;
+      });
+      mockTabGroupsGet.mockImplementation(async (id: number) => {
+        const group = groups.find((g) => g.id === id);
+        if (!group) throw new Error("No group");
+        return group;
+      });
+      mockTabGroupsQuery.mockImplementation(async ({ title }: { title: string }) =>
+        groups.filter((group) => group.title === title)
+      );
+      // Skip debugger attachment; these tests cover grouping only
+      vi.spyOn(tabManager, "attach").mockResolvedValue({
+        targetId: "t",
+        type: "page",
+        title: "",
+        url: "about:blank",
+        attached: true,
+      });
     });
 
-    it("merges duplicate groups within each window", async () => {
-      const groups = [
-        { id: 10, windowId: 1, title: "Dev Browser", color: "blue", collapsed: false },
-        { id: 11, windowId: 1, title: "Dev Browser", color: "blue", collapsed: true },
-        { id: 20, windowId: 2, title: "Dev Browser", color: "blue", collapsed: false },
-      ];
+    it("puts concurrent tabs from one session in one group", async () => {
+      await Promise.all([createTab("s1", "proj ab12"), createTab("s1", "proj ab12")]);
 
-      mockTabGroupsQuery.mockImplementation(async ({ windowId }: { windowId?: number }) =>
-        windowId === undefined ? groups : groups.filter((group) => group.windowId === windowId)
-      );
-      mockTabsQuery.mockImplementation(async ({ groupId }: { groupId: number }) =>
-        groupId === 11 ? [{ id: 2 }, { id: 3 }] : []
-      );
+      expect(groups).toHaveLength(1);
+      expect(mockTabGroupsUpdate).toHaveBeenCalledOnce();
+      expect(mockTabGroupsUpdate).toHaveBeenCalledWith(100, {
+        title: "proj ab12",
+        color: groupColor("s1"),
+      });
+      expect(mockTabsGroup).toHaveBeenNthCalledWith(2, { tabIds: [2], groupId: 100 });
+    });
 
-      await cdpRouter.reconcileDevBrowserGroups();
+    it("gives each session its own group", async () => {
+      await createTab("s1", "proj ab12");
+      await createTab("s2", "proj cd34");
 
-      expect(mockTabsQuery).toHaveBeenCalledOnce();
-      expect(mockTabsQuery).toHaveBeenCalledWith({ groupId: 11 });
-      expect(mockTabsGroup).toHaveBeenCalledOnce();
-      expect(mockTabsGroup).toHaveBeenCalledWith({ tabIds: [2, 3], groupId: 10 });
+      expect(groups.map((group) => group.title)).toEqual(["proj ab12", "proj cd34"]);
+    });
+
+    it("opens a session's later tabs in the window holding its group", async () => {
+      await createTab("s1", "proj ab12");
+      groups[0]!.windowId = 7; // the person dragged the group to another window
+
+      await createTab("s1", "proj ab12");
+
+      expect(mockTabsCreate).toHaveBeenLastCalledWith({
+        url: "about:blank",
+        active: false,
+        windowId: 7,
+      });
+      expect(mockTabsGroup).toHaveBeenLastCalledWith({ tabIds: [2], groupId: 100 });
+    });
+
+    it("finds the session's group by title after a service-worker restart", async () => {
+      groups.push({ id: 55, windowId: 3, title: "proj ab12" });
+
+      await createTab("s1", "proj ab12");
+
+      expect(mockTabsCreate).toHaveBeenCalledWith({
+        url: "about:blank",
+        active: false,
+        windowId: 3,
+      });
+      expect(mockTabsGroup).toHaveBeenCalledWith({ tabIds: [1], groupId: 55 });
+    });
+
+    it("releases a tab by ungrouping it and detaching the debugger", async () => {
+      vi.spyOn(tabManager, "has").mockReturnValue(true);
+      const detach = vi.spyOn(tabManager, "detach").mockImplementation(() => {});
+
+      await cdpRouter.handleCommand({
+        id: 1,
+        method: "releaseTab",
+        params: { tabId: 9 },
+      } as ExtensionCommandMessage);
+
+      expect(mockTabsUngroup).toHaveBeenCalledWith(9);
+      expect(detach).toHaveBeenCalledWith(9, true);
     });
   });
 

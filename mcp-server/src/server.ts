@@ -69,12 +69,15 @@ export interface ServerOptions {
   mode?: BrowserMode;
   /** Agent session id; default CLAUDE_SESSION_ID, then Claude Code's CLAUDE_CODE_SESSION_ID, or a generated id. */
   session?: string;
+  /** Label for the session's tab group, usually the agent's project folder; default none. */
+  label?: string;
 }
 
 export interface BrowserState {
   forcedMode?: BrowserMode;
   activeMode?: BrowserMode;
   session: string;
+  label?: string;
   clients: Map<BrowserMode, DevBrowserClient>;
   /** Dev servers started by preview_start, created on first use. */
   previews?: PreviewManager;
@@ -114,6 +117,7 @@ export function createState(options: ServerOptions = {}): BrowserState {
       process.env.CLAUDE_SESSION_ID ??
       process.env.CLAUDE_CODE_SESSION_ID ??
       `mcp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    label: options.label,
     clients: new Map(),
   };
 }
@@ -168,6 +172,7 @@ async function getClient(state: BrowserState): Promise<DevBrowserClient> {
     client = await connect(`http://127.0.0.1:${serverPort(mode)}`, {
       mode,
       session: state.session,
+      label: state.label ?? "",
     });
     state.clients.set(mode, client);
   }

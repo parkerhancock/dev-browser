@@ -55,6 +55,8 @@ export interface SessionState {
   id: string;
   pageNames: Set<string>;
   targetSessions: Set<string>;
+  /** Short human label for the session's tab group, e.g. the agent's project folder. */
+  label?: string;
 }
 
 export interface TargetRegistry {

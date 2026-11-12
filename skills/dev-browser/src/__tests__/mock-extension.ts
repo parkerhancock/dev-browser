@@ -194,6 +194,11 @@ export class MockExtension {
       return;
     }
 
+    if (msg.method === "releaseTab") {
+      this.ws.send(JSON.stringify({ id: msg.id, result: { success: true } }));
+      return;
+    }
+
     if (msg.method === "closeTab") {
       this.ws.send(JSON.stringify({ id: msg.id, result: { success: true } }));
       return;
