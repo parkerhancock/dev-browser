@@ -84,6 +84,40 @@ if (!info.extensionConnected) {
 const client = await connect({ mode: "extension", session: "shared-workspace" });
 ```
 
+### Choosing an extension relay
+
+Each extension relay drives one browser on one computer. You may be able to
+reach more than one: the local relay at `http://localhost:9224`, and relays for
+browsers on other computers, reached on other ports or hosts (for example
+through an SSH port forward). The browsers differ in what matters most: which
+sites are signed in, which accounts and single sign-on they use, and which
+network they sit on. dev-browser doesn't keep a list of relays. The host's own
+instructions (its `CLAUDE.md` or `AGENTS.md`, or the skill that asked for the
+browser) say which relays exist and what each one is for.
+
+- **Pick the relay the task needs.** Match it to the browser that is signed in
+  to the site, or that can sign in through the organization's single sign-on,
+  rather than to whatever answers first. Connect by URL:
+
+  ```typescript
+  const client = await connect("http://localhost:9234", { mode: "extension" });
+  ```
+
+- **Bring that relay's token.** The token belongs to the computer running the
+  relay. For a relay on another computer, pass `token` to `connect()` or set
+  `DEV_BROWSER_TOKEN`.
+- **Confirm before acting.** Check `getServerInfo().extensionConnected`, then
+  `client.allTargets()`: the open tabs show whose browser it is and what it's
+  signed in to. Read; don't open pages to explore, because each page is a tab
+  in someone's real browser.
+- **Don't fall back silently.** If the relay the task needs isn't answering or
+  its extension isn't connected, tell the user. If more than one relay could
+  serve the task, or the instructions don't say which to use, ask. Another
+  browser has different sign-ins, and work done there can land in the wrong
+  account.
+
+`dev-browser status` reports only this computer's servers.
+
 ## Replacing Built-in WebFetch
 
 This plugin includes a `webfetch` agent, a browser-based fetcher for sites whose bot protection blocks Claude Code's built-in WebFetch. The built-in WebFetch stays available; use the agent when it gets a 403, a challenge page, or an empty app shell.
