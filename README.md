@@ -81,6 +81,18 @@ Because the MCP host and the browsers outlive any one agent session, pages persi
 
 Standalone mode is the default. dev-browser launches Chromium (or Chrome or Edge, with `--browser`) with a persistent profile in `~/.dev-browser`, headless unless you ask for a window. Each page opens in its own window, so pages stay visible to their own scripts, and the browser reports a normal user agent, viewport, and pointer. Use it for local development, testing, and public sites.
 
+On macOS, **Dev Browser Setup.app** installs the Chrome extension, relay,
+and local approval helper from the same bundle. Open the app and choose
+**Continue**. For a fresh install, use **Open Chrome Extensions** and
+load the folder shown in Finder. On an upgrade, reload the existing Chrome
+extension from its details page. Keep its folder in place to retain the
+extension ID and its saved SSH approval. The app starts the matching relay
+and MCP host during installation.
+
+Build the local macOS archive with `scripts/macos/build.sh`.
+The archive includes Node and the relay dependencies. Chrome remains a
+separate prerequisite. The local build is ad-hoc signed for development.
+
 Extension mode drives tabs in your everyday Chrome, with your cookies and sign-ins. Use it for sites behind a login. Each agent session gets its own tab group. The agent names it for its task through the `tab_group` parameter on `navigate` and `tabs_create` (or `client.setTabGroup()`); until it does, the group carries the agent's project folder name. Agent groups carry a 🤖 prefix; rename one without it and it's yours. A group collapses after 10 idle minutes and expands when the agent resumes. When the session ends, or sits idle for an hour, its tabs close; tabs it pinned for you stay open, outside the group. Agent groups no live session owns, including ones Chrome restores after a restart, close when the extension reconnects and every 10 minutes after.
 
 1. Download `dev-browser-extension-<version>.zip` from the [latest release](https://github.com/parkerhancock/dev-browser/releases/latest).

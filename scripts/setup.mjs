@@ -150,7 +150,7 @@ export function wrapperScript(current) {
 
 const CHROME_HOST = "com.dev_browser.chrome";
 
-function chromeHostManifest(env = process.env, platform = process.platform) {
+export function chromeHostManifest(env = process.env, platform = process.platform) {
   if (platform === "darwin")
     return join(homedir(), "Library", "Application Support", "Google", "Chrome", "NativeMessagingHosts", CHROME_HOST + ".json");
   if (platform === "linux")
@@ -158,19 +158,24 @@ function chromeHostManifest(env = process.env, platform = process.platform) {
   return undefined;
 }
 
-export function installChromeHost(p, extensionDirectory, manifestPath = chromeHostManifest()) {
+export function chromeExtensionOrigin(extensionDirectory) {
+  const extension = realpathSync(resolve(extensionDirectory));
+  const digest = createHash("sha256").update(extension).digest("hex").slice(0, 32);
+  const id = [...digest].map((nibble) => String.fromCharCode(97 + parseInt(nibble, 16))).join("");
+  return `chrome-extension://${id}/`;
+}
+
+export function installChromeHost(p, extensionDirectory, manifestPath = chromeHostManifest(), node = process.execPath) {
   if (!manifestPath) throw new Error("Chrome native host installer supports macOS and Linux");
   const extension = realpathSync(resolve(extensionDirectory));
   if (!existsSync(join(extension, "manifest.json"))) throw new Error("Use the installed unpacked Chrome extension directory");
-  const digest = createHash("sha256").update(extension).digest("hex").slice(0, 32);
-  const id = [...digest].map((nibble) => String.fromCharCode(97 + parseInt(nibble, 16))).join("");
-  const origin = `chrome-extension://${id}/`;
+  const origin = chromeExtensionOrigin(extension);
   const launcher = join(p.bin, CHROME_HOST);
   const script = join(p.current, "mcp-server", "bin", "chrome-native.mjs");
   if (!existsSync(script)) throw new Error("Update the installed dev-browser runtime first");
   const quote = (value) => "'" + value.replaceAll("'", "'\\''") + "'";
   mkdirSync(p.bin, { recursive: true });
-  writeFileSync(launcher, `#!/bin/sh\nexec ${quote(process.execPath)} ${quote(script)} ${quote(origin)} ${quote(p.dir)} "$@"\n`, { mode: 0o700 });
+  writeFileSync(launcher, `#!/bin/sh\nexec ${quote(node)} ${quote(script)} ${quote(origin)} ${quote(p.dir)} "$@"\n`, { mode: 0o700 });
   chmodSync(launcher, 0o700);
   mkdirSync(dirname(manifestPath), { recursive: true, mode: 0o700 });
   const manifest = { name: CHROME_HOST, description: "Dev Browser local Chrome approval",
@@ -427,8 +432,10 @@ async function askService() {
 
 async function install(options, p) {
   const previous = readRecord();
-  if (options.update && previous?.mode === "link") {
-    say(`dev-browser is linked to ${previous.source}; --update leaves linked installs alone.`);
+  if (previous?.mode === "desktop" || (options.update && previous?.mode === "link")) {
+    say(previous.mode === "desktop"
+      ? "Use the Dev Browser Setup app to update the relay and Chrome extension together."
+      : `dev-browser is linked to ${previous.source}; --update leaves linked installs alone.`);
     return;
   }
   const link = options.link;
