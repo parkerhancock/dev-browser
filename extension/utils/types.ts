@@ -173,12 +173,12 @@ export interface SetStateMessage {
 export interface StateResponse {
   isActive: boolean;
   isConnected: boolean;
+  sshApproved?: boolean;
   error?: string;
 }
 
-export interface PairProfileMessage {
-  type: "pairProfile";
-  code: string;
+export interface AllowSshAccessMessage {
+  type: "allowSshAccess";
 }
 
-export type PopupMessage = GetStateMessage | SetStateMessage | PairProfileMessage;
+export type PopupMessage = GetStateMessage | SetStateMessage | AllowSshAccessMessage;

@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from "node:crypto";
+import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { tokensMatch } from "../auth.js";
@@ -15,24 +15,14 @@ export function createProfilePairing(stateDir: string) {
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
-  let pending: { code: string; expires: number } | undefined;
-
   return {
     get profileId() { return profileId; },
-    begin() {
-      if (profileId) throw new Error("This relay already has a paired Chrome profile");
-      const code = randomBytes(16).toString("base64url");
-      pending = { code, expires: Date.now() + 5 * 60_000 };
-      return code;
-    },
-    redeem(code: unknown, credential: unknown) {
-      if (profileId || !pending || pending.expires <= Date.now() ||
-          typeof code !== "string" || code.length !== 22 || !tokensMatch(code, pending.code) ||
-          typeof credential !== "string" || !credentialPattern.test(credential)) return undefined;
+    approve(credential: unknown) {
+      if (typeof credential !== "string" || !credentialPattern.test(credential)) return undefined;
       const id = fingerprint(credential);
+      if (profileId) return tokensMatch(id, profileId) ? profileId : undefined;
       mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
       writeFileSync(path, id + "\n", { mode: 0o600, flag: "wx" });
-      pending = undefined;
       profileId = id;
       return id;
     },

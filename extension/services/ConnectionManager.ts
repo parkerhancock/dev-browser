@@ -9,24 +9,35 @@ import { detectBrowser } from "../utils/browser-info";
 const RELAY_URL = "ws://localhost:9224/extension";
 const PAIRING_STORAGE_KEY = "devBrowserProfileCredential";
 
-export async function pairProfile(code: string): Promise<void> {
-  const stored = await chrome.storage.local.get(PAIRING_STORAGE_KEY);
-  const credential = stored[PAIRING_STORAGE_KEY] ?? Array.from(
+const CANDIDATE_STORAGE_KEY = "devBrowserPendingProfileCredential";
+const APPROVAL_STORAGE_KEY = "devBrowserSshApproved";
+
+export async function hasSshApproval(): Promise<boolean> {
+  return (await chrome.storage.local.get(APPROVAL_STORAGE_KEY))[APPROVAL_STORAGE_KEY] === true;
+}
+
+export async function allowSshAccess(): Promise<void> {
+  const stored = await chrome.storage.local.get([PAIRING_STORAGE_KEY, CANDIDATE_STORAGE_KEY]);
+  const credential = stored[PAIRING_STORAGE_KEY] ?? stored[CANDIDATE_STORAGE_KEY] ?? Array.from(
     crypto.getRandomValues(new Uint8Array(32)), (byte) => byte.toString(16).padStart(2, "0"),
   ).join("");
-  await chrome.storage.local.set({ [PAIRING_STORAGE_KEY]: credential });
-  const response = await fetch("http://localhost:9224/pairing/complete", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ code, credential }),
-    signal: AbortSignal.timeout(5000),
-  });
-  if (!response.ok) {
-    if (!stored[PAIRING_STORAGE_KEY]) await chrome.storage.local.remove(PAIRING_STORAGE_KEY);
-    const failure = await response.json().catch(() => null);
-    throw new Error(failure?.error ?? "Could not pair with the local relay");
+  await chrome.storage.local.set({ [CANDIDATE_STORAGE_KEY]: credential });
+  let response: { approved?: boolean; error?: string };
+  try {
+    response = await chrome.runtime.sendNativeMessage("com.dev_browser.chrome", { credential });
+  } catch {
+    throw new Error("Could not reach the local Dev Browser host. Check the Dev Browser installation.");
   }
+  if (response?.approved !== true) {
+    throw new Error(response?.error ?? "SSH access could not be approved");
+  }
+  await chrome.storage.local.set({
+    [PAIRING_STORAGE_KEY]: credential,
+    [APPROVAL_STORAGE_KEY]: true,
+  });
+  await chrome.storage.local.remove(CANDIDATE_STORAGE_KEY);
 }
+
 const RECONNECT_INTERVAL = 3000;
 
 export interface ConnectionManagerDeps {

@@ -90,12 +90,17 @@ Extension mode drives tabs in your everyday Chrome, with your cookies and sign-i
 
 The extension connects to the extension relay. Setup's login item starts the relay; without it, run `~/.dev-browser/bin/dev-browser start relay`. While the extension is connected, tools work in your Chrome, and `switch_browser` moves between the two modes mid-session.
 
-For Dev Sessions over SSH, update the relay and the existing extension together.
-Run `dev-browser pair` on the relay host, then paste the one-time code into
-**Pair with Dev Sessions** in the approved Chrome profile's extension popup.
-The code expires after five minutes. The relay registers one profile and rejects
-other profiles after enrollment. Dev Sessions pins the registered fingerprint,
-available as `extensionProfileId` in the authenticated relay health response.
+For Dev Sessions over SSH, click **Allow SSH access** in the existing
+dev-browser popup in the Chrome profile you approve. The local dev-browser
+installation must have registered its Chrome native messaging host. Setup of a
+linked checkout registers the host when its Chrome extension is already built.
+If you installed the unpacked extension from a release, register its directory
+during setup with `node scripts/setup.mjs --chrome-native-host <extension-directory>`
+on macOS or Linux. The popup handles approval and resuming access after setup.
+
+The relay registers one profile and rejects other profiles after approval.
+Dev Sessions pins the registered fingerprint, available as `extensionProfileId`
+in the authenticated relay health response.
 
 **Stop** in the popup ends the live connection immediately. A Dev Sessions
 client attached to that connection loses access and must explicitly attach to

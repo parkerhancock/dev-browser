@@ -1,4 +1,7 @@
-import { mkdtempSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { endianness } from "node:os";
+import { fileURLToPath } from "node:url";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { once } from "node:events";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -12,24 +15,21 @@ const origin = "chrome-extension://abcdefghijklmnopabcdefghijklmnop";
 const token = "test-relay-token";
 const credential = "a".repeat(64);
 
-test("pairing code expiry and one-time enrollment survive a relay restart", () => {
+test("approval is idempotent and survives a relay restart", () => {
   const dir = mkdtempSync(join(tmpdir(), "dev-browser-pairing-unit-"));
   const pairing = createProfilePairing(dir);
-  vi.useFakeTimers();
-  try {
-    const expired = pairing.begin();
-    vi.advanceTimersByTime(5 * 60_000);
-    expect(pairing.redeem(expired, credential)).toBeUndefined();
-    const code = pairing.begin();
-    expect(pairing.redeem(code, credential)).toMatch(/^[0-9a-f]{64}$/u);
-    expect(pairing.redeem(code, credential)).toBeUndefined();
-    expect(createProfilePairing(dir).verify(credential)).toBe(true);
-    expect(createProfilePairing(dir).verify("b".repeat(64))).toBe(false);
-  } finally { vi.useRealTimers(); }
+  const id = pairing.approve(credential);
+  expect(id).toMatch(/^[0-9a-f]{64}$/u);
+  const restarted = createProfilePairing(dir);
+  expect(restarted.approve(credential)).toBe(id);
+  expect(restarted.approve("b".repeat(64))).toBeUndefined();
+  expect(restarted.verify(credential)).toBe(true);
 });
 
 test("a different profile cannot displace the approved socket and Stop invalidates the binding", async () => {
-  vi.stubEnv("DEV_BROWSER_DIR", mkdtempSync(join(tmpdir(), "dev-browser-paired-relay-")));
+  const state = mkdtempSync(join(tmpdir(), "dev-browser-paired-relay-"));
+  vi.stubEnv("DEV_BROWSER_DIR", state);
+  writeFileSync(join(state, "token"), token, { mode: 0o600 });
   const port = randomPort();
   const relay = await serveRelay({ port, token });
   const sockets: WebSocket[] = [];
@@ -55,18 +55,32 @@ test("a different profile cannot displace the approved socket and Stop invalidat
   }
 
   try {
-    const begin = await fetch(base + "/pairing/start", { method: "POST", headers });
-    expect(begin.status).toBe(201);
-    const { code } = await begin.json() as { code: string };
-    const complete = (requestOrigin: string) => fetch(base + "/pairing/complete", {
-      method: "POST", headers: { "Content-Type": "application/json", Origin: requestOrigin },
-      body: JSON.stringify({ code, credential }),
-    });
-    expect((await complete("https://example.test")).status).toBe(403);
-    const approval = await complete(origin);
-    expect(approval.status).toBe(201);
-    const { profileId } = await approval.json() as { profileId: string };
-    expect((await complete(origin)).status).toBe(403);
+    const payload = JSON.stringify({ credential });
+    const endpoint = base + "/pairing/local";
+    const post = (headers?: Record<string, string>) => fetch(endpoint, { method: "POST", headers, body: payload });
+    expect((await post({ Origin: origin })).status).toBe(401);
+    expect((await post({ ...headers, Origin: origin })).status).toBe(403);
+    expect((await fetch(endpoint + "?token=" + token, { method: "POST", body: payload })).status).toBe(401);
+
+    const hostFile = fileURLToPath(new URL("../../../../mcp-server/bin/chrome-native.mjs", import.meta.url));
+    async function approveWithHost(sender: string) {
+      const child = spawn(process.execPath, [hostFile, origin + "/", state, sender], {
+        env: { ...process.env, DEV_BROWSER_RELAY_PORT: String(port) },
+      });
+      const result: Buffer[] = [];
+      child.stdout.on("data", (chunk: Buffer) => result.push(chunk));
+      const body = Buffer.from(payload);
+      const header = Buffer.alloc(4);
+      if (endianness() === "LE") header.writeUInt32LE(body.length);
+      else header.writeUInt32BE(body.length);
+      child.stdin.end(Buffer.concat([header, body]));
+      expect((await once(child, "close"))[0]).toBe(0);
+      return JSON.parse(Buffer.concat(result).subarray(4).toString());
+    }
+    expect(await approveWithHost("chrome-extension://another")).toEqual({ error: "Dev Browser extension required" });
+    expect(await approveWithHost(origin)).toEqual({ approved: true });
+    const profileId = createProfilePairing(state).profileId;
+    expect(await approveWithHost(origin)).toEqual({ approved: true });
 
     const approved = await connect();
     const first = await health();

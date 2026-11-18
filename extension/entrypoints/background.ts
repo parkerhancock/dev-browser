@@ -7,7 +7,7 @@
 
 import { createLogger } from "../utils/logger";
 import { TabManager } from "../services/TabManager";
-import { ConnectionManager, pairProfile } from "../services/ConnectionManager";
+import { ConnectionManager, allowSshAccess, hasSshApproval } from "../services/ConnectionManager";
 import { CDPRouter } from "../services/CDPRouter";
 import { StateManager } from "../services/StateManager";
 import { DownloadManager } from "../services/DownloadManager";
@@ -91,14 +91,14 @@ export default defineBackground(() => {
     void tabManager.handleDebuggerDetach(tabId, reason);
   }
 
-  let pairingInProgress = false;
+  let approvingSsh = false;
   let popupStateVersion = 0;
 
   // Handle messages from popup
   chrome.runtime.onMessage.addListener(
     (
       message: PopupMessage,
-      _sender: chrome.runtime.MessageSender,
+      sender: chrome.runtime.MessageSender,
       sendResponse: (response: StateResponse) => void
     ) => {
       if (message.type === "getState") {
@@ -109,6 +109,7 @@ export default defineBackground(() => {
             sendResponse({
               isActive: state.isActive,
               isConnected,
+              sshApproved: await hasSshApproval(),
             });
           } catch (err) {
             logger.debug("Error handling getState:", err);
@@ -118,31 +119,33 @@ export default defineBackground(() => {
         return true; // Async response
       }
 
-      if (message.type === "pairProfile") {
-        if (pairingInProgress) {
-          sendResponse({ isActive: false, isConnected: false, error: "Pairing is already in progress" });
+      if (message.type === "allowSshAccess") {
+        if (sender.url !== chrome.runtime.getURL("popup.html")) return false;
+        if (approvingSsh) {
+          sendResponse({ isActive: false, isConnected: false, error: "Approval is already in progress" });
           return false;
         }
-        pairingInProgress = true;
+        approvingSsh = true;
         const version = popupStateVersion;
         void (async () => {
           try {
-            await pairProfile(message.code);
+            await allowSshAccess();
             if (version === popupStateVersion) {
               connectionManager.disconnect();
               await handleStateChange(true);
             }
             const state = await stateManager.getState();
-            sendResponse({ isActive: state.isActive, isConnected: connectionManager.isConnected() });
+            sendResponse({ isActive: state.isActive, isConnected: connectionManager.isConnected(), sshApproved: true });
           } catch (error) {
             const state = await stateManager.getState();
             sendResponse({
               isActive: state.isActive,
               isConnected: connectionManager.isConnected(),
-              error: error instanceof Error ? error.message : "Pairing failed",
+              sshApproved: await hasSshApproval(),
+              error: error instanceof Error ? error.message : "SSH access could not be approved",
             });
           } finally {
-            pairingInProgress = false;
+            approvingSsh = false;
           }
         })();
         return true;
@@ -158,6 +161,7 @@ export default defineBackground(() => {
             sendResponse({
               isActive: state.isActive,
               isConnected,
+              sshApproved: await hasSshApproval(),
             });
           } catch (err) {
             logger.debug("Error handling setState:", err);

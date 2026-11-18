@@ -1,16 +1,19 @@
-import type { GetStateMessage, PairProfileMessage, SetStateMessage, StateResponse } from "../../utils/types";
+import type { GetStateMessage, AllowSshAccessMessage, SetStateMessage, StateResponse } from "../../utils/types";
 
 const toggle = document.getElementById("active-toggle") as HTMLInputElement;
 const statusText = document.getElementById("status-text") as HTMLSpanElement;
 const connectionStatus = document.getElementById("connection-status") as HTMLParagraphElement;
 
 const stop = document.querySelector<HTMLButtonElement>("#stop")!;
-const pairing = document.querySelector<HTMLFormElement>("#pairing")!;
-const code = document.querySelector<HTMLInputElement>("#pairing-code")!;
-const pairingStatus = document.querySelector<HTMLParagraphElement>("#pairing-status")!;
+const allowSsh = document.querySelector<HTMLButtonElement>("#allow-ssh")!;
+const sshStatus = document.querySelector<HTMLParagraphElement>("#ssh-status")!;
 
 function updateUI(state: StateResponse): void {
   stop.hidden = !state.isActive;
+  allowSsh.hidden = state.sshApproved === true && state.isActive;
+  allowSsh.textContent = state.sshApproved ? "Resume SSH access" : "Allow SSH access";
+  const message = state.error ?? (state.sshApproved ? "This profile is approved for SSH." : "");
+  if (message || !sshStatus.textContent) sshStatus.textContent = message;
   toggle.checked = state.isActive;
   statusText.textContent = state.isActive ? "Active" : "Inactive";
 
@@ -61,21 +64,17 @@ function setActive(isActive: boolean): void {
   );
 }
 
-pairing.addEventListener("submit", async (event) => {
-  event.preventDefault();
-  const pairingCode = code.value.trim();
-  code.value = "";
-  const button = pairing.querySelector("button")!;
-  button.disabled = true;
+allowSsh.addEventListener("click", async () => {
+  allowSsh.disabled = true;
+  sshStatus.textContent = "";
   try {
-    const state = await chrome.runtime.sendMessage<PairProfileMessage, StateResponse>({
-      type: "pairProfile", code: pairingCode,
+    const state = await chrome.runtime.sendMessage<AllowSshAccessMessage, StateResponse>({
+      type: "allowSshAccess",
     });
     updateUI(state);
-    pairingStatus.textContent = state.error ?? "Paired. This profile is approved.";
   } catch {
-    pairingStatus.textContent = "Could not reach the extension. Try again.";
+    sshStatus.textContent = "Could not reach the extension. Try again.";
   } finally {
-    button.disabled = false;
+    allowSsh.disabled = false;
   }
 });

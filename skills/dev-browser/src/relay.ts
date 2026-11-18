@@ -60,8 +60,14 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
   app.use("*", async (c, next) => {
     const origin = c.req.header("Origin");
     const extensionOrigin = !!origin && /^(chrome|moz)-extension:\/\/[a-z0-9-]+$/iu.test(origin);
-    if (c.req.path === "/pairing/complete" || c.req.path === "/extension/paired") {
+    if (c.req.path === "/extension/paired") {
       return extensionOrigin ? next() : c.json({ error: "Browser extension origin required" }, 403);
+    }
+    if (c.req.path === "/pairing/local") {
+      const header = c.req.header(TOKEN_HEADER);
+      if (!requireAuth || !header || !tokensMatch(header, token)) {
+        return c.json({ error: "Local dev-browser host required" }, 401);
+      }
     }
     if (!requireAuth) return next();
     const candidate = c.req.header(TOKEN_HEADER) ?? c.req.query("token");
@@ -89,20 +95,20 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
     );
   });
 
-  app.post("/pairing/start", (c) => {
-    if (!requireAuth) return c.json({ error: "Pairing requires relay authentication" }, 403);
-    if (ctx.pairing.profileId) return c.json({ error: "Relay already paired" }, 409);
-    return c.json({ code: ctx.pairing.begin() }, 201, { "Cache-Control": "no-store" });
-  });
-  app.post("/pairing/complete", async (c) => {
-    if (!requireAuth) return c.json({ error: "Pairing requires relay authentication" }, 403);
+  app.post("/pairing/local", async (c) => {
+    if (!requireAuth || c.req.header("Origin")) {
+      return c.json({ error: "Local dev-browser host required" }, 403);
+    }
     const body = await c.req.json().catch(() => null);
-    const profileId = ctx.pairing.redeem(body?.code, body?.credential);
-    if (!profileId) return c.json({ error: "Invalid or expired pairing code" }, 403);
-    live.persistedPages = [];
-    ctx.debouncedSave();
-    live.extensionWs?.close(1008, "Pairing required");
-    return c.json({ profileId }, 201, { "Cache-Control": "no-store" });
+    const alreadyPaired = !!ctx.pairing.profileId;
+    const profileId = ctx.pairing.approve(body?.credential);
+    if (!profileId) return c.json({ error: "This relay is approved for another Chrome profile" }, 409);
+    if (!alreadyPaired) {
+      live.persistedPages = [];
+      ctx.debouncedSave();
+      live.extensionWs?.close(1008, "Profile approval required");
+    }
+    return c.json({ profileId }, alreadyPaired ? 200 : 201, { "Cache-Control": "no-store" });
   });
 
   app.use("*", async (c, next) => {

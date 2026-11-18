@@ -3,6 +3,7 @@
  * Set up dev-browser on this machine, from the plugin (or a checkout).
  *
  *   node scripts/setup.mjs [--service | --no-service] [--link <checkout>] [--force]
+ *   node scripts/setup.mjs --chrome-native-host <unpacked-extension-directory>
  *   node scripts/setup.mjs --update
  *   node scripts/setup.mjs --uninstall [--purge]
  *
@@ -145,6 +146,38 @@ export function wrapperScript(current) {
     `exec "$NODE" '${join(current, "mcp-server", "bin", "dev-browser.mjs")}' "$@"`,
     "",
   ].join("\n");
+}
+
+const CHROME_HOST = "com.dev_browser.chrome";
+
+function chromeHostManifest(env = process.env, platform = process.platform) {
+  if (platform === "darwin")
+    return join(homedir(), "Library", "Application Support", "Google", "Chrome", "NativeMessagingHosts", CHROME_HOST + ".json");
+  if (platform === "linux")
+    return join(env.XDG_CONFIG_HOME || join(homedir(), ".config"), "google-chrome", "NativeMessagingHosts", CHROME_HOST + ".json");
+  return undefined;
+}
+
+export function installChromeHost(p, extensionDirectory, manifestPath = chromeHostManifest()) {
+  if (!manifestPath) throw new Error("Chrome native host installer supports macOS and Linux");
+  const extension = realpathSync(resolve(extensionDirectory));
+  if (!existsSync(join(extension, "manifest.json"))) throw new Error("Use the installed unpacked Chrome extension directory");
+  const digest = createHash("sha256").update(extension).digest("hex").slice(0, 32);
+  const id = [...digest].map((nibble) => String.fromCharCode(97 + parseInt(nibble, 16))).join("");
+  const origin = `chrome-extension://${id}/`;
+  const launcher = join(p.bin, CHROME_HOST);
+  const script = join(p.current, "mcp-server", "bin", "chrome-native.mjs");
+  if (!existsSync(script)) throw new Error("Update the installed dev-browser runtime first");
+  const quote = (value) => "'" + value.replaceAll("'", "'\\''") + "'";
+  mkdirSync(p.bin, { recursive: true });
+  writeFileSync(launcher, `#!/bin/sh\nexec ${quote(process.execPath)} ${quote(script)} ${quote(origin)} ${quote(p.dir)} "$@"\n`, { mode: 0o700 });
+  chmodSync(launcher, 0o700);
+  mkdirSync(dirname(manifestPath), { recursive: true, mode: 0o700 });
+  const manifest = { name: CHROME_HOST, description: "Dev Browser local Chrome approval",
+    path: launcher, type: "stdio", allowed_origins: [origin] };
+  const temp = manifestPath + `.${process.pid}.tmp`;
+  writeFileSync(temp, JSON.stringify(manifest) + "\n", { mode: 0o600 });
+  renameSync(temp, manifestPath);
 }
 
 function lockHash(dir) {
@@ -361,6 +394,12 @@ function parseArgs(argv) {
     if (arg === "--service") options.service = true;
     else if (arg === "--no-service") options.service = false;
     else if (arg === "--update") options.update = true;
+    else if (arg === "--chrome-native-host") {
+      options.chromeNativeHost = argv[++i];
+      if (!options.chromeNativeHost || options.chromeNativeHost.startsWith("--")) {
+        throw new Error("--chrome-native-host needs an unpacked Chrome extension directory");
+      }
+    }
     else if (arg === "--uninstall") options.uninstall = true;
     else if (arg === "--purge") options.purge = true;
     else if (arg === "--force") options.force = true;
@@ -431,6 +470,11 @@ async function install(options, p) {
     pruneVersions(p.app, [version, ...(previous?.mode === "copy" ? [previous.version] : [])]);
   say(`  Runtime ready: ${p.current} -> ${target}`);
   say(`  CLI: ${p.wrapper}`);
+  const linkedExtension = join(target, "extension", ".output", "chrome-mv3");
+  if (link && !dry() && chromeHostManifest() && existsSync(join(linkedExtension, "manifest.json"))) {
+    installChromeHost(p, linkedExtension);
+    say("  Registered the local Chrome approval host");
+  }
 
   if (options.update) {
     // Servers keep running the old code until restarted
@@ -468,6 +512,11 @@ async function uninstall(options, p) {
   const current = existsSync(p.current) ? p.current : undefined;
   if (current) say(cli(current, ["stop"]).trim() || "Stopped dev-browser's servers");
   removeService();
+  const manifest = chromeHostManifest();
+  if (!dry() && manifest && existsSync(manifest) &&
+      JSON.parse(readFileSync(manifest, "utf8")).path === join(p.bin, CHROME_HOST)) {
+    unlinkSync(manifest);
+  }
   for (const path of [p.app, p.bin]) {
     // A linked `current` is a symlink: rmSync removes the link, never the checkout
     if (existsSync(path) || isLink(path)) rmSync(path, { recursive: true, force: true });
@@ -526,7 +575,10 @@ export async function main(argv = process.argv.slice(2)) {
     }
   }
   try {
-    if (options.uninstall) await uninstall(options, p);
+    if (options.chromeNativeHost) {
+      installChromeHost(p, options.chromeNativeHost);
+      say("Registered the local Chrome approval host");
+    } else if (options.uninstall) await uninstall(options, p);
     else await install(options, p);
     return 0;
   } finally {
