@@ -1,80 +1,75 @@
-import type { GetStateMessage, AllowSshAccessMessage, SetStateMessage, StateResponse } from "../../utils/types";
+import type { PopupMessage, StateResponse } from "../../utils/types";
 
-const toggle = document.getElementById("active-toggle") as HTMLInputElement;
-const statusText = document.getElementById("status-text") as HTMLSpanElement;
-const connectionStatus = document.getElementById("connection-status") as HTMLParagraphElement;
-
+const local = document.querySelector<HTMLInputElement>("#active-toggle")!;
+const ssh = document.querySelector<HTMLInputElement>("#ssh-toggle")!;
+const connection = document.querySelector<HTMLParagraphElement>("#connection-status")!;
+const sshDetail = document.querySelector<HTMLSpanElement>("#ssh-detail")!;
+const error = document.querySelector<HTMLParagraphElement>("#action-error")!;
 const stop = document.querySelector<HTMLButtonElement>("#stop")!;
-const allowSsh = document.querySelector<HTMLButtonElement>("#allow-ssh")!;
-const sshStatus = document.querySelector<HTMLParagraphElement>("#ssh-status")!;
+const stopRow = document.querySelector<HTMLElement>("#stop-row")!;
 
-function updateUI(state: StateResponse): void {
-  stop.hidden = !state.isActive;
-  allowSsh.hidden = state.sshApproved === true && state.isActive;
-  allowSsh.textContent = state.sshApproved ? "Resume SSH access" : "Allow SSH access";
-  const message = state.error ?? (state.sshApproved ? "This profile is approved for SSH." : "");
-  if (message || !sshStatus.textContent) sshStatus.textContent = message;
-  toggle.checked = state.isActive;
-  statusText.textContent = state.isActive ? "Active" : "Inactive";
+let revision = 0;
+let pending = false;
 
-  if (state.isActive) {
-    connectionStatus.textContent = state.isConnected ? "Connected to relay" : "Connecting...";
-    connectionStatus.className = state.isConnected
-      ? "connection-status connected"
-      : "connection-status connecting";
+function render(state: StateResponse): void {
+  local.checked = state.isActive;
+  ssh.checked = state.sshEnabled === true;
+  stopRow.hidden = !state.isActive;
+  connection.dataset.state = state.isConnected ? "connected" : state.isActive ? "connecting" : "off";
+  connection.textContent = state.isConnected ? "Relay connected" : state.isActive ? "Connecting to relay" : "Relay off";
+
+  if (state.sshConnected) {
+    sshDetail.textContent = "Available to approved SSH routes.";
+  } else if (state.sshEnabled) {
+    sshDetail.textContent = "Waiting for the relay to enable SSH access.";
+  } else if (state.sshApproved) {
+    sshDetail.textContent = "Approval saved for this Chrome profile.";
   } else {
-    connectionStatus.textContent = "";
-    connectionStatus.className = "connection-status";
+    sshDetail.textContent = state.isActive
+      ? "Approve this Chrome profile for remote sessions."
+      : "Approve this profile and start the relay connection.";
   }
 }
 
-function refreshState(): void {
-  chrome.runtime.sendMessage<GetStateMessage, StateResponse>({ type: "getState" }, (response) => {
-    if (response) {
-      updateUI(response);
-    }
-  });
-}
-
-// Load initial state
-refreshState();
-
-// Poll for state updates while popup is open
-const pollInterval = setInterval(refreshState, 1000);
-
-// Clean up on popup close
-window.addEventListener("unload", () => {
-  clearInterval(pollInterval);
-});
-
-// Handle toggle changes
-toggle.addEventListener("change", () => {
-  setActive(toggle.checked);
-});
-stop.addEventListener("click", () => setActive(false));
-
-function setActive(isActive: boolean): void {
-  chrome.runtime.sendMessage<SetStateMessage, StateResponse>(
-    { type: "setState", isActive },
-    (response) => {
-      if (response) {
-        updateUI(response);
-      }
-    }
-  );
-}
-
-allowSsh.addEventListener("click", async () => {
-  allowSsh.disabled = true;
-  sshStatus.textContent = "";
+async function refresh(): Promise<void> {
+  const current = revision;
   try {
-    const state = await chrome.runtime.sendMessage<AllowSshAccessMessage, StateResponse>({
-      type: "allowSshAccess",
-    });
-    updateUI(state);
+    const state = await chrome.runtime.sendMessage<PopupMessage, StateResponse>({ type: "getState" });
+    if (state && current === revision && !pending) render(state);
   } catch {
-    sshStatus.textContent = "Could not reach the extension. Try again.";
-  } finally {
-    allowSsh.disabled = false;
+    if (current === revision && !pending) connection.textContent = "Extension unavailable";
   }
-});
+}
+
+async function change(message: PopupMessage): Promise<void> {
+  const current = ++revision;
+  pending = true;
+  local.disabled = true;
+  ssh.disabled = true;
+  error.hidden = true;
+  try {
+    const state = await chrome.runtime.sendMessage<PopupMessage, StateResponse>(message);
+    if (current !== revision) return;
+    render(state);
+    error.textContent = state.error ?? "";
+    error.hidden = !state.error;
+  } catch {
+    if (current !== revision) return;
+    error.textContent = "Could not update access. Try again.";
+    error.hidden = false;
+  } finally {
+    if (current === revision) {
+      pending = false;
+      local.disabled = false;
+      ssh.disabled = false;
+      void refresh();
+    }
+  }
+}
+
+local.addEventListener("change", () => void change({ type: "setState", isActive: local.checked }));
+ssh.addEventListener("change", () => void change({ type: "setSshAccess", enabled: ssh.checked }));
+stop.addEventListener("click", () => void change({ type: "setState", isActive: false }));
+void refresh();
+const poll = setInterval(() => void refresh(), 1000);
+window.addEventListener("unload", () => clearInterval(poll));

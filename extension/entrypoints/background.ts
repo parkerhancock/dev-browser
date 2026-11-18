@@ -59,9 +59,10 @@ export default defineBackground(() => {
   }
 
   // Handle state changes
-  async function handleStateChange(isActive: boolean): Promise<void> {
+  async function handleStateChange(isActive: boolean, sshEnabled = false): Promise<void> {
+    connectionManager.setSshAccess(isActive && sshEnabled);
     if (!isActive) connectionManager.disconnect();
-    await stateManager.setState({ isActive });
+    await stateManager.setState({ isActive, sshEnabled: isActive && sshEnabled });
     if (isActive) {
       chrome.alarms.create(KEEPALIVE_ALARM, { periodInMinutes: 0.5 });
       connectionManager.startMaintaining();
@@ -94,6 +95,18 @@ export default defineBackground(() => {
   let approvingSsh = false;
   let popupStateVersion = 0;
 
+  async function popupState(error?: string): Promise<StateResponse> {
+    const state = await stateManager.getState();
+    return {
+      isActive: state.isActive,
+      isConnected: await connectionManager.checkConnection(),
+      sshApproved: await hasSshApproval(),
+      sshEnabled: state.isActive && state.sshEnabled === true,
+      sshConnected: connectionManager.isSshConnected(),
+      error,
+    };
+  }
+
   // Handle messages from popup
   chrome.runtime.onMessage.addListener(
     (
@@ -102,48 +115,32 @@ export default defineBackground(() => {
       sendResponse: (response: StateResponse) => void
     ) => {
       if (message.type === "getState") {
-        (async () => {
-          try {
-            const state = await stateManager.getState();
-            const isConnected = await connectionManager.checkConnection();
-            sendResponse({
-              isActive: state.isActive,
-              isConnected,
-              sshApproved: await hasSshApproval(),
-            });
-          } catch (err) {
-            logger.debug("Error handling getState:", err);
-            sendResponse({ isActive: false, isConnected: false });
-          }
-        })();
-        return true; // Async response
+        void popupState().then(sendResponse, () => sendResponse({ isActive: false, isConnected: false }));
+        return true;
       }
+      if (sender.url !== chrome.runtime.getURL("popup.html")) return false;
 
-      if (message.type === "allowSshAccess") {
-        if (sender.url !== chrome.runtime.getURL("popup.html")) return false;
+      if (message.type === "setSshAccess") {
         if (approvingSsh) {
-          sendResponse({ isActive: false, isConnected: false, error: "Approval is already in progress" });
-          return false;
+          void popupState("Approval is already in progress").then(sendResponse);
+          return true;
         }
         approvingSsh = true;
-        const version = popupStateVersion;
+        const version = ++popupStateVersion;
         void (async () => {
           try {
-            await allowSshAccess();
+            const approved = await hasSshApproval();
+            if (message.enabled && !approved) await allowSshAccess();
             if (version === popupStateVersion) {
-              connectionManager.disconnect();
-              await handleStateChange(true);
+              const state = await stateManager.getState();
+              if (version === popupStateVersion) {
+                if (message.enabled && !approved) connectionManager.disconnect();
+                await handleStateChange(message.enabled || state.isActive, message.enabled);
+              }
             }
-            const state = await stateManager.getState();
-            sendResponse({ isActive: state.isActive, isConnected: connectionManager.isConnected(), sshApproved: true });
+            sendResponse(await popupState());
           } catch (error) {
-            const state = await stateManager.getState();
-            sendResponse({
-              isActive: state.isActive,
-              isConnected: connectionManager.isConnected(),
-              sshApproved: await hasSshApproval(),
-              error: error instanceof Error ? error.message : "SSH access could not be approved",
-            });
+            sendResponse(await popupState(error instanceof Error ? error.message : "SSH access could not be changed"));
           } finally {
             approvingSsh = false;
           }
@@ -153,22 +150,10 @@ export default defineBackground(() => {
 
       if (message.type === "setState") {
         popupStateVersion++;
-        (async () => {
-          try {
-            await handleStateChange(message.isActive);
-            const state = await stateManager.getState();
-            const isConnected = await connectionManager.checkConnection();
-            sendResponse({
-              isActive: state.isActive,
-              isConnected,
-              sshApproved: await hasSshApproval(),
-            });
-          } catch (err) {
-            logger.debug("Error handling setState:", err);
-            sendResponse({ isActive: false, isConnected: false });
-          }
-        })();
-        return true; // Async response
+        void handleStateChange(message.isActive)
+          .then(() => popupState(), () => popupState("Browser control could not be changed"))
+          .then(sendResponse);
+        return true;
       }
 
       return false;
@@ -239,6 +224,7 @@ export default defineBackground(() => {
     .then((state) => {
       updateBadge(state.isActive);
       if (state.isActive) {
+        connectionManager.setSshAccess(state.sshEnabled === true);
         // Create keep-alive alarm only when extension is active
         chrome.alarms.create(KEEPALIVE_ALARM, { periodInMinutes: 0.5 });
         connectionManager.startMaintaining();

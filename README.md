@@ -102,9 +102,10 @@ The relay registers one profile and rejects other profiles after approval.
 Dev Sessions pins the registered fingerprint, available as `extensionProfileId`
 in the authenticated relay health response.
 
-**Stop** in the popup ends the live connection immediately. A Dev Sessions
-client attached to that connection loses access and must explicitly attach to
-a fresh connection after you activate the extension again. A standalone route
+Turn off **Allow SSH access** to end SSH sessions while keeping local browser
+control connected. **Stop all access** also disconnects the local browser.
+The profile approval stays saved. A Dev Sessions client must explicitly
+attach to a fresh connection after SSH access is enabled again. A standalone route
 is independent. `observe_existing_tab` checks the origin, path, and optionally a
 title substring of a tab that is already open. Its result is a boolean.
 

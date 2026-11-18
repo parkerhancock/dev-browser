@@ -6,6 +6,7 @@ const STORAGE_KEY = "devBrowserActiveState";
 
 export interface ExtensionState {
   isActive: boolean;
+  sshEnabled?: boolean;
 }
 
 export class StateManager {

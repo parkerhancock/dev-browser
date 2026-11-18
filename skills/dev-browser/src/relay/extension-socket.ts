@@ -50,6 +50,11 @@ export function registerExtensionSocket(
   function register(path: string, paired: boolean) {
     app.get(path, upgradeWebSocket(() => {
       let authTimeout: ReturnType<typeof setTimeout> | undefined;
+      function setSshAccess(ws: WSContext, enabled: boolean) {
+        live.extensionConnectionId = enabled ? live.extensionConnectionId ?? randomUUID() : undefined;
+        ws.send(JSON.stringify({ method: "sshAccess", enabled }));
+      }
+
       function activate(ws: WSContext) {
         if (live.extensionWs) {
           log("Closing existing extension connection");
@@ -69,22 +74,20 @@ export function registerExtensionSocket(
         }
 
         live.extensionWs = ws;
-        live.extensionConnectionId = paired ? randomUUID() : undefined;
-        const connection = live.extensionConnectionId;
+        live.extensionConnectionId = undefined;
+        live.extensionAuthenticated = paired;
         if (paired) ws.send(JSON.stringify({ method: "paired" }));
         log("Extension connected");
 
         // Attempt recovery of persisted pages after connection stabilizes
         setTimeout(() => {
           if (live.extensionWs !== ws) return;
-          const recover = () => recoverPersistedPages()
+          void recoverPersistedPages()
             // Once the relay knows which sessions survived, close the rest
             .then((recovered) => (recovered ? sweepTabGroups() : undefined))
             .catch((err) => {
               log("Recovery failed:", err);
             });
-          if (connection) ctx.connectionScope.run(connection, recover);
-          else void recover();
         }, 500);
       }
 
@@ -110,13 +113,18 @@ export function registerExtensionSocket(
             activate(ws);
             return;
           }
-          if (ctx.pairing.profileId && !live.extensionConnectionId) return;
-          let message: ExtensionMessage;
+          if (ctx.pairing.profileId && !live.extensionAuthenticated) return;
+          let message: ExtensionMessage | { method: "setSshAccess"; enabled: boolean };
 
           try {
             message = JSON.parse(event.data.toString());
           } catch {
             ws.close(1000, "Invalid JSON");
+            return;
+          }
+
+          if (message && "method" in message && message.method === "setSshAccess") {
+            if (paired && typeof message.enabled === "boolean") setSshAccess(ws, message.enabled);
             return;
           }
 
@@ -487,6 +495,7 @@ export function registerExtensionSocket(
 
           live.extensionWs = null;
           live.extensionConnectionId = undefined;
+          live.extensionAuthenticated = false;
           live.extensionBrowser = null;
 
           // Clear in-memory state but PRESERVE live.persistedPages for recovery

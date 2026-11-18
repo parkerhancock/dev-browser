@@ -44,6 +44,7 @@ test("a different profile cannot displace the approved socket and Stop invalidat
     extensionProfileId?: string;
     extensionConnectionId: string;
     extensionConnected: boolean;
+    sshAccessEnabled: boolean;
   };
   async function connect() {
     const ws = open("/extension/paired");
@@ -83,6 +84,13 @@ test("a different profile cannot displace the approved socket and Stop invalidat
     expect(await approveWithHost(origin)).toEqual({ approved: true });
 
     const approved = await connect();
+    async function setSsh(ws: WebSocket, enabled: boolean) {
+      const acknowledged = once(ws, "message");
+      ws.send(JSON.stringify({ method: "setSshAccess", enabled }));
+      expect(JSON.parse(String((await acknowledged)[0]))).toEqual({ method: "sshAccess", enabled });
+    }
+    expect((await health()).sshAccessEnabled).toBe(false);
+    await setSsh(approved, true);
     const first = await health();
     expect(first.extensionProfileId).toBe(profileId);
     expect(first.extensionConnectionId).toBeTruthy();
@@ -111,12 +119,23 @@ test("a different profile cannot displace the approved socket and Stop invalidat
     expect((await bound()).status).toBe(200);
     expect(readDispatched).toBe(true);
 
+    await setSsh(approved, false);
+    const local = await health();
+    expect(local.extensionConnected).toBe(true);
+    expect(local.sshAccessEnabled).toBe(false);
+    expect((await bound()).status).toBe(409);
+    expect((await fetch(base + "/all-targets", { headers })).status).toBe(200);
+    await setSsh(approved, true);
+    expect((await health()).extensionConnectionId).not.toBe(first.extensionConnectionId);
+    expect((await bound()).status).toBe(409);
+
     const disconnected = once(approved, "close");
     approved.close();
     await disconnected;
     expect((await bound()).status).toBe(409);
     expect((await health()).extensionConnected).toBe(false);
-    await connect();
+    const reconnected = await connect();
+    await setSsh(reconnected, true);
     expect((await bound()).status).toBe(409);
     expect((await health()).extensionConnectionId).not.toBe(first.extensionConnectionId);
   } finally {

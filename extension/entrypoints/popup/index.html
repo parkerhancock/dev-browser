@@ -7,20 +7,42 @@
     <link rel="stylesheet" href="./style.css" />
   </head>
   <body>
-    <div class="popup">
-      <h1>Dev Browser</h1>
-      <div class="toggle-row">
-        <label class="toggle">
-          <input type="checkbox" id="active-toggle" />
-          <span class="slider"></span>
-        </label>
-        <span id="status-text">Inactive</span>
-      </div>
-      <p id="connection-status" class="connection-status"></p>
-      <button type="button" id="stop" hidden>Stop</button>
-      <button type="button" id="allow-ssh">Allow SSH access</button>
-      <p id="ssh-status" role="status"></p>
-    </div>
+    <main class="popup">
+      <header>
+        <h1>Dev Browser</h1>
+        <p id="connection-status" class="connection" role="status">Checking relay</p>
+      </header>
+
+      <section aria-label="Browser access">
+        <div class="setting">
+          <label class="setting-label" for="active-toggle">
+            <strong>Local browser control</strong>
+            <span id="local-detail">Allow browser control from this computer.</span>
+          </label>
+          <label class="toggle">
+            <input type="checkbox" role="switch" id="active-toggle" aria-label="Local browser control" aria-describedby="local-detail" />
+            <span class="slider"></span>
+          </label>
+        </div>
+
+        <div class="setting">
+          <label class="setting-label" for="ssh-toggle">
+            <strong>Allow SSH access</strong>
+            <span id="ssh-detail" role="status">Checking profile approval.</span>
+          </label>
+          <label class="toggle">
+            <input type="checkbox" role="switch" id="ssh-toggle" aria-label="Allow SSH access" aria-describedby="ssh-detail" />
+            <span class="slider"></span>
+          </label>
+        </div>
+      </section>
+
+      <p id="action-error" class="error" role="alert" hidden></p>
+      <footer id="stop-row" hidden>
+        <p>Ends both kinds of access. Profile approval stays saved.</p>
+        <button type="button" id="stop">Stop all access</button>
+      </footer>
+    </main>
     <script type="module" src="./main.ts"></script>
   </body>
 </html>

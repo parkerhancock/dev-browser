@@ -400,7 +400,7 @@ export function buildServer(state: BrowserState): McpServer {
     }
     return textResult({
       mode: "extension",
-      extensionConnected: info?.extensionConnected === true,
+      extensionConnected: info?.extensionConnected === true && info?.sshAccessEnabled !== false,
       extensionProfileId: info?.extensionProfileId,
       extensionConnectionId: connection,
     });

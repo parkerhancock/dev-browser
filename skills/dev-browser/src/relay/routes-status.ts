@@ -38,6 +38,7 @@ export function registerStatusRoutes(app: Hono, ctx: RelayContext): void {
       ok: true,
       mode: "extension",
       extensionConnected: live.extensionWs !== null,
+      sshAccessEnabled: !!live.extensionConnectionId,
       extensionProfileId: live.extensionConnectionId ? ctx.pairing.profileId : undefined,
       extensionConnectionId: live.extensionConnectionId,
       browser: live.extensionBrowser?.browser ?? null,

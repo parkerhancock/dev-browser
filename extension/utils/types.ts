@@ -174,11 +174,14 @@ export interface StateResponse {
   isActive: boolean;
   isConnected: boolean;
   sshApproved?: boolean;
+  sshEnabled?: boolean;
+  sshConnected?: boolean;
   error?: string;
 }
 
-export interface AllowSshAccessMessage {
-  type: "allowSshAccess";
+export interface SetSshAccessMessage {
+  type: "setSshAccess";
+  enabled: boolean;
 }
 
-export type PopupMessage = GetStateMessage | SetStateMessage | AllowSshAccessMessage;
+export type PopupMessage = GetStateMessage | SetStateMessage | SetSshAccessMessage;

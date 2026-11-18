@@ -66,6 +66,7 @@ export function createRelayContext(options: RelayOptions) {
   const live: {
     extensionWs: WSContext | null;
     extensionConnectionId?: string;
+    extensionAuthenticated?: boolean;
     isRecovering: boolean; // True during extension reconnect recovery
     extensionBrowser: ExtensionBrowserInfo | null;
     persistedPages: PersistedPage[];
@@ -537,7 +538,7 @@ export function createRelayContext(options: RelayOptions) {
     params?: Record<string, unknown>;
     timeout?: number;
   }): Promise<unknown> {
-    if (!live.extensionWs || (pairing.profileId && !live.extensionConnectionId)) {
+    if (!live.extensionWs || (pairing.profileId && !live.extensionAuthenticated)) {
       throw new Error("Extension not connected");
     }
 

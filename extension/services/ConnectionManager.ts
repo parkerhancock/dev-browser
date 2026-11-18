@@ -52,6 +52,9 @@ export class ConnectionManager {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private shouldMaintain = false;
   private connecting = false;
+  private sshEnabled = false;
+  private sshAcknowledged = false;
+  private sshTimer: ReturnType<typeof setTimeout> | undefined;
   private intentionalDisconnect = false;
   private logger: Logger;
   private onMessage: (message: ExtensionCommandMessage) => Promise<unknown>;
@@ -68,6 +71,21 @@ export class ConnectionManager {
    */
   isConnected(): boolean {
     return this.ws?.readyState === WebSocket.OPEN;
+  }
+
+  isSshConnected(): boolean {
+    return this.isConnected() && this.sshEnabled && this.sshAcknowledged;
+  }
+
+  setSshAccess(enabled: boolean): void {
+    this.sshEnabled = enabled;
+    if (!this.ws || !this.isConnected()) return;
+    if (enabled === this.sshAcknowledged && !this.sshTimer) return;
+    this.send({ method: "setSshAccess", enabled });
+    clearTimeout(this.sshTimer);
+    // If revocation cannot be acknowledged, close the connection and reconnect locally.
+    const socket = this.ws;
+    this.sshTimer = setTimeout(() => socket.close(), 1500);
   }
 
   /**
@@ -159,6 +177,9 @@ export class ConnectionManager {
   disconnect(): void {
     this.intentionalDisconnect = true;
     this.stopMaintaining();
+    clearTimeout(this.sshTimer);
+    this.sshTimer = undefined;
+    this.sshAcknowledged = false;
     this.pendingSocket?.close();
     this.pendingSocket = null;
     if (this.ws) {
@@ -233,6 +254,8 @@ export class ConnectionManager {
       }
       this.ws = socket;
       this.setupSocketHandlers(socket);
+      this.sshAcknowledged = false;
+      if (credential && this.sshEnabled) this.setSshAccess(true);
       this.logger.log("Connected to relay server");
       this.send({ method: "browserInfo", params: detectBrowser() });
     } finally {
@@ -248,7 +271,7 @@ export class ConnectionManager {
   private setupSocketHandlers(socket: WebSocket): void {
     socket.onmessage = async (event: MessageEvent) => {
       if (this.ws !== socket || !this.shouldMaintain) return;
-      let message: ExtensionCommandMessage;
+      let message: ExtensionCommandMessage | { method: "sshAccess"; enabled: boolean };
       try {
         message = JSON.parse(event.data);
       } catch (error) {
@@ -256,6 +279,15 @@ export class ConnectionManager {
         this.send({
           error: { code: -32700, message: "Parse error" },
         });
+        return;
+      }
+
+      if (message.method === "sshAccess") {
+        this.sshAcknowledged = message.enabled;
+        if (message.enabled === this.sshEnabled) {
+          clearTimeout(this.sshTimer);
+          this.sshTimer = undefined;
+        }
         return;
       }
 
@@ -274,6 +306,9 @@ export class ConnectionManager {
       // Only clear ws if this closing socket is still the active one.
       // Prevents race condition where old socket's onclose overwrites new socket reference.
       if (this.ws === socket) {
+        clearTimeout(this.sshTimer);
+        this.sshTimer = undefined;
+        this.sshAcknowledged = false;
         this.ws = null;
       }
       // Only trigger onDisconnect for intentional disconnects
