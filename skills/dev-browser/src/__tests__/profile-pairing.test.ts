@@ -84,12 +84,18 @@ test("a different profile cannot displace the approved socket and Stop invalidat
     const bound = () => fetch(base + "/all-targets", {
       headers: { ...headers, "X-DevBrowser-Extension-Connection": first.extensionConnectionId },
     });
-    const read = bound();
-    const [request] = await once(approved, "message");
-    const { id, method } = JSON.parse(String(request));
-    expect(method).toBe("getAvailableTargets");
-    approved.send(JSON.stringify({ id, result: { targets: [] } }));
-    expect((await read).status).toBe(200);
+    let readDispatched = false;
+    approved.on("message", (request) => {
+      const { id, method } = JSON.parse(String(request));
+      if (method === "getAvailableTargets") {
+        readDispatched = true;
+        approved.send(JSON.stringify({ id, result: { targets: [] } }));
+      } else if (method === "sweepGroups") {
+        approved.send(JSON.stringify({ id, result: { closed: 0 } }));
+      }
+    });
+    expect((await bound()).status).toBe(200);
+    expect(readDispatched).toBe(true);
 
     const disconnected = once(approved, "close");
     approved.close();
