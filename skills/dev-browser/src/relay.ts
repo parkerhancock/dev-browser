@@ -58,9 +58,12 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
   // web pages can't fake a chrome-extension:// Origin). http(s) Origins are
   // always rejected — that's a web page attempting a cross-site connection.
   app.use("*", async (c, next) => {
-    if (!requireAuth) return next();
-
     const origin = c.req.header("Origin");
+    const extensionOrigin = !!origin && /^(chrome|moz)-extension:\/\/[a-z0-9-]+$/iu.test(origin);
+    if (c.req.path === "/pairing/complete" || c.req.path === "/extension/paired") {
+      return extensionOrigin ? next() : c.json({ error: "Browser extension origin required" }, 403);
+    }
+    if (!requireAuth) return next();
     const candidate = c.req.header(TOKEN_HEADER) ?? c.req.query("token");
     const hasValidToken = !!candidate && tokensMatch(candidate, token);
 
@@ -84,6 +87,34 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
       },
       401
     );
+  });
+
+  app.post("/pairing/start", (c) => {
+    if (!requireAuth) return c.json({ error: "Pairing requires relay authentication" }, 403);
+    if (ctx.pairing.profileId) return c.json({ error: "Relay already paired" }, 409);
+    return c.json({ code: ctx.pairing.begin() }, 201, { "Cache-Control": "no-store" });
+  });
+  app.post("/pairing/complete", async (c) => {
+    if (!requireAuth) return c.json({ error: "Pairing requires relay authentication" }, 403);
+    const body = await c.req.json().catch(() => null);
+    const profileId = ctx.pairing.redeem(body?.code, body?.credential);
+    if (!profileId) return c.json({ error: "Invalid or expired pairing code" }, 403);
+    live.persistedPages = [];
+    ctx.debouncedSave();
+    live.extensionWs?.close(1008, "Pairing required");
+    return c.json({ profileId }, 201, { "Cache-Control": "no-store" });
+  });
+
+  app.use("*", async (c, next) => {
+    const connection = c.req.header("X-DevBrowser-Extension-Connection");
+    if (!connection) return next();
+    if (live.extensionConnectionId !== connection) {
+      return c.json({ error: "Approved extension connection ended" }, 409);
+    }
+    await ctx.connectionScope.run(connection, next);
+    if (live.extensionConnectionId !== connection) {
+      c.res = c.json({ error: "Approved extension connection ended" }, 409);
+    }
   });
 
   // ---- Optional MCP endpoint (handler injected by the CLI) ----

@@ -1,10 +1,16 @@
-import type { GetStateMessage, SetStateMessage, StateResponse } from "../../utils/types";
+import type { GetStateMessage, PairProfileMessage, SetStateMessage, StateResponse } from "../../utils/types";
 
 const toggle = document.getElementById("active-toggle") as HTMLInputElement;
 const statusText = document.getElementById("status-text") as HTMLSpanElement;
 const connectionStatus = document.getElementById("connection-status") as HTMLParagraphElement;
 
+const stop = document.querySelector<HTMLButtonElement>("#stop")!;
+const pairing = document.querySelector<HTMLFormElement>("#pairing")!;
+const code = document.querySelector<HTMLInputElement>("#pairing-code")!;
+const pairingStatus = document.querySelector<HTMLParagraphElement>("#pairing-status")!;
+
 function updateUI(state: StateResponse): void {
+  stop.hidden = !state.isActive;
   toggle.checked = state.isActive;
   statusText.textContent = state.isActive ? "Active" : "Inactive";
 
@@ -40,7 +46,11 @@ window.addEventListener("unload", () => {
 
 // Handle toggle changes
 toggle.addEventListener("change", () => {
-  const isActive = toggle.checked;
+  setActive(toggle.checked);
+});
+stop.addEventListener("click", () => setActive(false));
+
+function setActive(isActive: boolean): void {
   chrome.runtime.sendMessage<SetStateMessage, StateResponse>(
     { type: "setState", isActive },
     (response) => {
@@ -49,4 +59,23 @@ toggle.addEventListener("change", () => {
       }
     }
   );
+}
+
+pairing.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const pairingCode = code.value.trim();
+  code.value = "";
+  const button = pairing.querySelector("button")!;
+  button.disabled = true;
+  try {
+    const state = await chrome.runtime.sendMessage<PairProfileMessage, StateResponse>({
+      type: "pairProfile", code: pairingCode,
+    });
+    updateUI(state);
+    pairingStatus.textContent = state.error ?? "Paired. This profile is approved.";
+  } catch {
+    pairingStatus.textContent = "Could not reach the extension. Try again.";
+  } finally {
+    button.disabled = false;
+  }
 });

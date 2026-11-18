@@ -5,6 +5,42 @@
   },
   "tools": [
     {
+      "name": "extension_route_status",
+      "description": "Verify a paired extension connection without reading tabs.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "observe_existing_tab",
+      "description": "Check an existing HTTPS tab on the paired profile without navigating or returning tab data.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "origin": {
+            "type": "string",
+            "format": "uri"
+          },
+          "path_prefix": {
+            "type": "string",
+            "pattern": "^\\/"
+          },
+          "title_contains": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "origin",
+          "path_prefix"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
       "name": "tabs_context",
       "description": "List the current browser context: mode, this session's tab group name (null until you name it), named pages in this session, and every open browser tab.",
       "inputSchema": {
@@ -36,7 +72,9 @@
             "description": "In extension mode, name the tab group your tabs share in the user's Chrome: 2-4 words on what you are doing, like \"Aetna benefits\" or \"Checkout bug repro\". Pass it on your first call that opens a page; pass it again to rename the group."
           }
         },
-        "required": ["url"],
+        "required": [
+          "url"
+        ],
         "additionalProperties": false,
         "$schema": "http://json-schema.org/draft-07/schema#"
       }
@@ -53,7 +91,10 @@
           },
           "filter": {
             "type": "string",
-            "enum": ["all", "interactive"],
+            "enum": [
+              "all",
+              "interactive"
+            ],
             "description": "\"interactive\" lists only elements you can act on (default \"all\")"
           },
           "depth": {
@@ -85,7 +126,10 @@
           },
           "format": {
             "type": "string",
-            "enum": ["text", "markdown"],
+            "enum": [
+              "text",
+              "markdown"
+            ],
             "description": "Default: text"
           },
           "max_chars": {
@@ -112,7 +156,9 @@
             "description": "Named page/tab to act on (default: \"main\")"
           }
         },
-        "required": ["query"],
+        "required": [
+          "query"
+        ],
         "additionalProperties": false,
         "$schema": "http://json-schema.org/draft-07/schema#"
       }
@@ -125,7 +171,10 @@
         "properties": {
           "action": {
             "type": "string",
-            "enum": ["click", "fill"]
+            "enum": [
+              "click",
+              "fill"
+            ]
           },
           "ref": {
             "type": "string",
@@ -140,7 +189,10 @@
             "description": "Named page/tab to act on (default: \"main\")"
           }
         },
-        "required": ["action", "ref"],
+        "required": [
+          "action",
+          "ref"
+        ],
         "additionalProperties": false,
         "$schema": "http://json-schema.org/draft-07/schema#"
       }
@@ -156,7 +208,11 @@
             "description": "Ref id like e12 from read_page/find"
           },
           "value": {
-            "type": ["string", "number", "boolean"],
+            "type": [
+              "string",
+              "number",
+              "boolean"
+            ],
             "description": "Value for ref: text, an option's value or label, or true/false for a checkbox"
           },
           "fields": {
@@ -189,7 +245,9 @@
             "description": "Named page/tab to act on (default: \"main\")"
           }
         },
-        "required": ["code"],
+        "required": [
+          "code"
+        ],
         "additionalProperties": false,
         "$schema": "http://json-schema.org/draft-07/schema#"
       }
@@ -273,7 +331,12 @@
           },
           "scroll_direction": {
             "type": "string",
-            "enum": ["up", "down", "left", "right"]
+            "enum": [
+              "up",
+              "down",
+              "left",
+              "right"
+            ]
           },
           "scroll_amount": {
             "type": "number",
@@ -299,7 +362,9 @@
             "description": "Named page/tab to act on (default: \"main\")"
           }
         },
-        "required": ["action"],
+        "required": [
+          "action"
+        ],
         "additionalProperties": false,
         "$schema": "http://json-schema.org/draft-07/schema#"
       }
@@ -318,11 +383,18 @@
           },
           "preset": {
             "type": "string",
-            "enum": ["mobile", "tablet", "desktop"]
+            "enum": [
+              "mobile",
+              "tablet",
+              "desktop"
+            ]
           },
           "color_scheme": {
             "type": "string",
-            "enum": ["light", "dark"]
+            "enum": [
+              "light",
+              "dark"
+            ]
           },
           "page": {
             "type": "string",
@@ -359,7 +431,9 @@
             "description": "Named page/tab to act on (default: \"main\")"
           }
         },
-        "required": ["files"],
+        "required": [
+          "files"
+        ],
         "additionalProperties": false,
         "$schema": "http://json-schema.org/draft-07/schema#"
       }
@@ -379,7 +453,9 @@
             "description": "In extension mode, name the tab group your tabs share in the user's Chrome: 2-4 words on what you are doing, like \"Aetna benefits\" or \"Checkout bug repro\". Pass it on your first call that opens a page; pass it again to rename the group."
           }
         },
-        "required": ["page"],
+        "required": [
+          "page"
+        ],
         "additionalProperties": false,
         "$schema": "http://json-schema.org/draft-07/schema#"
       }
@@ -394,7 +470,9 @@
             "type": "string"
           }
         },
-        "required": ["page"],
+        "required": [
+          "page"
+        ],
         "additionalProperties": false,
         "$schema": "http://json-schema.org/draft-07/schema#"
       }
@@ -409,7 +487,9 @@
             "type": "string"
           }
         },
-        "required": ["page"],
+        "required": [
+          "page"
+        ],
         "additionalProperties": false,
         "$schema": "http://json-schema.org/draft-07/schema#"
       }
@@ -497,13 +577,17 @@
                   "additionalProperties": {}
                 }
               },
-              "required": ["tool"],
+              "required": [
+                "tool"
+              ],
               "additionalProperties": false
             },
             "description": "Tool calls to run in order"
           }
         },
-        "required": ["actions"],
+        "required": [
+          "actions"
+        ],
         "additionalProperties": false,
         "$schema": "http://json-schema.org/draft-07/schema#"
       }
@@ -527,7 +611,9 @@
                   "additionalProperties": {}
                 }
               },
-              "required": ["method"],
+              "required": [
+                "method"
+              ],
               "additionalProperties": false
             }
           },
@@ -536,7 +622,9 @@
             "description": "Named page/tab to act on (default: \"main\")"
           }
         },
-        "required": ["ops"],
+        "required": [
+          "ops"
+        ],
         "additionalProperties": false,
         "$schema": "http://json-schema.org/draft-07/schema#"
       }
@@ -549,10 +637,15 @@
         "properties": {
           "mode": {
             "type": "string",
-            "enum": ["standalone", "extension"]
+            "enum": [
+              "standalone",
+              "extension"
+            ]
           }
         },
-        "required": ["mode"],
+        "required": [
+          "mode"
+        ],
         "additionalProperties": false,
         "$schema": "http://json-schema.org/draft-07/schema#"
       }
@@ -600,7 +693,10 @@
           },
           "level": {
             "type": "string",
-            "enum": ["all", "error"]
+            "enum": [
+              "all",
+              "error"
+            ]
           },
           "search": {
             "type": "string",
@@ -611,7 +707,9 @@
             "description": "Most recent lines to return (default 50)"
           }
         },
-        "required": ["server_id"],
+        "required": [
+          "server_id"
+        ],
         "additionalProperties": false,
         "$schema": "http://json-schema.org/draft-07/schema#"
       }
@@ -626,7 +724,9 @@
             "type": "string"
           }
         },
-        "required": ["server_id"],
+        "required": [
+          "server_id"
+        ],
         "additionalProperties": false,
         "$schema": "http://json-schema.org/draft-07/schema#"
       }
@@ -639,7 +739,12 @@
         "properties": {
           "action": {
             "type": "string",
-            "enum": ["start_recording", "stop_recording", "export", "clear"]
+            "enum": [
+              "start_recording",
+              "stop_recording",
+              "export",
+              "clear"
+            ]
           },
           "path": {
             "type": "string",
@@ -677,7 +782,9 @@
             "description": "Named page/tab to act on (default: \"main\")"
           }
         },
-        "required": ["action"],
+        "required": [
+          "action"
+        ],
         "additionalProperties": false,
         "$schema": "http://json-schema.org/draft-07/schema#"
       }
@@ -712,7 +819,9 @@
             "description": "Named page/tab to act on (default: \"main\")"
           }
         },
-        "required": ["path"],
+        "required": [
+          "path"
+        ],
         "additionalProperties": false,
         "$schema": "http://json-schema.org/draft-07/schema#"
       }

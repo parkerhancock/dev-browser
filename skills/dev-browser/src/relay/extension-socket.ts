@@ -2,6 +2,8 @@
  * The extension's WebSocket: connection, page recovery, and forwarded CDP events.
  */
 
+import { randomUUID } from "node:crypto";
+import type { WSContext } from "hono/ws";
 import type { NodeWebSocket } from "@hono/node-ws";
 import type { Hono } from "hono";
 import type { TargetInfo, ConnectedTarget } from "../relay-registry.js";
@@ -45,43 +47,70 @@ export function registerExtensionSocket(
   // Extension WebSocket
   // ============================================================================
 
-  app.get(
-    "/extension",
-    upgradeWebSocket(() => {
+  function register(path: string, paired: boolean) {
+    app.get(path, upgradeWebSocket(() => {
+      let authTimeout: ReturnType<typeof setTimeout> | undefined;
+      function activate(ws: WSContext) {
+        if (live.extensionWs) {
+          log("Closing existing extension connection");
+          live.extensionWs.close(4001, "Extension Replaced");
+
+          // Clear CDP session state but preserve namedPages/sessions for recovery
+          registry.clearTargetsOnly();
+          childTargets.clear();
+          consoleBuffers.clear();
+          consoleEnabled.clear();
+          live.extensionBrowser = null; // The new connection sends its own browserInfo
+          live.isRecovering = true;
+          for (const pending of extensionPendingRequests.values()) {
+            pending.reject(new Error("Extension reconnecting, please retry"));
+          }
+          extensionPendingRequests.clear();
+        }
+
+        live.extensionWs = ws;
+        live.extensionConnectionId = paired ? randomUUID() : undefined;
+        const connection = live.extensionConnectionId;
+        if (paired) ws.send(JSON.stringify({ method: "paired" }));
+        log("Extension connected");
+
+        // Attempt recovery of persisted pages after connection stabilizes
+        setTimeout(() => {
+          if (live.extensionWs !== ws) return;
+          const recover = () => recoverPersistedPages()
+            // Once the relay knows which sessions survived, close the rest
+            .then((recovered) => (recovered ? sweepTabGroups() : undefined))
+            .catch((err) => {
+              log("Recovery failed:", err);
+            });
+          if (connection) ctx.connectionScope.run(connection, recover);
+          else void recover();
+        }, 500);
+      }
+
       return {
         onOpen(_event, ws) {
-          if (live.extensionWs) {
-            log("Closing existing extension connection");
-            live.extensionWs.close(4001, "Extension Replaced");
-
-            // Clear CDP session state but preserve namedPages/sessions for recovery
-            registry.clearTargetsOnly();
-            childTargets.clear();
-            consoleBuffers.clear();
-            consoleEnabled.clear();
-            live.extensionBrowser = null; // The new connection sends its own browserInfo
-            live.isRecovering = true;
-            for (const pending of extensionPendingRequests.values()) {
-              pending.reject(new Error("Extension reconnecting, please retry"));
-            }
-            extensionPendingRequests.clear();
-          }
-
-          live.extensionWs = ws;
-          log("Extension connected");
-
-          // Attempt recovery of persisted pages after connection stabilizes
-          setTimeout(() => {
-            recoverPersistedPages()
-              // Once the relay knows which sessions survived, close the rest
-              .then((recovered) => (recovered ? sweepTabGroups() : undefined))
-              .catch((err) => {
-                log("Recovery failed:", err);
-              });
-          }, 500);
+          if (paired) {
+            authTimeout = setTimeout(() => ws.close(1008, "Pairing proof required"), 5000);
+          } else if (!ctx.pairing.profileId) activate(ws);
+          else ws.close(1008, "Paired Chrome profile required");
         },
 
         async onMessage(event, ws) {
+          if (live.extensionWs !== ws) {
+            if (!authTimeout) return;
+            clearTimeout(authTimeout);
+            authTimeout = undefined;
+            let credential: unknown;
+            try { credential = JSON.parse(event.data.toString()).credential; } catch { /* Invalid proof. */ }
+            if (!ctx.pairing.verify(credential)) {
+              ws.close(1008, "Chrome profile not paired");
+              return;
+            }
+            activate(ws);
+            return;
+          }
+          if (ctx.pairing.profileId && !live.extensionConnectionId) return;
           let message: ExtensionMessage;
 
           try {
@@ -445,10 +474,9 @@ export function registerExtensionSocket(
         },
 
         onClose(_event, ws) {
-          if (live.extensionWs && live.extensionWs !== ws) {
-            log("Old extension connection closed");
-            return;
-          }
+          clearTimeout(authTimeout);
+          authTimeout = undefined;
+          if (live.extensionWs !== ws) return;
 
           log("Extension disconnected");
 
@@ -458,6 +486,7 @@ export function registerExtensionSocket(
           extensionPendingRequests.clear();
 
           live.extensionWs = null;
+          live.extensionConnectionId = undefined;
           live.extensionBrowser = null;
 
           // Clear in-memory state but PRESERVE live.persistedPages for recovery
@@ -473,6 +502,8 @@ export function registerExtensionSocket(
           log("Extension WebSocket error:", event);
         },
       };
-    })
-  );
+    }));
+  }
+  register("/extension", false);
+  register("/extension/paired", true);
 }

@@ -124,6 +124,8 @@ const DEFAULT_PORTS = {
  * Options for connecting to the dev-browser server
  */
 export interface ConnectOptions {
+  /** Bind extension requests to an authenticated relay connection. */
+  extensionConnectionId?: string;
   /**
    * Server mode. Determines which port to connect to if serverUrl is not specified.
    * - "standalone": Fresh Chromium browser (port 9222)
@@ -454,6 +456,7 @@ export async function connect(
   const label = opts.label ?? basename(process.cwd());
   const sessionHeaders: Record<string, string> = {
     "X-DevBrowser-Session": session,
+    ...(opts.extensionConnectionId ? { "X-DevBrowser-Extension-Connection": opts.extensionConnectionId } : {}),
     ...(label ? { "X-DevBrowser-Label": encodeURIComponent(label) } : {}),
     ...(opts.token ? { [TOKEN_HEADER]: opts.token } : authHeaders()),
   };

@@ -19,7 +19,9 @@ import { homedir } from "os";
 import { randomUUID } from "crypto";
 import { type HarEntry, type PendingHarEntry, processNetworkEvent } from "../har.js";
 import { createTargetRegistry, type TargetInfo } from "../relay-registry.js";
-import { loadOrCreateToken } from "../auth.js";
+import { AsyncLocalStorage } from "node:async_hooks";
+import { createProfilePairing } from "./pairing.js";
+import { devBrowserDir, loadOrCreateToken } from "../auth.js";
 import { loadPolicy, checkNavigation, checkCdpMethod } from "../policy.js";
 import type {
   DialogPolicy,
@@ -41,6 +43,8 @@ export function createRelayContext(options: RelayOptions) {
     (process.env.DEV_BROWSER_DIALOG_POLICY as DialogPolicy | undefined) ??
     "dismiss";
   const startedAt = Date.now();
+  const pairing = createProfilePairing(devBrowserDir());
+  const connectionScope = new AsyncLocalStorage<string>();
 
   // State — all page/session/target tracking is in the registry
   const registry = createTargetRegistry();
@@ -61,6 +65,7 @@ export function createRelayContext(options: RelayOptions) {
   // State that changes over the relay's life, shared with every route module
   const live: {
     extensionWs: WSContext | null;
+    extensionConnectionId?: string;
     isRecovering: boolean; // True during extension reconnect recovery
     extensionBrowser: ExtensionBrowserInfo | null;
     persistedPages: PersistedPage[];
@@ -532,8 +537,13 @@ export function createRelayContext(options: RelayOptions) {
     params?: Record<string, unknown>;
     timeout?: number;
   }): Promise<unknown> {
-    if (!live.extensionWs) {
+    if (!live.extensionWs || (pairing.profileId && !live.extensionConnectionId)) {
       throw new Error("Extension not connected");
+    }
+
+    const expected = connectionScope.getStore();
+    if (expected && live.extensionConnectionId !== expected) {
+      throw new Error("Approved extension connection ended");
     }
 
     const id = ++live.extensionMessageId;
@@ -849,6 +859,8 @@ export function createRelayContext(options: RelayOptions) {
     sweepTabGroups,
     groupSweepInterval,
     tabGroupFor,
+    pairing,
+    connectionScope,
     debouncedSave,
     extensionPendingRequests,
     getOrCreateSession,

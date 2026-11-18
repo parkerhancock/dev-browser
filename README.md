@@ -90,6 +90,19 @@ Extension mode drives tabs in your everyday Chrome, with your cookies and sign-i
 
 The extension connects to the extension relay. Setup's login item starts the relay; without it, run `~/.dev-browser/bin/dev-browser start relay`. While the extension is connected, tools work in your Chrome, and `switch_browser` moves between the two modes mid-session.
 
+For Dev Sessions over SSH, update the relay and the existing extension together.
+Run `dev-browser pair` on the relay host, then paste the one-time code into
+**Pair with Dev Sessions** in the approved Chrome profile's extension popup.
+The code expires after five minutes. The relay registers one profile and rejects
+other profiles after enrollment. Dev Sessions pins the registered fingerprint,
+available as `extensionProfileId` in the authenticated relay health response.
+
+**Stop** in the popup ends the live connection immediately. A Dev Sessions
+client attached to that connection loses access and must explicitly attach to
+a fresh connection after you activate the extension again. A standalone route
+is independent. `observe_existing_tab` checks the origin, path, and optionally a
+title substring of a tab that is already open. Its result is a boolean.
+
 ## MCP tools
 
 | Group                   | Tools                                                                                                                               |

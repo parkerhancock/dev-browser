@@ -7,6 +7,26 @@ import type { ExtensionCommandMessage, ExtensionResponseMessage } from "../utils
 import { detectBrowser } from "../utils/browser-info";
 
 const RELAY_URL = "ws://localhost:9224/extension";
+const PAIRING_STORAGE_KEY = "devBrowserProfileCredential";
+
+export async function pairProfile(code: string): Promise<void> {
+  const stored = await chrome.storage.local.get(PAIRING_STORAGE_KEY);
+  const credential = stored[PAIRING_STORAGE_KEY] ?? Array.from(
+    crypto.getRandomValues(new Uint8Array(32)), (byte) => byte.toString(16).padStart(2, "0"),
+  ).join("");
+  await chrome.storage.local.set({ [PAIRING_STORAGE_KEY]: credential });
+  const response = await fetch("http://localhost:9224/pairing/complete", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ code, credential }),
+    signal: AbortSignal.timeout(5000),
+  });
+  if (!response.ok) {
+    if (!stored[PAIRING_STORAGE_KEY]) await chrome.storage.local.remove(PAIRING_STORAGE_KEY);
+    const failure = await response.json().catch(() => null);
+    throw new Error(failure?.error ?? "Could not pair with the local relay");
+  }
+}
 const RECONNECT_INTERVAL = 3000;
 
 export interface ConnectionManagerDeps {
@@ -17,6 +37,7 @@ export interface ConnectionManagerDeps {
 
 export class ConnectionManager {
   private ws: WebSocket | null = null;
+  private pendingSocket: WebSocket | null = null;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private shouldMaintain = false;
   private connecting = false;
@@ -53,7 +74,7 @@ export class ConnectionManager {
         method: "HEAD",
         signal: AbortSignal.timeout(1000),
       });
-      return response.ok;
+      return this.isConnected() && (response.ok || response.status === 401);
     } catch {
       // Server unreachable - close stale socket but preserve tab state for recovery
       if (this.ws) {
@@ -127,6 +148,8 @@ export class ConnectionManager {
   disconnect(): void {
     this.intentionalDisconnect = true;
     this.stopMaintaining();
+    this.pendingSocket?.close();
+    this.pendingSocket = null;
     if (this.ws) {
       this.ws.close();
       this.ws = null;
@@ -159,46 +182,51 @@ export class ConnectionManager {
   private async tryConnect(): Promise<void> {
     if (this.isConnected() || this.connecting) return;
 
-    // Check if server is available
-    try {
-      await fetch("http://localhost:9224", { method: "HEAD" });
-    } catch {
-      return;
-    }
-
     this.connecting = true;
-    this.logger.debug("Connecting to relay server...");
-    const socket = new WebSocket(RELAY_URL);
-
     try {
+      const stored = await chrome.storage.local.get(PAIRING_STORAGE_KEY);
+      if (!this.shouldMaintain) return;
+      const credential = stored[PAIRING_STORAGE_KEY];
+      const socket = new WebSocket(credential ? RELAY_URL + "/paired" : RELAY_URL);
+      this.pendingSocket = socket;
+
       await new Promise<void>((resolve, reject) => {
         const timeout = setTimeout(() => {
+          socket.close();
           reject(new Error("Connection timeout"));
         }, 5000);
+        const finish = (failure?: Error) => {
+          clearTimeout(timeout);
+          if (failure) reject(failure);
+          else resolve();
+        };
 
         socket.onopen = () => {
-          clearTimeout(timeout);
-          resolve();
+          if (credential) socket.send(JSON.stringify({ credential }));
+          else finish();
         };
-
-        socket.onerror = () => {
-          clearTimeout(timeout);
-          reject(new Error("WebSocket connection failed"));
+        socket.onmessage = (event) => {
+          if (event.data === '{"method":"paired"}') finish();
+          else {
+            socket.close();
+            finish(new Error("Invalid pairing acknowledgement"));
+          }
         };
-
-        socket.onclose = (event) => {
-          clearTimeout(timeout);
-          reject(new Error(`WebSocket closed: ${event.reason || event.code}`));
-        };
+        socket.onerror = () => finish(new Error("WebSocket connection failed"));
+        socket.onclose = () => finish(new Error("WebSocket connection closed"));
       });
 
+      if (!this.shouldMaintain || this.pendingSocket !== socket) {
+        socket.close();
+        return;
+      }
       this.ws = socket;
       this.setupSocketHandlers(socket);
       this.logger.log("Connected to relay server");
-
-      // Identify which browser this connection comes from (parity P1 #10b)
       this.send({ method: "browserInfo", params: detectBrowser() });
     } finally {
+      if (this.pendingSocket !== this.ws) this.pendingSocket?.close();
+      this.pendingSocket = null;
       this.connecting = false;
     }
   }
@@ -208,6 +236,7 @@ export class ConnectionManager {
    */
   private setupSocketHandlers(socket: WebSocket): void {
     socket.onmessage = async (event: MessageEvent) => {
+      if (this.ws !== socket || !this.shouldMaintain) return;
       let message: ExtensionCommandMessage;
       try {
         message = JSON.parse(event.data);
@@ -226,7 +255,7 @@ export class ConnectionManager {
         this.logger.debug("Error handling command:", error);
         response.error = (error as Error).message;
       }
-      this.send(response);
+      if (this.ws === socket) this.send(response);
     };
 
     socket.onclose = (event: CloseEvent) => {

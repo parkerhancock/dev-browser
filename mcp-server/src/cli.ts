@@ -51,6 +51,7 @@ function usage(): never {
       "  mcp        Start the MCP server (stdio by default)",
       "             --http PORT (streamable HTTP on 127.0.0.1, token required), --mode standalone|extension, --session ID",
       "  browsers   Show which dev-browser servers are reachable",
+      "  pair       Print a one-time code for the Chrome extension popup",
       "",
       "Background servers (relay :9224, serve :9222, mcp :9225; logs and pids in ~/.dev-browser):",
       "  start      Start servers in the background if they aren't running (default: relay)",
@@ -117,6 +118,18 @@ async function main(): Promise<void> {
         port: values.port ? Number(values.port) : undefined,
         mcpHandler: values.mcp ? createMcpNodeHandler({ mode: "extension" }) : undefined,
       });
+      break;
+    }
+
+    case "pair": {
+      parseArgs({ args: rest });
+      const { authHeaders } = await import("../../skills/dev-browser/src/auth.js");
+      const response = await fetch(`http://127.0.0.1:${defaultPort("relay")}/pairing/start`, {
+        method: "POST", headers: authHeaders(), signal: AbortSignal.timeout(3000),
+      });
+      const result = await response.json() as { code?: string; error?: string };
+      if (!response.ok || !result.code) throw new Error(result.error ?? "Could not start pairing");
+      console.log(result.code);
       break;
     }
 

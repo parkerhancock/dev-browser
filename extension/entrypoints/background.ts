@@ -7,7 +7,7 @@
 
 import { createLogger } from "../utils/logger";
 import { TabManager } from "../services/TabManager";
-import { ConnectionManager } from "../services/ConnectionManager";
+import { ConnectionManager, pairProfile } from "../services/ConnectionManager";
 import { CDPRouter } from "../services/CDPRouter";
 import { StateManager } from "../services/StateManager";
 import { DownloadManager } from "../services/DownloadManager";
@@ -60,13 +60,13 @@ export default defineBackground(() => {
 
   // Handle state changes
   async function handleStateChange(isActive: boolean): Promise<void> {
+    if (!isActive) connectionManager.disconnect();
     await stateManager.setState({ isActive });
     if (isActive) {
       chrome.alarms.create(KEEPALIVE_ALARM, { periodInMinutes: 0.5 });
       connectionManager.startMaintaining();
     } else {
       chrome.alarms.clear(KEEPALIVE_ALARM);
-      connectionManager.disconnect();
     }
     updateBadge(isActive);
   }
@@ -90,6 +90,9 @@ export default defineBackground(() => {
     logger.debug(`Debugger detached for tab ${tabId}: ${reason}`);
     void tabManager.handleDebuggerDetach(tabId, reason);
   }
+
+  let pairingInProgress = false;
+  let popupStateVersion = 0;
 
   // Handle messages from popup
   chrome.runtime.onMessage.addListener(
@@ -115,7 +118,38 @@ export default defineBackground(() => {
         return true; // Async response
       }
 
+      if (message.type === "pairProfile") {
+        if (pairingInProgress) {
+          sendResponse({ isActive: false, isConnected: false, error: "Pairing is already in progress" });
+          return false;
+        }
+        pairingInProgress = true;
+        const version = popupStateVersion;
+        void (async () => {
+          try {
+            await pairProfile(message.code);
+            if (version === popupStateVersion) {
+              connectionManager.disconnect();
+              await handleStateChange(true);
+            }
+            const state = await stateManager.getState();
+            sendResponse({ isActive: state.isActive, isConnected: connectionManager.isConnected() });
+          } catch (error) {
+            const state = await stateManager.getState();
+            sendResponse({
+              isActive: state.isActive,
+              isConnected: connectionManager.isConnected(),
+              error: error instanceof Error ? error.message : "Pairing failed",
+            });
+          } finally {
+            pairingInProgress = false;
+          }
+        })();
+        return true;
+      }
+
       if (message.type === "setState") {
+        popupStateVersion++;
         (async () => {
           try {
             await handleStateChange(message.isActive);

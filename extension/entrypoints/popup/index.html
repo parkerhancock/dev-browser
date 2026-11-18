@@ -17,6 +17,16 @@
         <span id="status-text">Inactive</span>
       </div>
       <p id="connection-status" class="connection-status"></p>
+      <button type="button" id="stop" hidden>Stop</button>
+      <details>
+        <summary>Pair with Dev Sessions</summary>
+        <form id="pairing">
+          <label for="pairing-code">Run <code>dev-browser pair</code> on the relay host, then paste the code.</label>
+          <input id="pairing-code" required autocomplete="off" spellcheck="false" maxlength="22" />
+          <button type="submit">Pair</button>
+        </form>
+        <p id="pairing-status" role="status"></p>
+      </details>
     </div>
     <script type="module" src="./main.ts"></script>
   </body>

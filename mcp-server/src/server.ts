@@ -76,6 +76,7 @@ export interface ServerOptions {
 export interface BrowserState {
   forcedMode?: BrowserMode;
   activeMode?: BrowserMode;
+  extensionConnectionId?: string;
   session: string;
   label?: string;
   /** The tab group name the agent chose, if it named one. */
@@ -185,6 +186,7 @@ async function getClient(state: BrowserState): Promise<DevBrowserClient> {
     if (mode === "standalone" && !(await probeHealth("standalone"))) await ensureStandaloneServer();
     client = await connect(`http://127.0.0.1:${serverPort(mode)}`, {
       mode,
+      extensionConnectionId: mode === "extension" ? state.extensionConnectionId : undefined,
       session: state.session,
       label: state.label ?? "",
     });
@@ -385,6 +387,45 @@ export function buildServer(state: BrowserState): McpServer {
   // --------------------------------------------------------------------
   // Tools
   // --------------------------------------------------------------------
+
+  tool("extension_route_status", "Verify a paired extension connection without reading tabs.", {}, async () => {
+    if (state.forcedMode !== "extension") {
+      return textResult({ mode: state.forcedMode ?? null, extensionConnected: false });
+    }
+    const info = await probeHealth("extension");
+    const connection = info?.extensionConnectionId;
+    if (!state.extensionConnectionId && typeof connection === "string") {
+      state.extensionConnectionId = connection;
+      state.clients.delete("extension");
+    }
+    return textResult({
+      mode: "extension",
+      extensionConnected: info?.extensionConnected === true,
+      extensionProfileId: info?.extensionProfileId,
+      extensionConnectionId: connection,
+    });
+  });
+
+  tool("observe_existing_tab", "Check an existing HTTPS tab on the paired profile without navigating or returning tab data.", {
+    origin: z.string().url(),
+    path_prefix: z.string().startsWith("/"),
+    title_contains: z.string().min(1).optional(),
+  }, async (args) => {
+    if (state.forcedMode !== "extension" || !state.extensionConnectionId) {
+      throw new Error("An explicitly paired extension session is required");
+    }
+    const origin = new URL(String(args.origin));
+    if (origin.protocol !== "https:" || origin.origin !== String(args.origin)) {
+      throw new Error("Use an HTTPS origin without a path, query, or fragment");
+    }
+    const client = await getClient(state);
+    const targets = await client.allTargets();
+    return textResult({ matched: targets.some((tab) => {
+      const url = URL.parse(tab.url);
+      return url?.origin === origin.origin && url.pathname.startsWith(String(args.path_prefix)) &&
+        (!args.title_contains || tab.title.includes(String(args.title_contains)));
+    }) });
+  });
 
   tool(
     "tabs_context",
@@ -891,6 +932,9 @@ export function buildServer(state: BrowserState): McpServer {
     { mode: z.enum(["standalone", "extension"]) },
     async (args) => {
       const mode = args.mode as BrowserMode;
+      if (state.extensionConnectionId && mode !== "extension") {
+        throw new Error("The approved extension session cannot switch browsers");
+      }
       let health = await probeHealth(mode);
       if (!health && mode === "standalone") {
         await ensureStandaloneServer();

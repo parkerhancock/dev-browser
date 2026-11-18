@@ -173,6 +173,12 @@ export interface SetStateMessage {
 export interface StateResponse {
   isActive: boolean;
   isConnected: boolean;
+  error?: string;
 }
 
-export type PopupMessage = GetStateMessage | SetStateMessage;
+export interface PairProfileMessage {
+  type: "pairProfile";
+  code: string;
+}
+
+export type PopupMessage = GetStateMessage | SetStateMessage | PairProfileMessage;

@@ -38,6 +38,8 @@ export function registerStatusRoutes(app: Hono, ctx: RelayContext): void {
       ok: true,
       mode: "extension",
       extensionConnected: live.extensionWs !== null,
+      extensionProfileId: live.extensionConnectionId ? ctx.pairing.profileId : undefined,
+      extensionConnectionId: live.extensionConnectionId,
       browser: live.extensionBrowser?.browser ?? null,
       uptimeSeconds: Math.round((Date.now() - startedAt) / 1000),
       namedPages: namedPages.size,
