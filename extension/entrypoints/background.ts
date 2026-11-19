@@ -45,6 +45,10 @@ export default defineBackground(() => {
     logger,
     onMessage: (msg) => cdpRouter.handleCommand(msg),
     onDisconnect: () => tabManager.detachAll(),
+    onApproved: () =>
+      void stateManager
+        .getState()
+        .then((state) => stateManager.setState({ ...state, sshEnabled: true })),
   });
 
   // Forward download lifecycle events to the relay

@@ -72,6 +72,8 @@ export interface ConnectionManagerDeps {
   logger: Logger;
   onMessage: (message: ExtensionCommandMessage) => Promise<unknown>;
   onDisconnect: () => void;
+  /** The relay host approved this profile; SSH access is now on. */
+  onApproved?: () => void;
 }
 
 export class ConnectionManager {
@@ -87,11 +89,13 @@ export class ConnectionManager {
   private logger: Logger;
   private onMessage: (message: ExtensionCommandMessage) => Promise<unknown>;
   private onDisconnect: () => void;
+  private onApproved?: () => void;
 
   constructor(deps: ConnectionManagerDeps) {
     this.logger = deps.logger;
     this.onMessage = deps.onMessage;
     this.onDisconnect = deps.onDisconnect;
+    this.onApproved = deps.onApproved;
   }
 
   /**
@@ -261,6 +265,9 @@ export class ConnectionManager {
           socket = await this.open(RELAY_URL + "/paired", candidate);
           await promoteCandidate(candidate);
           credential = candidate;
+          // The user asked for SSH access when approval began; finish turning it on.
+          this.sshEnabled = true;
+          this.onApproved?.();
         } catch {
           if (!this.shouldMaintain) return;
           socket = await this.open(RELAY_URL);

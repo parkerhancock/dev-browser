@@ -58,16 +58,18 @@ describe("relay-host approval", () => {
   });
   afterEach(() => vi.unstubAllGlobals());
 
-  it("announces the fingerprint, then pairs once the relay host approves it", async () => {
+  it("announces the fingerprint, then pairs and turns on SSH once the relay host approves it", async () => {
     expect(await allowSshAccess()).toBe("relay-host");
     expect(await hasSshApproval()).toBe(false);
     const fingerprint = await relayHostApprovalFingerprint();
     expect(fingerprint).toMatch(/^[0-9a-f]{64}$/u);
 
+    const onApproved = vi.fn();
     const manager = new ConnectionManager({
       logger: { log() {}, debug() {}, error() {} } as never,
       onMessage: async () => undefined,
       onDisconnect() {},
+      onApproved,
     });
     manager.startMaintaining();
     await vi.waitFor(() => expect(manager.isConnected()).toBe(true));
@@ -79,13 +81,14 @@ describe("relay-host approval", () => {
 
     // The operator approves; the relay closes the unpaired socket.
     relay.approved = fingerprint;
+    // SSH access is off in the manager here, as when the popup's switch state was lost.
     relay.sockets.at(-1)!.close(1008);
-    manager.setSshAccess(true);
     await vi.waitFor(() => expect(relay.sockets.at(-1)!.url).toBe("ws://localhost:9224/extension/paired"), {
       timeout: 5000,
     });
     await vi.waitFor(() => expect(manager.isConnected()).toBe(true));
     expect(await hasSshApproval()).toBe(true);
+    expect(onApproved).toHaveBeenCalledOnce();
     expect(await relayHostApprovalFingerprint()).toBeUndefined();
     expect(relay.requests).toContainEqual({ method: "setSshAccess", enabled: true });
     manager.disconnect();
