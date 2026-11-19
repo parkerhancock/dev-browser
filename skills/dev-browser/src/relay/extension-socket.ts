@@ -114,7 +114,10 @@ export function registerExtensionSocket(
             return;
           }
           if (ctx.pairing.profileId && !live.extensionAuthenticated) return;
-          let message: ExtensionMessage | { method: "setSshAccess"; enabled: boolean };
+          let message:
+            | ExtensionMessage
+            | { method: "setSshAccess"; enabled: boolean }
+            | { method: "requestPairing"; fingerprint: unknown };
 
           try {
             message = JSON.parse(event.data.toString());
@@ -125,6 +128,10 @@ export function registerExtensionSocket(
 
           if (message && "method" in message && message.method === "setSshAccess") {
             if (paired && typeof message.enabled === "boolean") setSshAccess(ws, message.enabled);
+            return;
+          }
+          if (message && "method" in message && message.method === "requestPairing") {
+            if (!paired) ctx.pairing.request(message.fingerprint);
             return;
           }
 

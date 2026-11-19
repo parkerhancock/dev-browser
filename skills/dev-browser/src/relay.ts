@@ -103,13 +103,40 @@ export async function serveRelay(options: RelayOptions = {}): Promise<RelayServe
     const alreadyPaired = !!ctx.pairing.profileId;
     const profileId = ctx.pairing.approve(body?.credential);
     if (!profileId) return c.json({ error: "This relay is approved for another Chrome profile" }, 409);
-    if (!alreadyPaired) {
-      live.persistedPages = [];
-      ctx.debouncedSave();
-      live.extensionWs?.close(1008, "Profile approval required");
-    }
+    if (!alreadyPaired) requirePairedReconnect();
     return c.json({ profileId }, alreadyPaired ? 200 : 201, { "Cache-Control": "no-store" });
   });
+
+  // Approval on the relay host for an extension whose computer has no local
+  // approval helper (`dev-browser pairing`). The extension announced its
+  // fingerprint over its unpaired socket; the operator matches it to the popup.
+  app.get("/pairing/pending", (c) => {
+    if (!requireAuth || c.req.header("Origin")) {
+      return c.json({ error: "Local dev-browser host required" }, 403);
+    }
+    return c.json(
+      { profileId: ctx.pairing.profileId ?? null, pending: ctx.pairing.pending },
+      200,
+      { "Cache-Control": "no-store" }
+    );
+  });
+
+  app.post("/pairing/approve", async (c) => {
+    if (!requireAuth || c.req.header("Origin")) {
+      return c.json({ error: "Local dev-browser host required" }, 403);
+    }
+    const body = await c.req.json().catch(() => null);
+    const result = ctx.pairing.approvePending(body?.fingerprint);
+    if ("error" in result) return c.json(result, 409);
+    requirePairedReconnect();
+    return c.json(result, 201, { "Cache-Control": "no-store" });
+  });
+
+  function requirePairedReconnect() {
+    live.persistedPages = [];
+    ctx.debouncedSave();
+    live.extensionWs?.close(1008, "Profile approval required");
+  }
 
   app.use("*", async (c, next) => {
     const connection = c.req.header("X-DevBrowser-Extension-Connection");

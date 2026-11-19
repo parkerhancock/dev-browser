@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { endianness } from "node:os";
 import { fileURLToPath } from "node:url";
 import { mkdtempSync, writeFileSync } from "node:fs";
@@ -147,6 +148,61 @@ test("a different profile cannot displace the approved socket and Stop invalidat
     await setSsh(reconnected, true);
     expect((await bound()).status).toBe(409);
     expect((await health()).extensionConnectionId).not.toBe(first.extensionConnectionId);
+  } finally {
+    for (const socket of sockets) socket.terminate();
+    await relay.stop();
+    vi.unstubAllEnvs();
+  }
+});
+
+test("an operator on the relay host approves a profile announced without a local helper", async () => {
+  const state = mkdtempSync(join(tmpdir(), "dev-browser-host-approval-"));
+  vi.stubEnv("DEV_BROWSER_DIR", state);
+  writeFileSync(join(state, "token"), token, { mode: 0o600 });
+  const port = randomPort();
+  const relay = await serveRelay({ port, token });
+  const base = `http://127.0.0.1:${port}`;
+  const headers = { "X-DevBrowser-Token": token, "Content-Type": "application/json" };
+  const id = createHash("sha256").update(credential).digest("hex");
+  const approve = (fingerprint: string, extra: Record<string, string> = {}) =>
+    fetch(base + "/pairing/approve", {
+      method: "POST",
+      headers: { ...headers, ...extra },
+      body: JSON.stringify({ fingerprint }),
+    });
+  const sockets: WebSocket[] = [];
+  try {
+    const unpaired = new WebSocket(`ws://127.0.0.1:${port}/extension`, { origin });
+    sockets.push(unpaired);
+    await once(unpaired, "open");
+    unpaired.send(JSON.stringify({ method: "requestPairing", fingerprint: id }));
+    unpaired.send(JSON.stringify({ method: "requestPairing", fingerprint: "not hex" }));
+
+    const pending = async () => (await (await fetch(base + "/pairing/pending", { headers })).json()) as {
+      profileId: string | null;
+      pending: string[];
+    };
+    await vi.waitFor(async () => expect((await pending()).pending).toEqual([id]));
+    expect((await fetch(base + "/pairing/pending", { headers: { ...headers, Origin: origin } })).status).toBe(403);
+    expect((await approve(id.slice(0, 8), { Origin: origin })).status).toBe(403);
+    expect((await approve(id.slice(0, 7))).status).toBe(409);
+    expect((await approve("0".repeat(8))).status).toBe(409);
+
+    const closed = once(unpaired, "close");
+    const approved = await approve(id.slice(0, 12));
+    expect(approved.status).toBe(201);
+    expect(await approved.json()).toEqual({ profileId: id });
+    expect((await closed)[0]).toBe(1008);
+    expect(await pending()).toEqual({ profileId: id, pending: [] });
+    expect(createProfilePairing(state).profileId).toBe(id);
+    expect((await approve(id)).status).toBe(409);
+
+    const paired = new WebSocket(`ws://127.0.0.1:${port}/extension/paired`, { origin });
+    sockets.push(paired);
+    await once(paired, "open");
+    const acknowledged = once(paired, "message");
+    paired.send(JSON.stringify({ credential }));
+    expect(String((await acknowledged)[0])).toBe('{"method":"paired"}');
   } finally {
     for (const socket of sockets) socket.terminate();
     await relay.stop();

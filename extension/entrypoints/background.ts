@@ -7,7 +7,12 @@
 
 import { createLogger } from "../utils/logger";
 import { TabManager } from "../services/TabManager";
-import { ConnectionManager, allowSshAccess, hasSshApproval } from "../services/ConnectionManager";
+import {
+  ConnectionManager,
+  allowSshAccess,
+  hasSshApproval,
+  relayHostApprovalFingerprint,
+} from "../services/ConnectionManager";
 import { CDPRouter } from "../services/CDPRouter";
 import { StateManager } from "../services/StateManager";
 import { DownloadManager } from "../services/DownloadManager";
@@ -103,6 +108,7 @@ export default defineBackground(() => {
       sshApproved: await hasSshApproval(),
       sshEnabled: state.isActive && state.sshEnabled === true,
       sshConnected: connectionManager.isSshConnected(),
+      sshPendingFingerprint: await relayHostApprovalFingerprint(),
       error,
     };
   }

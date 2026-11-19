@@ -52,6 +52,8 @@ function usage(): never {
       "             --http PORT (streamable HTTP on 127.0.0.1, token required), --mode standalone|extension, --session ID",
       "             --dev-sessions standalone|extension (restricted stdio tools; extension requires --profile-id HEX)",
       "  browsers   Show which dev-browser servers are reachable",
+      "  pairing    Show the relay's approved and pending Chrome profiles",
+      "             approve FINGERPRINT (8+ hex digits shown in the extension popup), --port N",
       "",
       "Background servers (relay :9224, serve :9222, mcp :9225; logs and pids in ~/.dev-browser):",
       "  start      Start servers in the background if they aren't running (default: relay)",
@@ -201,6 +203,10 @@ async function main(): Promise<void> {
       break;
     }
 
+    case "pairing":
+      await pairing(rest);
+      break;
+
     case "start":
     case "stop":
     case "restart":
@@ -211,6 +217,41 @@ async function main(): Promise<void> {
     default:
       usage();
   }
+}
+
+/** Approve, on the relay host, a Chrome profile whose computer has no local approval helper. */
+async function pairing(rest: string[]): Promise<void> {
+  const { values, positionals } = parseArgs({
+    args: rest,
+    allowPositionals: true,
+    options: { port: { type: "string" } },
+  });
+  const [action, fingerprint, ...extra] = positionals;
+  if (extra.length > 0 || (action !== undefined && (action !== "approve" || !fingerprint))) usage();
+  const { authHeaders } = await import("../../skills/dev-browser/src/auth.js");
+  const base = `http://127.0.0.1:${values.port ?? defaultPort("relay")}`;
+  const res = action
+    ? await fetch(`${base}/pairing/approve`, {
+        method: "POST",
+        headers: { ...authHeaders(), "Content-Type": "application/json" },
+        body: JSON.stringify({ fingerprint: fingerprint!.toLowerCase() }),
+      })
+    : await fetch(`${base}/pairing/pending`, { headers: authHeaders() });
+  const body = (await res.json().catch(() => ({}))) as {
+    error?: string;
+    profileId?: string | null;
+    pending?: string[];
+  };
+  if (!res.ok) {
+    console.error(body.error ?? `Relay answered HTTP ${res.status}`);
+    process.exit(1);
+  }
+  if (action) {
+    console.log(`Approved Chrome profile ${body.profileId}`);
+    return;
+  }
+  console.log(`approved: ${body.profileId ?? "none"}`);
+  for (const id of body.pending ?? []) console.log(`pending:  ${id}`);
 }
 
 /** start/stop/restart/status over the background servers. */

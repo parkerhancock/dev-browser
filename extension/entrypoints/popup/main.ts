@@ -22,6 +22,9 @@ function render(state: StateResponse): void {
     sshDetail.textContent = "Available to approved SSH routes.";
   } else if (state.sshEnabled) {
     sshDetail.textContent = "Waiting for the relay to enable SSH access.";
+  } else if (state.sshPendingFingerprint) {
+    sshDetail.textContent =
+      "On the relay host, run: dev-browser pairing approve " + state.sshPendingFingerprint.slice(0, 16);
   } else if (state.sshApproved) {
     sshDetail.textContent = "Approval saved for this Chrome profile.";
   } else {

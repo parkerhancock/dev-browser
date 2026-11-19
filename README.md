@@ -124,6 +124,14 @@ If you installed the unpacked extension from a release, register its directory
 during setup with `node scripts/setup.mjs --chrome-native-host <extension-directory>`
 on macOS or Linux. The popup handles approval and resuming access after setup.
 
+When Chrome runs on a computer without the native host, such as a Windows
+machine whose `localhost:9224` is forwarded over SSH to a relay elsewhere,
+**Allow SSH access** asks the relay host to approve the profile instead. The
+popup shows a fingerprint. On the relay host, run `dev-browser pairing` to list
+pending profiles and `dev-browser pairing approve <fingerprint>` with at least
+8 of the digits shown. Set `--port` or `DEV_BROWSER_RELAY_PORT` when the relay
+isn't on 9224. The extension pairs on its next connection.
+
 The relay registers one profile and rejects other profiles after approval.
 Dev Sessions pins the registered fingerprint, available as `extensionProfileId`
 in the authenticated relay health response.

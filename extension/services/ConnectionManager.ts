@@ -11,14 +11,44 @@ const PAIRING_STORAGE_KEY = "devBrowserProfileCredential";
 
 const CANDIDATE_STORAGE_KEY = "devBrowserPendingProfileCredential";
 const APPROVAL_STORAGE_KEY = "devBrowserSshApproved";
+const RELAY_HOST_APPROVAL_KEY = "devBrowserRelayHostApproval";
 
 export async function hasSshApproval(): Promise<boolean> {
   return (await chrome.storage.local.get(APPROVAL_STORAGE_KEY))[APPROVAL_STORAGE_KEY] === true;
 }
 
-export async function allowSshAccess(): Promise<void> {
+/** SHA-256 of a profile credential: the profile ID the relay stores and the operator compares. */
+export async function profileFingerprint(credential: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(credential));
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+/** The fingerprint awaiting approval on the relay host, if this profile chose that route. */
+export async function relayHostApprovalFingerprint(): Promise<string | undefined> {
+  const stored = await chrome.storage.local.get([RELAY_HOST_APPROVAL_KEY, CANDIDATE_STORAGE_KEY]);
+  const candidate = stored[CANDIDATE_STORAGE_KEY];
+  return stored[RELAY_HOST_APPROVAL_KEY] === true && typeof candidate === "string"
+    ? profileFingerprint(candidate)
+    : undefined;
+}
+
+async function promoteCandidate(credential: string): Promise<void> {
+  await chrome.storage.local.set({
+    [PAIRING_STORAGE_KEY]: credential,
+    [APPROVAL_STORAGE_KEY]: true,
+  });
+  await chrome.storage.local.remove([CANDIDATE_STORAGE_KEY, RELAY_HOST_APPROVAL_KEY]);
+}
+
+/**
+ * Approve this profile through the local Dev Browser host. Without that host
+ * (for example a relay reached through an SSH forward), the candidate waits
+ * for an operator on the relay host to run `dev-browser pairing approve`.
+ */
+export async function allowSshAccess(): Promise<"approved" | "relay-host"> {
   const stored = await chrome.storage.local.get([PAIRING_STORAGE_KEY, CANDIDATE_STORAGE_KEY]);
-  const credential = stored[PAIRING_STORAGE_KEY] ?? stored[CANDIDATE_STORAGE_KEY] ?? Array.from(
+  const credential: string = (stored[PAIRING_STORAGE_KEY] as string | undefined) ??
+    (stored[CANDIDATE_STORAGE_KEY] as string | undefined) ?? Array.from(
     crypto.getRandomValues(new Uint8Array(32)), (byte) => byte.toString(16).padStart(2, "0"),
   ).join("");
   await chrome.storage.local.set({ [CANDIDATE_STORAGE_KEY]: credential });
@@ -26,16 +56,14 @@ export async function allowSshAccess(): Promise<void> {
   try {
     response = await chrome.runtime.sendNativeMessage("com.dev_browser.chrome", { credential });
   } catch {
-    throw new Error("Could not reach the local Dev Browser host. Check the Dev Browser installation.");
+    await chrome.storage.local.set({ [RELAY_HOST_APPROVAL_KEY]: true });
+    return "relay-host";
   }
   if (response?.approved !== true) {
     throw new Error(response?.error ?? "SSH access could not be approved");
   }
-  await chrome.storage.local.set({
-    [PAIRING_STORAGE_KEY]: credential,
-    [APPROVAL_STORAGE_KEY]: true,
-  });
-  await chrome.storage.local.remove(CANDIDATE_STORAGE_KEY);
+  await promoteCandidate(credential);
+  return "approved";
 }
 
 const RECONNECT_INTERVAL = 3000;
@@ -216,37 +244,31 @@ export class ConnectionManager {
 
     this.connecting = true;
     try {
-      const stored = await chrome.storage.local.get(PAIRING_STORAGE_KEY);
+      const stored = await chrome.storage.local.get([
+        PAIRING_STORAGE_KEY,
+        CANDIDATE_STORAGE_KEY,
+        RELAY_HOST_APPROVAL_KEY,
+      ]);
       if (!this.shouldMaintain) return;
-      const credential = stored[PAIRING_STORAGE_KEY];
-      const socket = new WebSocket(credential ? RELAY_URL + "/paired" : RELAY_URL);
-      this.pendingSocket = socket;
-
-      await new Promise<void>((resolve, reject) => {
-        const timeout = setTimeout(() => {
-          socket.close();
-          reject(new Error("Connection timeout"));
-        }, 5000);
-        const finish = (failure?: Error) => {
-          clearTimeout(timeout);
-          if (failure) reject(failure);
-          else resolve();
-        };
-
-        socket.onopen = () => {
-          if (credential) socket.send(JSON.stringify({ credential }));
-          else finish();
-        };
-        socket.onmessage = (event) => {
-          if (event.data === '{"method":"paired"}') finish();
-          else {
-            socket.close();
-            finish(new Error("Invalid pairing acknowledgement"));
-          }
-        };
-        socket.onerror = () => finish(new Error("WebSocket connection failed"));
-        socket.onclose = () => finish(new Error("WebSocket connection closed"));
-      });
+      let credential = stored[PAIRING_STORAGE_KEY] as string | undefined;
+      const candidate = !credential && stored[RELAY_HOST_APPROVAL_KEY] === true
+        ? (stored[CANDIDATE_STORAGE_KEY] as string | undefined)
+        : undefined;
+      let socket: WebSocket;
+      if (candidate) {
+        // Once the relay host approves the candidate, it pairs like a saved credential.
+        try {
+          socket = await this.open(RELAY_URL + "/paired", candidate);
+          await promoteCandidate(candidate);
+          credential = candidate;
+        } catch {
+          if (!this.shouldMaintain) return;
+          socket = await this.open(RELAY_URL);
+          socket.send(JSON.stringify({ method: "requestPairing", fingerprint: await profileFingerprint(candidate) }));
+        }
+      } else {
+        socket = await this.open(credential ? RELAY_URL + "/paired" : RELAY_URL, credential);
+      }
 
       if (!this.shouldMaintain || this.pendingSocket !== socket) {
         socket.close();
@@ -263,6 +285,38 @@ export class ConnectionManager {
       this.pendingSocket = null;
       this.connecting = false;
     }
+  }
+
+  /** Open one relay socket; with a credential, wait for the relay's pairing acknowledgement. */
+  private async open(url: string, credential?: string): Promise<WebSocket> {
+    const socket = new WebSocket(url);
+    this.pendingSocket = socket;
+    await new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        socket.close();
+        reject(new Error("Connection timeout"));
+      }, 5000);
+      const finish = (failure?: Error) => {
+        clearTimeout(timeout);
+        if (failure) reject(failure);
+        else resolve();
+      };
+
+      socket.onopen = () => {
+        if (credential) socket.send(JSON.stringify({ credential }));
+        else finish();
+      };
+      socket.onmessage = (event) => {
+        if (event.data === '{"method":"paired"}') finish();
+        else {
+          socket.close();
+          finish(new Error("Invalid pairing acknowledgement"));
+        }
+      };
+      socket.onerror = () => finish(new Error("WebSocket connection failed"));
+      socket.onclose = () => finish(new Error("WebSocket connection closed"));
+    });
+    return socket;
   }
 
   /**

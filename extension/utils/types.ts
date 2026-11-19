@@ -176,6 +176,8 @@ export interface StateResponse {
   sshApproved?: boolean;
   sshEnabled?: boolean;
   sshConnected?: boolean;
+  /** Fingerprint to approve with `dev-browser pairing approve` on the relay host. */
+  sshPendingFingerprint?: string;
   error?: string;
 }
 
