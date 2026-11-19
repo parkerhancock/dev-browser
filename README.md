@@ -75,6 +75,20 @@ flowchart LR
 
 The plugin itself is light: a skill, a fetch agent, a setup command, and a shim with no dependencies that the agent's host starts as its MCP server. The shim forwards everything to the MCP host, a long-running process that setup installs. The MCP host owns the browser connections and starts the standalone server the first time a tool needs it.
 
+Dev Sessions can start this runtime directly over stdio. For a managed browser, use
+`dev-browser mcp --mode standalone --dev-sessions standalone`. For an approved
+Chrome profile, use `dev-browser mcp --mode extension --dev-sessions extension --profile-id FINGERPRINT`.
+The restricted server exposes `tabs_context`, `navigate`, and `get_page_text`.
+Extension mode also exposes `observe_existing_tab`. During MCP initialization the
+server identifies itself as `dev-sessions-browser`. Its experimental
+`dev-sessions/browser` capability reports the selected `mode`, the expected
+extension `profileId` when applicable, and a `refusal` object with `code` and
+`message` when initial route verification fails. The extension check reads relay
+health before reading tabs. If the extension disconnects, attach again after the
+operator restores access. Registry launchers can append `--scope-ready` to
+receive one JSON line containing `scope: "dev-sessions/browser"` and the same
+capability fields before the MCP stream.
+
 Because the MCP host and the browsers outlive any one agent session, pages persist. In Claude Code, each session gets its own namespace for page names, keyed by the session ID, so two agents can both have a page called `main` without colliding. To share pages between agents, connect with the same explicit session name.
 
 ## Standalone and extension modes

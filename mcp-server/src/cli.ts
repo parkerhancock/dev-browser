@@ -22,7 +22,7 @@ import { basename } from "node:path";
 import { parseArgs } from "node:util";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { createServer as createHttpServer } from "node:http";
-import { buildServer, createState, type BrowserMode } from "./server.js";
+import { buildDevSessionsServer, buildServer, createState, type BrowserMode } from "./server.js";
 import { checkMcpRequest, createMcpNodeHandler } from "./http.js";
 import {
   defaultPort,
@@ -50,6 +50,7 @@ function usage(): never {
       "             --port N, --mcp (mount MCP at /mcp)",
       "  mcp        Start the MCP server (stdio by default)",
       "             --http PORT (streamable HTTP on 127.0.0.1, token required), --mode standalone|extension, --session ID",
+      "             --dev-sessions standalone|extension (restricted stdio tools; extension requires --profile-id HEX)",
       "  browsers   Show which dev-browser servers are reachable",
       "",
       "Background servers (relay :9224, serve :9222, mcp :9225; logs and pids in ~/.dev-browser):",
@@ -127,8 +128,15 @@ async function main(): Promise<void> {
           http: { type: "string" },
           mode: { type: "string" },
           session: { type: "string" },
+          "dev-sessions": { type: "string" },
+          "profile-id": { type: "string" },
+          "scope-ready": { type: "boolean" },
         },
       });
+      const sharedMode = values["dev-sessions"];
+      if (sharedMode !== undefined && (values.http !== undefined || !["extension", "standalone"].includes(sharedMode))) usage();
+      if (values["scope-ready"] && !sharedMode) usage();
+      if (values["profile-id"] !== undefined && sharedMode !== "extension") usage();
       if (values.http) {
         const port = Number(values.http);
         // Stateful streamable HTTP: each MCP connection gets its own
@@ -158,7 +166,13 @@ async function main(): Promise<void> {
           // stdio runs in the agent's own folder
           label: basename(process.cwd()),
         });
-        const server = buildServer(state);
+        const shared = sharedMode === "standalone" || sharedMode === "extension"
+          ? await buildDevSessionsServer(state, sharedMode, values["profile-id"])
+          : undefined;
+        if (shared && values["scope-ready"]) {
+          process.stdout.write(JSON.stringify({ scope: "dev-sessions/browser", ...shared.capability }) + "\n");
+        }
+        const server = shared?.server ?? buildServer(state);
         await server.connect(new StdioServerTransport());
         console.error("dev-browser MCP server running on stdio");
       }

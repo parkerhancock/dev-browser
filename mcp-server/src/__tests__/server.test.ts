@@ -3,13 +3,15 @@
  * work without a running browser server.
  */
 
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { existsSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, test, expect, vi } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { buildServer, createState, type BrowserState } from "../server.js";
+import { buildDevSessionsServer, buildServer, createState, type BrowserState } from "../server.js";
 import type { DevBrowserClient } from "../../../skills/dev-browser/src/client.js";
 import { start } from "../daemon.js";
 
@@ -24,10 +26,10 @@ vi.mock("../daemon.js", async (importOriginal) => ({
 }));
 
 async function connectedClient(
-  state: BrowserState = createState({ session: "mcp-test" })
+  state: BrowserState = createState({ session: "mcp-test" }),
+  server = buildServer(state)
 ): Promise<Client> {
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-  const server = buildServer(state);
   await server.connect(serverTransport);
   const client = new Client({ name: "test-client", version: "0.0.1" });
   await client.connect(clientTransport);
@@ -86,6 +88,87 @@ describe("dev-browser MCP server", () => {
     for (const name of expected) {
       expect(names).toContain(name);
     }
+  });
+
+  test("restricted extension verifies the profile, pins dispatch, and refuses a replacement connection", async () => {
+    const profileId = "a".repeat(64);
+    const health = {
+      mode: "extension", extensionConnected: true, sshAccessEnabled: true,
+      extensionProfileId: profileId, extensionConnectionId: "first",
+    };
+    const sent: (string | null)[] = [];
+    vi.stubGlobal("fetch", async (url: string, options: RequestInit) => {
+      const path = new URL(url).pathname;
+      if (path === "/health" || path === "/") return Response.json(health);
+      sent.push(new Headers(options.headers).get("X-DevBrowser-Extension-Connection"));
+      return Response.json({ pages: [], targets: [] });
+    });
+    async function attach(profile: string) {
+      const state = createState({ mode: "extension" });
+      return connectedClient(state, (await buildDevSessionsServer(state, "extension", profile)).server);
+    }
+    const context = async (client: Client) => {
+      const result = await client.callTool({ name: "tabs_context", arguments: {} });
+      return JSON.parse((result.content as { text: string }[])[0]!.text);
+    };
+    const wrong = await attach("b".repeat(64));
+    expect(wrong.getServerCapabilities()?.experimental?.["dev-sessions/browser"]).toMatchObject({ refusal: { code: "BROWSER_PROFILE_MISMATCH" } });
+    expect(await context(wrong)).toMatchObject({ code: "BROWSER_PROFILE_MISMATCH" });
+    expect(sent).toEqual([]);
+    const client = await attach(profileId);
+    expect(client.getServerVersion()?.name).toBe("dev-sessions-browser");
+    expect(client.getServerCapabilities()?.experimental).toHaveProperty("dev-sessions/browser");
+    expect((await client.listTools()).tools.map((tool) => tool.name).sort())
+      .toEqual(["get_page_text", "navigate", "observe_existing_tab", "tabs_context"]);
+    expect((await client.callTool({ name: "javascript", arguments: { code: "0" } })).isError).toBe(true);
+    expect(await context(client)).toMatchObject({
+      mode: "extension", extensionConnected: true, extensionProfileId: profileId, extensionConnectionId: "first",
+    });
+    expect(sent).toEqual(["first", "first"]);
+    health.extensionConnectionId = "replacement";
+    expect(await context(client)).toMatchObject({ code: "BROWSER_EXTENSION_CHANGED" });
+    health.extensionConnectionId = "first";
+    expect(await context(client)).toMatchObject({ code: "BROWSER_EXTENSION_CHANGED" });
+    expect(sent).toHaveLength(2);
+    const fresh = await attach(profileId);
+    health.sshAccessEnabled = false;
+    expect(await context(fresh)).toMatchObject({ code: "BROWSER_EXTENSION_UNAVAILABLE" });
+    health.sshAccessEnabled = true;
+    expect(await context(fresh)).toMatchObject({ code: "BROWSER_EXTENSION_UNAVAILABLE" });
+    expect(sent).toHaveLength(2);
+    await Promise.all([client.close(), wrong.close(), fresh.close()]);
+  });
+
+  test("only the opt-in stdio launcher receives the scope preamble", () => {
+    const cli = fileURLToPath(new URL("../../bin/dev-browser.mjs", import.meta.url));
+    const args = [cli, "mcp", "--mode", "extension", "--dev-sessions", "standalone"];
+    const run = (extra: string[]) => spawnSync(process.execPath, [...args, ...extra], {
+      input: "", encoding: "utf8", timeout: 15_000,
+    });
+    const ready = run(["--scope-ready"]);
+    expect(ready.status).toBe(0);
+    expect(ready.stdout.trim().split("\n")).toHaveLength(1);
+    expect(JSON.parse(ready.stdout)).toMatchObject({
+      scope: "dev-sessions/browser", mode: "standalone", refusal: { code: "BROWSER_MODE_MISMATCH" },
+    });
+    const direct = run([]);
+    expect(direct.status).toBe(0);
+    expect(direct.stdout).toBe("");
+  }, 35_000);
+
+  test("restricted standalone normalizes context and refuses a mismatched launch mode", async () => {
+    const state = createState({ mode: "standalone" });
+    const browser = { getServerInfo: async () => ({ mode: "launch" }), list: async () => [], allTargets: async () => [] };
+    state.clients.set("standalone", browser as unknown as DevBrowserClient);
+    const client = await connectedClient(state, (await buildDevSessionsServer(state, "standalone")).server);
+    expect((await client.listTools()).tools.map((tool) => tool.name).sort()).toEqual(["get_page_text", "navigate", "tabs_context"]);
+    const context = await client.callTool({ name: "tabs_context", arguments: {} });
+    expect(JSON.parse((context.content as { text: string }[])[0]!.text).mode).toBe("standalone");
+    const wrong = await connectedClient(state, (await buildDevSessionsServer(state, "extension", "a".repeat(64))).server);
+    const refusal = await wrong.callTool({ name: "tabs_context", arguments: {} });
+    expect(refusal.isError).toBe(true);
+    expect(JSON.parse((refusal.content as { text: string }[])[0]!.text).code).toBe("BROWSER_MODE_MISMATCH");
+    await Promise.all([client.close(), wrong.close()]);
   });
 
   test("tab_group names the session's tab group before the page opens", async () => {

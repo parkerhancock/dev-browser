@@ -107,11 +107,13 @@ test("a different profile cannot displace the approved socket and Stop invalidat
       headers: { ...headers, "X-DevBrowser-Extension-Connection": first.extensionConnectionId },
     });
     let readDispatched = false;
+    let holdRead: ((id: number) => void) | undefined;
     approved.on("message", (request) => {
       const { id, method } = JSON.parse(String(request));
       if (method === "getAvailableTargets") {
         readDispatched = true;
-        approved.send(JSON.stringify({ id, result: { targets: [] } }));
+        if (holdRead) holdRead(id);
+        else approved.send(JSON.stringify({ id, result: { targets: [] } }));
       } else if (method === "sweepGroups") {
         approved.send(JSON.stringify({ id, result: { closed: 0 } }));
       }
@@ -119,7 +121,14 @@ test("a different profile cannot displace the approved socket and Stop invalidat
     expect((await bound()).status).toBe(200);
     expect(readDispatched).toBe(true);
 
+    // Revoke while all-targets is awaiting the extension, after the relay's initial check.
+    const dispatched = new Promise<number>((resolve) => { holdRead = resolve; });
+    const inFlight = bound();
+    const id = await dispatched;
     await setSsh(approved, false);
+    holdRead = undefined;
+    approved.send(JSON.stringify({ id, result: { targets: [] } }));
+    expect((await inFlight).status).toBe(409);
     const local = await health();
     expect(local.extensionConnected).toBe(true);
     expect(local.sshAccessEnabled).toBe(false);

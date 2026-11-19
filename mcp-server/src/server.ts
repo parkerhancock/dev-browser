@@ -318,8 +318,71 @@ const tabGroupParam = z
       "Pass it on your first call that opens a page; pass it again to rename the group."
   );
 
-export function buildServer(state: BrowserState): McpServer {
-  const server = new McpServer({ name: "dev-browser", version: "0.0.1" });
+const sharedTools = new Set(["tabs_context", "navigate", "get_page_text", "observe_existing_tab"]);
+
+type RouteRefusal = { code: string; message: string };
+type BrowserScope = {
+  capability: { mode: BrowserMode; profileId?: string; refusal?: RouteRefusal };
+  check: () => Promise<RouteRefusal | undefined>;
+  checkMode: (reported: string) => RouteRefusal | undefined;
+};
+
+export async function buildDevSessionsServer(
+  state: BrowserState,
+  mode: BrowserMode,
+  profileId?: string
+) {
+  let refusal: RouteRefusal | undefined;
+
+  function deny(code: string, message: string) {
+    return (refusal ??= { code, message });
+  }
+
+  function checkMode(reported: string) {
+    if ((reported === "launch" ? "standalone" : reported) !== mode) {
+      return deny("BROWSER_MODE_MISMATCH", `The runtime reported ${reported}; expected ${mode}.`);
+    }
+    return refusal;
+  }
+
+  async function check(): Promise<RouteRefusal | undefined> {
+    if (refusal) return refusal;
+    if (state.forcedMode !== mode) {
+      return deny("BROWSER_MODE_MISMATCH", "The configured route uses a different browser mode.");
+    }
+    if (mode === "standalone") {
+      const client = await getClient(state);
+      return checkMode((await client.getServerInfo()).mode);
+    }
+    const info = await probeHealth("extension");
+    if (!info || info.extensionConnected !== true || info.sshAccessEnabled === false) {
+      return deny("BROWSER_EXTENSION_UNAVAILABLE", "The approved extension is disconnected or unavailable.");
+    }
+    if (checkMode(String(info.mode))) return refusal;
+    const id = info.extensionConnectionId;
+    if (
+      !profileId || !/^[a-f0-9]{64}$/.test(profileId) ||
+      info.extensionProfileId !== profileId || typeof id !== "string" || !id
+    ) {
+      return deny("BROWSER_PROFILE_MISMATCH", "The relay did not verify the approved Chrome profile.");
+    }
+    if (state.extensionConnectionId && state.extensionConnectionId !== id) {
+      return deny("BROWSER_EXTENSION_CHANGED", "The approved extension reconnected. Open a fresh explicit extension connection.");
+    }
+    state.extensionConnectionId = id;
+    return refusal;
+  }
+
+  const capability = { mode, profileId, refusal: await check() };
+  return { server: buildServer(state, { capability, check, checkMode }), capability };
+}
+
+export function buildServer(state: BrowserState, scope?: BrowserScope): McpServer {
+  const server = scope
+    ? new McpServer({ name: "dev-sessions-browser", version: "0.1.0" }, {
+        capabilities: { experimental: { "dev-sessions/browser": scope.capability } },
+      })
+    : new McpServer({ name: "dev-browser", version: "0.0.1" });
 
   // Internal dispatch used by browser_batch
   const handlers = new Map<string, (input: Record<string, unknown>) => Promise<ToolResult>>();
@@ -330,7 +393,13 @@ export function buildServer(state: BrowserState): McpServer {
     shape: z.ZodRawShape,
     handler: (args: Record<string, unknown>) => Promise<ToolResult>
   ): void {
+    if (scope && !sharedTools.has(name)) return;
+    if (scope?.capability.mode === "standalone" && name === "observe_existing_tab") return;
     const wrapped = safe(async (args: Record<string, unknown>) => {
+      if (scope) {
+        const refusal = await scope.check();
+        if (refusal) return { ...textResult(refusal), isError: true };
+      }
       const result = await handler(args);
       if (RECORDED_TOOLS.has(name) && !result.isError) {
         await recordFrame(name, args, result).catch(() => {});
@@ -438,9 +507,15 @@ export function buildServer(state: BrowserState): McpServer {
         client.list(),
         client.allTargets().catch(() => []),
       ]);
+      const refusal = scope?.checkMode(info.mode);
+      if (refusal) return { ...textResult(refusal), isError: true };
       return textResult({
-        mode: info.mode,
-        extensionConnected: info.extensionConnected,
+        mode: scope?.capability.mode ?? info.mode,
+        extensionConnected: scope?.capability.mode === "extension" || info.extensionConnected,
+        ...(scope?.capability.mode === "extension" && {
+          extensionProfileId: scope.capability.profileId,
+          extensionConnectionId: state.extensionConnectionId,
+        }),
         session: state.session,
         tabGroup: state.tabGroup ?? null,
         namedPages: pages,
